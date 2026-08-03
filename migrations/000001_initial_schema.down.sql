@@ -1,0 +1,22 @@
+DROP TABLE IF EXISTS operation_events;
+DROP TABLE IF EXISTS recovery_verifications;
+DROP TABLE IF EXISTS executions;
+DROP TABLE IF EXISTS idempotency_keys;
+DROP TABLE IF EXISTS approvals;
+DROP TABLE IF EXISTS action_proposals;
+DROP TABLE IF EXISTS policy_decisions;
+DROP TABLE IF EXISTS investigation_result_evidence_refs;
+DROP TABLE IF EXISTS investigation_results;
+DROP TABLE IF EXISTS incident_evidence;
+DROP TABLE IF EXISTS incidents;
+
+DROP TYPE IF EXISTS idempotency_state;
+DROP TYPE IF EXISTS idempotency_operation;
+DROP TYPE IF EXISTS event_kind;
+DROP TYPE IF EXISTS execution_outcome;
+DROP TYPE IF EXISTS approval_decision;
+DROP TYPE IF EXISTS actor_kind;
+DROP TYPE IF EXISTS recommendation;
+DROP TYPE IF EXISTS diagnosis_strategy;
+DROP TYPE IF EXISTS evidence_kind;
+DROP TYPE IF EXISTS incident_status;

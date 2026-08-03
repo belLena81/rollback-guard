@@ -1,0 +1,168 @@
+openapi: 3.1.0
+info:
+  title: Rollback Guardian Orchestrator API
+  version: 0.1.0
+paths:
+  /v1/incidents:
+    post:
+      operationId: createIncident
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIncidentRequest'
+      responses:
+        '201':
+          description: Incident created and investigated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentSummary'
+  /v1/incidents/{incidentId}:
+    get:
+      operationId: getIncident
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+      responses:
+        '200':
+          description: Incident summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentSummary'
+  /v1/incidents/{incidentId}/events:
+    get:
+      operationId: listIncidentEvents
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+      responses:
+        '200':
+          description: Ordered audit events
+  /v1/incidents/{incidentId}/approve:
+    post:
+      operationId: approveIncident
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalRequest'
+      responses:
+        '200':
+          description: Incident approved, executed, and verified
+  /v1/incidents/{incidentId}/reject:
+    post:
+      operationId: rejectIncident
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectionRequest'
+      responses:
+        '200':
+          description: Incident rejected
+  /v1/incidents/{incidentId}/cancel:
+    post:
+      operationId: cancelIncident
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequest'
+      responses:
+        '200':
+          description: Incident canceled
+  /health/live:
+    get:
+      operationId: live
+      responses:
+        '200':
+          description: Process is alive
+  /health/ready:
+    get:
+      operationId: ready
+      responses:
+        '200':
+          description: Service is ready
+        '503':
+          description: Service is not ready
+  /metrics:
+    get:
+      operationId: metrics
+      responses:
+        '200':
+          description: Placeholder metrics
+components:
+  parameters:
+    IncidentId:
+      name: incidentId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    Target:
+      type: object
+      required: [cluster, namespace, deployment, service]
+      additionalProperties: false
+      properties:
+        cluster: { type: string }
+        namespace: { type: string }
+        deployment: { type: string }
+        service: { type: string }
+    Symptom:
+      type: object
+      required: [kind, observed, threshold, unit, startedAt]
+      additionalProperties: false
+      properties:
+        kind: { type: string }
+        observed: { type: number }
+        threshold: { type: number }
+        unit: { type: string }
+        startedAt: { type: string, format: date-time }
+    CreateIncidentRequest:
+      type: object
+      required: [target, symptom]
+      additionalProperties: false
+      properties:
+        target:
+          $ref: '#/components/schemas/Target'
+        symptom:
+          $ref: '#/components/schemas/Symptom'
+    ApprovalRequest:
+      type: object
+      required: [actionId, proposalHash]
+      additionalProperties: false
+      properties:
+        actionId: { type: string }
+        proposalHash: { type: string }
+    RejectionRequest:
+      allOf:
+        - $ref: '#/components/schemas/ApprovalRequest'
+        - type: object
+          required: [reason]
+          additionalProperties: false
+          properties:
+            reason: { type: string }
+    CancelRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason: { type: string }
+    IncidentSummary:
+      type: object
+      required: [incident]
+      additionalProperties: true
+      properties:
+        incident:
+          type: object
