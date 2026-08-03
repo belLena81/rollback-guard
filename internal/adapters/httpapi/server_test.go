@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -189,6 +190,31 @@ func TestMutatingRouteRequiresRequestActor(t *testing.T) {
 	}
 }
 
+func TestReadinessUsesConfiguredTimeout(t *testing.T) {
+	timeout := 25 * time.Millisecond
+	server := newTestServer(t, nil)
+	var observed time.Duration
+	handler := server.Routes(func(ctx context.Context) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("readiness context has no deadline")
+		}
+		observed = time.Until(deadline)
+		return nil
+	}, timeout, nil)
+	request := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	if observed <= 0 || observed > timeout {
+		t.Fatalf("readiness timeout = %s, want within configured %s", observed, timeout)
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	return newTestHandlerWithInfrastructure(t, nil)
@@ -205,12 +231,12 @@ func newTestHandlerWithInfrastructure(t *testing.T, configure func(*fake.Infrast
 	if err != nil {
 		t.Fatal(err)
 	}
-	return server.Routes(nil, auth)
+	return server.Routes(nil, 0, auth)
 }
 
 func newUnauthenticatedTestHandler(t *testing.T) http.Handler {
 	t.Helper()
-	return newTestServer(t, nil).Routes(nil, nil)
+	return newTestServer(t, nil).Routes(nil, 0, nil)
 }
 
 func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *Server {

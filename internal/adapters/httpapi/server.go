@@ -16,7 +16,10 @@ import (
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 )
 
-const maxJSONBodyBytes = 1 << 20
+const (
+	defaultReadinessTimeout = 2 * time.Second
+	maxJSONBodyBytes        = 1 << 20
+)
 
 type Server struct {
 	services *application.Services
@@ -33,7 +36,7 @@ func NewServer(services application.Services, logger *slog.Logger) (*Server, err
 	return &Server{services: &services, logger: logger}, nil
 }
 
-func (s *Server) Routes(ready func(context.Context) error, auth httpserver.AuthMiddleware) http.Handler {
+func (s *Server) Routes(ready func(context.Context) error, readyTimeout time.Duration, auth httpserver.AuthMiddleware) http.Handler {
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("POST /v1/incidents", s.createIncident)
 	apiMux.HandleFunc("GET /v1/incidents/{incidentId}", s.getIncident)
@@ -48,7 +51,7 @@ func (s *Server) Routes(ready func(context.Context) error, auth httpserver.AuthM
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/v1/", apiHandler)
 	rootMux.HandleFunc("GET /health/live", live)
-	rootMux.HandleFunc("GET /health/ready", readiness(ready))
+	rootMux.HandleFunc("GET /health/ready", readiness(ready, readyTimeout))
 	rootMux.HandleFunc("GET /metrics", metrics)
 	return requestIDMiddleware(rootMux)
 }
@@ -57,13 +60,16 @@ func live(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func readiness(ready func(context.Context) error) http.HandlerFunc {
+func readiness(ready func(context.Context) error, readyTimeout time.Duration) http.HandlerFunc {
+	if readyTimeout <= 0 {
+		readyTimeout = defaultReadinessTimeout
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ready == nil {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
 		defer cancel()
 		if err := ready(ctx); err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})

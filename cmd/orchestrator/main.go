@@ -124,7 +124,7 @@ func run(logger *slog.Logger) error {
 	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.Routes(func(ctx context.Context) error { return pool.Ping(ctx) }, auth),
+		Handler:           api.Routes(func(ctx context.Context) error { return pool.Ping(ctx) }, cfg.DBPingTimeout, auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
