@@ -1,0 +1,21 @@
+# Local IDE/editor state
+.idea/
+*.iml
+.vscode/
+
+# Local agent/tooling state
+.agents/
+.codex/
+.claude/
+AGENTS.md
+
+# Local Go/build outputs
+bin/
+dist/
+coverage.out
+*.test
+
+# OS/editor noise
+.DS_Store
+*.swp
+*.swo
