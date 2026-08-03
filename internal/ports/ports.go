@@ -24,6 +24,8 @@ type Diagnoser interface {
 	Diagnose(context.Context, InvestigationInput) (domain.InvestigationConclusion, error)
 }
 type RollbackExecutor interface {
+	// ExecuteApprovedRollback must atomically validate the target identity and
+	// current revision immediately before applying the approved mutation.
 	// ExecuteApprovedRollback must return the same terminal result without
 	// repeating the mutation when called again with the same idempotency key.
 	ExecuteApprovedRollback(context.Context, domain.ApprovedRollback, domain.IdempotencyKey) (domain.RollbackExecution, error)
@@ -77,7 +79,7 @@ type IdempotencyRepository interface {
 	Update(domain.IdempotencyRecord, domain.IdempotencyState) error
 }
 type EventRepository interface {
-	NextSequence(domain.IncidentID) uint64
+	NextSequence(context.Context, domain.IncidentID) (uint64, error)
 	Append(domain.OperationEvent) error
 	List(domain.IncidentID) ([]domain.OperationEvent, error)
 }

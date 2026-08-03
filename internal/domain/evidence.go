@@ -203,7 +203,7 @@ func NewInvestigationConclusion(id ConclusionID, incidentID IncidentID, strategy
 	if id == "" || incidentID == "" || strategy != StrategyRules || hypothesis == "" || now.IsZero() {
 		return InvestigationConclusion{}, invalid("conclusion", "required value is empty")
 	}
-	if confidence < 0 || confidence > 1 {
+	if math.IsNaN(confidence) || math.IsInf(confidence, 0) || confidence < 0 || confidence > 1 {
 		return InvestigationConclusion{}, invalid("conclusion.confidence", "must be between zero and one")
 	}
 	if len(evidenceIDs) == 0 && recommendation == RecommendRollback {

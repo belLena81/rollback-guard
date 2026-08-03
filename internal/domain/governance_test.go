@@ -22,6 +22,7 @@ func TestProposalHashBindsEveryCanonicalField(t *testing.T) {
 		{name: "cluster", proposal: mustProposal(t, "action", "incident", "policy", mustTarget(t, "different", "namespace", "api", "service"), "revision-2", "revision-1", now)},
 		{name: "namespace", proposal: mustProposal(t, "action", "incident", "policy", mustTarget(t, "cluster", "different", "api", "service"), "revision-2", "revision-1", now)},
 		{name: "deployment", proposal: mustProposal(t, "action", "incident", "policy", mustTarget(t, "cluster", "namespace", "different", "service"), "revision-2", "revision-1", now)},
+		{name: "service", proposal: mustProposal(t, "action", "incident", "policy", mustTarget(t, "cluster", "namespace", "api", "different"), "revision-2", "revision-1", now)},
 		{name: "current revision", proposal: mustProposal(t, "action", "incident", "policy", baseTarget, "revision-3", "revision-1", now)},
 		{name: "target revision", proposal: mustProposal(t, "action", "incident", "policy", baseTarget, "revision-2", "revision-0", now)},
 		{name: "expiry", proposal: mustProposal(t, "action", "incident", "policy", baseTarget, "revision-2", "revision-1", now.Add(time.Nanosecond))},

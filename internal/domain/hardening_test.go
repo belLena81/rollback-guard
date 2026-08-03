@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -59,6 +60,31 @@ func TestPolicyDecisionRejectsDuplicateRuleNames(t *testing.T) {
 	_, err := domain.NewPolicyDecision("decision", "incident", []domain.RuleResult{{Name: "same", Passed: true}, {Name: "same", Passed: false}}, time.Now())
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
+	}
+}
+
+func TestInvestigationConclusionRejectsNonFiniteConfidence(t *testing.T) {
+	tests := []struct {
+		name       string
+		confidence float64
+		wantError  bool
+	}{
+		{name: "zero", confidence: 0},
+		{name: "one", confidence: 1},
+		{name: "NaN", confidence: math.NaN(), wantError: true},
+		{name: "positive infinity", confidence: math.Inf(1), wantError: true},
+		{name: "negative infinity", confidence: math.Inf(-1), wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := domain.NewInvestigationConclusion("conclusion", "incident", domain.StrategyRules, "hypothesis", test.confidence, []domain.EvidenceID{"evidence"}, domain.RecommendRollback, time.Now())
+			if test.wantError && !errors.Is(err, domain.ErrValidation) {
+				t.Fatalf("error = %v, want validation", err)
+			}
+			if !test.wantError && err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+		})
 	}
 }
 

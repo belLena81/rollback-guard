@@ -418,14 +418,17 @@ func (r idempotencyRepo) Update(v domain.IdempotencyRecord, expected domain.Idem
 
 type eventRepo struct{ d *data }
 
-func (r eventRepo) NextSequence(id domain.IncidentID) uint64 {
-	return uint64(len(r.d.events[id]) + 1)
+func (r eventRepo) NextSequence(ctx context.Context, id domain.IncidentID) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return uint64(len(r.d.events[id]) + 1), nil
 }
 func (r eventRepo) Append(v domain.OperationEvent) error {
 	if _, ok := r.d.incidents[v.IncidentID()]; !ok {
 		return &domain.NotFoundError{Resource: "incident", ID: string(v.IncidentID())}
 	}
-	expected := r.NextSequence(v.IncidentID())
+	expected := uint64(len(r.d.events[v.IncidentID()]) + 1)
 	if v.Sequence() != expected {
 		return &domain.VersionConflictError{Expected: expected, Actual: v.Sequence()}
 	}

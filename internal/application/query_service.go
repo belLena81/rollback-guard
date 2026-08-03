@@ -51,11 +51,15 @@ func (s *QueryService) ListEvents(ctx context.Context, incidentID domain.Inciden
 	return events, nil
 }
 
-func (c *workflow) appendEvent(repositories ports.Repositories, incidentID domain.IncidentID, kind domain.EventKind, actor domain.Actor, detail domain.EventDetail, now time.Time) error {
+func (c *workflow) appendEvent(ctx context.Context, repositories ports.Repositories, incidentID domain.IncidentID, kind domain.EventKind, actor domain.Actor, detail domain.EventDetail, now time.Time) error {
+	sequence, err := repositories.Events().NextSequence(ctx, incidentID)
+	if err != nil {
+		return fmt.Errorf("get next event sequence: %w", err)
+	}
 	event, err := domain.NewOperationEvent(
 		domain.EventID(c.ids.NewID("event")),
 		incidentID,
-		repositories.Events().NextSequence(incidentID),
+		sequence,
 		kind,
 		now,
 		actor,

@@ -10,6 +10,8 @@ import (
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
+const investigationFailureAuditReason = "investigation failed"
+
 func (s *ExecutionService) Execute(ctx context.Context, incidentID domain.IncidentID, key domain.IdempotencyKey) (domain.RollbackExecution, error) {
 	if key == "" {
 		return domain.RollbackExecution{}, &domain.ValidationError{Field: "idempotency_key", Reason: "must not be empty"}
@@ -19,23 +21,32 @@ func (s *ExecutionService) Execute(ctx context.Context, incidentID domain.Incide
 		return domain.RollbackExecution{}, fmt.Errorf("load rollback execution: %w", err)
 	}
 	if loaded.completed {
-		return loaded.existing, nil
+		return loaded.existing, executionOutcomeError(loaded.existing)
 	}
-	approved, record, startedAt, err := s.authorizeAndStart(ctx, loaded, key)
+	preparation, err := s.authorizeAndStart(ctx, loaded, key)
 	if err != nil {
 		return domain.RollbackExecution{}, err
 	}
-	execution, err := s.invokeExecutor(ctx, approved, loaded.proposal, record, startedAt)
+	if preparation.completed {
+		return preparation.execution, preparation.executionErr
+	}
+	execution, err := s.invokeExecutor(ctx, preparation.approved, loaded.proposal, preparation.record, preparation.startedAt)
 	if err != nil {
 		return domain.RollbackExecution{}, err
 	}
-	if err := s.completeExecution(ctx, loaded.proposal, record, execution); err != nil {
+	if err := s.completeExecution(ctx, loaded.proposal, preparation.record, execution); err != nil {
 		return domain.RollbackExecution{}, err
 	}
-	if execution.Outcome() == domain.ExecutionFailed {
-		return execution, fmt.Errorf("rollback execution failed: %s", execution.FailureReason())
-	}
-	return execution, nil
+	return execution, executionOutcomeError(execution)
+}
+
+type executionPreparation struct {
+	approved     domain.ApprovedRollback
+	record       domain.IdempotencyRecord
+	startedAt    time.Time
+	execution    domain.RollbackExecution
+	executionErr error
+	completed    bool
 }
 
 type loadedExecution struct {
@@ -92,6 +103,9 @@ func (s *ExecutionService) loadExecution(ctx context.Context, incidentID domain.
 		if recordErr != nil && !errors.Is(recordErr, domain.ErrNotFound) {
 			return recordErr
 		}
+		if errors.Is(recordErr, domain.ErrNotFound) && loaded.incident.Status() != domain.StatusApproved {
+			return &domain.IllegalTransitionError{From: loaded.incident.Status(), To: domain.StatusExecuting}
+		}
 		loaded.approval, err = repositories.Approvals().GetByIncident(incidentID)
 		if err != nil {
 			return err
@@ -102,24 +116,18 @@ func (s *ExecutionService) loadExecution(ctx context.Context, incidentID domain.
 	return loaded, err
 }
 
-func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedExecution, key domain.IdempotencyKey) (domain.ApprovedRollback, domain.IdempotencyRecord, time.Time, error) {
+func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedExecution, key domain.IdempotencyKey) (executionPreparation, error) {
 	c := s.workflow
 	startedAt := c.clock.Now()
-	var approvedRollback domain.ApprovedRollback
 	if loaded.resume {
-		startedAt = loaded.record.StartedAt()
-		approvedRollback, err := domain.ResumeApprovedRollback(loaded.proposal, loaded.decision, loaded.approval, loaded.record, key)
-		if err != nil {
-			return domain.ApprovedRollback{}, domain.IdempotencyRecord{}, time.Time{}, fmt.Errorf("resume approved rollback: %w", err)
-		}
-		return approvedRollback, loaded.record, startedAt, nil
+		return s.revalidatePendingExecution(ctx, loaded, key)
 	}
 	freshDeployment, err := c.inspector.InspectDeployment(ctx, loaded.proposal.Target())
 	if err != nil {
-		return domain.ApprovedRollback{}, domain.IdempotencyRecord{}, time.Time{}, fmt.Errorf("reinspect deployment: %w", err)
+		return executionPreparation{}, fmt.Errorf("reinspect deployment: %w", err)
 	}
 	startedAt = c.clock.Now()
-	approvedRollback, err = c.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, startedAt)
+	approvedRollback, err := c.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, startedAt)
 	if err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CleanupTimeout)
 		defer cancel()
@@ -129,11 +137,11 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 		} else {
 			cleanupErr = c.failIncident(cleanupCtx, loaded.incident.ID(), err.Error())
 		}
-		return domain.ApprovedRollback{}, domain.IdempotencyRecord{}, time.Time{}, errors.Join(err, cleanupErr)
+		return executionPreparation{}, errors.Join(err, cleanupErr)
 	}
 	record, err := domain.NewPendingIdempotencyRecord(key, domain.IdempotencyOperationExecuteRollback, string(loaded.proposal.Hash()), string(loaded.incident.ID()), startedAt)
 	if err != nil {
-		return domain.ApprovedRollback{}, domain.IdempotencyRecord{}, time.Time{}, fmt.Errorf("create idempotency attempt: %w", err)
+		return executionPreparation{}, fmt.Errorf("create idempotency attempt: %w", err)
 	}
 	err = c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		fresh, err := repositories.Incidents().Get(loaded.incident.ID())
@@ -153,12 +161,65 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 		if err := repositories.Idempotency().Create(record); err != nil {
 			return err
 		}
-		return c.appendEvent(repositories, fresh.ID(), domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: from, To: domain.StatusExecuting}, startedAt)
+		return c.appendEvent(ctx, repositories, fresh.ID(), domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: from, To: domain.StatusExecuting}, startedAt)
 	})
 	if err != nil {
-		return domain.ApprovedRollback{}, domain.IdempotencyRecord{}, time.Time{}, fmt.Errorf("start rollback execution: %w", err)
+		return executionPreparation{}, fmt.Errorf("start rollback execution: %w", err)
 	}
-	return approvedRollback, record, startedAt, nil
+	return executionPreparation{approved: approvedRollback, record: record, startedAt: startedAt}, nil
+}
+
+func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loaded loadedExecution, key domain.IdempotencyKey) (executionPreparation, error) {
+	c := s.workflow
+	startedAt := loaded.record.StartedAt()
+	_, err := domain.ResumeApprovedRollback(loaded.proposal, loaded.decision, loaded.approval, loaded.record, key)
+	if err != nil {
+		return s.completePendingRevalidationFailure(ctx, loaded, startedAt, fmt.Errorf("resume approved rollback: %w", err)), nil
+	}
+	freshDeployment, err := c.inspector.InspectDeployment(ctx, loaded.proposal.Target())
+	if err != nil {
+		return executionPreparation{}, fmt.Errorf("reinspect pending deployment: %w", err)
+	}
+	if freshDeployment.Target.Equal(loaded.proposal.Target()) && freshDeployment.CurrentRevision == loaded.proposal.TargetRevision() {
+		execution, createErr := domain.NewRollbackExecution(
+			domain.ExecutionID(c.ids.NewID("execution")),
+			loaded.proposal.IncidentID(),
+			loaded.record.Key(),
+			loaded.proposal.CurrentRevision(),
+			loaded.proposal.TargetRevision(),
+			domain.ExecutionSucceeded,
+			startedAt,
+			c.clock.Now(),
+			"",
+		)
+		if createErr != nil {
+			return executionPreparation{}, fmt.Errorf("create reconciled execution result: %w", createErr)
+		}
+		completionErr := s.completeExecution(ctx, loaded.proposal, loaded.record, execution)
+		return executionPreparation{execution: execution, executionErr: completionErr, completed: true}, nil
+	}
+	authorizationTime := c.clock.Now()
+	approvedRollback, err := c.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, authorizationTime)
+	if err != nil {
+		return s.completePendingRevalidationFailure(ctx, loaded, startedAt, err), nil
+	}
+	return executionPreparation{approved: approvedRollback, record: loaded.record, startedAt: startedAt}, nil
+}
+
+func (s *ExecutionService) completePendingRevalidationFailure(ctx context.Context, loaded loadedExecution, startedAt time.Time, cause error) executionPreparation {
+	c := s.workflow
+	execution, createErr := s.newFailedExecution(loaded.proposal, loaded.record, startedAt, cause)
+	if createErr != nil {
+		return executionPreparation{executionErr: errors.Join(cause, createErr), completed: true}
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CleanupTimeout)
+	defer cancel()
+	completionErr := s.completeExecution(cleanupCtx, loaded.proposal, loaded.record, execution)
+	return executionPreparation{
+		execution:    execution,
+		executionErr: errors.Join(cause, executionOutcomeError(execution), completionErr),
+		completed:    true,
+	}
 }
 
 func (s *ExecutionService) invokeExecutor(ctx context.Context, approved domain.ApprovedRollback, proposal domain.RollbackProposal, record domain.IdempotencyRecord, startedAt time.Time) (domain.RollbackExecution, error) {
@@ -169,22 +230,33 @@ func (s *ExecutionService) invokeExecutor(ctx context.Context, approved domain.A
 	}
 	if executeErr != nil {
 		var err error
-		execution, err = domain.NewRollbackExecution(
-			domain.ExecutionID(c.ids.NewID("execution")),
-			proposal.IncidentID(),
-			record.Key(),
-			proposal.CurrentRevision(),
-			proposal.TargetRevision(),
-			domain.ExecutionFailed,
-			startedAt,
-			c.clock.Now(),
-			executeErr.Error(),
-		)
+		execution, err = s.newFailedExecution(proposal, record, startedAt, executeErr)
 		if err != nil {
 			return domain.RollbackExecution{}, errors.Join(executeErr, fmt.Errorf("create failed execution result: %w", err))
 		}
 	}
 	return execution, nil
+}
+
+func (s *ExecutionService) newFailedExecution(proposal domain.RollbackProposal, record domain.IdempotencyRecord, startedAt time.Time, cause error) (domain.RollbackExecution, error) {
+	return domain.NewRollbackExecution(
+		domain.ExecutionID(s.workflow.ids.NewID("execution")),
+		proposal.IncidentID(),
+		record.Key(),
+		proposal.CurrentRevision(),
+		proposal.TargetRevision(),
+		domain.ExecutionFailed,
+		startedAt,
+		s.workflow.clock.Now(),
+		cause.Error(),
+	)
+}
+
+func executionOutcomeError(execution domain.RollbackExecution) error {
+	if execution.Outcome() != domain.ExecutionFailed {
+		return nil
+	}
+	return fmt.Errorf("rollback execution failed: %s", execution.FailureReason())
 }
 
 func (s *ExecutionService) completeExecution(ctx context.Context, proposal domain.RollbackProposal, record domain.IdempotencyRecord, execution domain.RollbackExecution) error {
@@ -205,7 +277,7 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 		if err := repositories.Idempotency().Update(completedRecord, domain.IdempotencyPending); err != nil {
 			return err
 		}
-		if err := c.appendEvent(repositories, proposal.IncidentID(), domain.EventExecutionCompleted, c.systemActor, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()}, completedAt); err != nil {
+		if err := c.appendEvent(ctx, repositories, proposal.IncidentID(), domain.EventExecutionCompleted, c.systemActor, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()}, completedAt); err != nil {
 			return err
 		}
 		expected := fresh.Version()
@@ -227,7 +299,7 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 			kind = domain.EventIncidentFailed
 			detail = domain.TerminalDetail{Reason: execution.FailureReason()}
 		}
-		return c.appendEvent(repositories, proposal.IncidentID(), kind, c.systemActor, detail, completedAt)
+		return c.appendEvent(ctx, repositories, proposal.IncidentID(), kind, c.systemActor, detail, completedAt)
 	})
 	if err != nil {
 		return fmt.Errorf("complete rollback execution: %w", err)
@@ -296,7 +368,7 @@ func (s *VerificationService) Verify(ctx context.Context, incidentID domain.Inci
 		if err := repositories.Verifications().Save(verification); err != nil {
 			return err
 		}
-		if err := c.appendEvent(repositories, incidentID, domain.EventVerificationCompleted, c.systemActor, domain.VerificationCompletedDetail{Passed: verification.Passed(), Revision: verification.Revision()}, now); err != nil {
+		if err := c.appendEvent(ctx, repositories, incidentID, domain.EventVerificationCompleted, c.systemActor, domain.VerificationCompletedDetail{Passed: verification.Passed(), Revision: verification.Revision()}, now); err != nil {
 			return err
 		}
 		expected := fresh.Version()
@@ -312,9 +384,9 @@ func (s *VerificationService) Verify(ctx context.Context, incidentID domain.Inci
 			return err
 		}
 		if verification.Passed() {
-			return c.appendEvent(repositories, incidentID, domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusVerifying, To: domain.StatusResolved}, now)
+			return c.appendEvent(ctx, repositories, incidentID, domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusVerifying, To: domain.StatusResolved}, now)
 		}
-		return c.appendEvent(repositories, incidentID, domain.EventIncidentFailed, c.systemActor, domain.TerminalDetail{Reason: verification.FailureReason()}, now)
+		return c.appendEvent(ctx, repositories, incidentID, domain.EventIncidentFailed, c.systemActor, domain.TerminalDetail{Reason: verification.FailureReason()}, now)
 	})
 	if err != nil {
 		return domain.RecoveryVerification{}, fmt.Errorf("persist recovery verification: %w", err)
@@ -348,7 +420,7 @@ func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentComm
 			return err
 		}
 		result = incident
-		return c.appendEvent(repositories, command.IncidentID, domain.EventIncidentCanceled, command.Actor, domain.TerminalDetail{Reason: command.Reason}, now)
+		return c.appendEvent(ctx, repositories, command.IncidentID, domain.EventIncidentCanceled, command.Actor, domain.TerminalDetail{Reason: command.Reason}, now)
 	})
 	if err != nil {
 		return domain.Incident{}, fmt.Errorf("cancel incident: %w", err)
@@ -370,39 +442,14 @@ func (c *workflow) expire(ctx context.Context, incidentID domain.IncidentID, rea
 		if err := repositories.Incidents().Update(incident, expected); err != nil {
 			return err
 		}
-		return c.appendEvent(repositories, incidentID, domain.EventIncidentExpired, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
+		return c.appendEvent(ctx, repositories, incidentID, domain.EventIncidentExpired, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
 	})
-}
-
-func (c *workflow) transition(ctx context.Context, incidentID domain.IncidentID, kind domain.EventKind, mutate func(*domain.Incident, time.Time) error) (domain.Incident, error) {
-	now := c.clock.Now()
-	var result domain.Incident
-	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		incident, err := repositories.Incidents().Get(incidentID)
-		if err != nil {
-			return err
-		}
-		from := incident.Status()
-		expected := incident.Version()
-		if err := mutate(&incident, now); err != nil {
-			return err
-		}
-		if err := repositories.Incidents().Update(incident, expected); err != nil {
-			return err
-		}
-		result = incident
-		return c.appendEvent(repositories, incidentID, kind, c.systemActor, domain.StatusChangedDetail{From: from, To: incident.Status()}, now)
-	})
-	if err != nil {
-		return domain.Incident{}, fmt.Errorf("transition incident: %w", err)
-	}
-	return result, nil
 }
 
 func (c *workflow) failAfterExternalError(ctx context.Context, incidentID domain.IncidentID, cause error) error {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CleanupTimeout)
 	defer cancel()
-	if err := c.failIncident(cleanupCtx, incidentID, cause.Error()); err != nil {
+	if err := c.failIncident(cleanupCtx, incidentID, investigationFailureAuditReason); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause
@@ -422,6 +469,6 @@ func (c *workflow) failIncident(ctx context.Context, incidentID domain.IncidentI
 		if err := repositories.Incidents().Update(incident, expected); err != nil {
 			return err
 		}
-		return c.appendEvent(repositories, incidentID, domain.EventIncidentFailed, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
+		return c.appendEvent(ctx, repositories, incidentID, domain.EventIncidentFailed, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
 	})
 }

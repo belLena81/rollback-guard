@@ -19,6 +19,7 @@ type Infrastructure struct {
 	ExecuteErr       error
 	Executions       int
 	Now              func() time.Time
+	BeforeMutation   func(*domain.DeploymentEvidence)
 	AfterExecute     func()
 	executionResults map[domain.IdempotencyKey]domain.RollbackExecution
 }
@@ -62,13 +63,19 @@ func (f *Infrastructure) ExecuteApprovedRollback(ctx context.Context, approved d
 	if existing, ok := f.executionResults[key]; ok {
 		return existing, nil
 	}
+	if f.BeforeMutation != nil {
+		f.BeforeMutation(&f.Deployment)
+	}
+	proposal := approved.Proposal()
+	if !f.Deployment.Target.Equal(proposal.Target()) || f.Deployment.CurrentRevision != proposal.CurrentRevision() {
+		return domain.RollbackExecution{}, &domain.ApprovalMismatchError{Reason: "deployment identity or current revision changed at mutation boundary"}
+	}
 	defer func() {
 		if f.AfterExecute != nil {
 			f.AfterExecute()
 		}
 	}()
 	f.Executions++
-	proposal := approved.Proposal()
 	now := time.Now().UTC()
 	if f.Now != nil {
 		now = f.Now()

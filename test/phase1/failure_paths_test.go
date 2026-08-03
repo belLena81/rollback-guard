@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -107,6 +109,91 @@ func TestCanceledInvestigationStillFailsIncidentAtomically(t *testing.T) {
 	}
 }
 
+func TestInvestigationAuditRedactsAdapterFailures(t *testing.T) {
+	const sensitiveDetail = "authorization=Bearer top-secret"
+	adapterErr := errors.New(sensitiveDetail)
+	tests := []struct {
+		name      string
+		overrides harnessOverrides
+	}{
+		{name: "deployment inspection", overrides: harnessOverrides{inspector: failingInspector{err: adapterErr}}},
+		{name: "metric observation", overrides: harnessOverrides{metrics: failingMetrics{err: adapterErr}}},
+		{name: "diagnosis", overrides: harnessOverrides{diagnoser: failingDiagnoser{err: adapterErr}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarnessWithOverrides(t, test.overrides)
+			_, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+			if err == nil || !strings.Contains(err.Error(), sensitiveDetail) {
+				t.Fatalf("Investigate() error = %v, want original adapter failure", err)
+			}
+			events, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			detail, ok := events[len(events)-1].Detail().(domain.TerminalDetail)
+			if !ok || detail.Reason != "investigation failed" || strings.Contains(detail.Reason, sensitiveDetail) {
+				t.Fatalf("terminal detail = %#v, want redacted investigation failure", events[len(events)-1].Detail())
+			}
+		})
+	}
+}
+
+func TestInvestigationRetryAfterFinalPersistenceFailure(t *testing.T) {
+	persistenceErr := errors.New("persistence unavailable")
+	failingUOW := &failTransactionUnitOfWork{failAt: 3, failure: persistenceErr}
+	h := newHarnessWithOverrides(t, harnessOverrides{
+		decorateUnitOfWork: func(delegate ports.UnitOfWork) ports.UnitOfWork {
+			failingUOW.delegate = delegate
+			return failingUOW
+		},
+	})
+
+	_, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	if !errors.Is(err, persistenceErr) {
+		t.Fatalf("first Investigate() error = %v, want persistence failure", err)
+	}
+	assertIncidentStatus(t, h, domain.StatusInvestigating)
+
+	incident, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incident.Status() != domain.StatusAwaitingApproval {
+		t.Fatalf("retry status = %s, want awaiting approval", incident.Status())
+	}
+	events, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	investigationTransitions := 0
+	for _, event := range events {
+		detail, ok := event.Detail().(domain.StatusChangedDetail)
+		if ok && detail.To == domain.StatusInvestigating {
+			investigationTransitions++
+		}
+	}
+	if investigationTransitions != 1 {
+		t.Fatalf("investigation transitions = %d, want 1", investigationTransitions)
+	}
+	err = h.uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+		evidence, listErr := repositories.Evidence().List(h.incident.ID())
+		if listErr != nil {
+			return listErr
+		}
+		if len(evidence) != 2 {
+			return fmt.Errorf("evidence count = %d, want 2", len(evidence))
+		}
+		if _, getErr := repositories.Conclusions().Get(h.incident.ID()); getErr != nil {
+			return getErr
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestApprovalRejectsMismatchedHashAndAgent(t *testing.T) {
 	h := awaitingApprovalHarness(t)
 	proposal := mustServiceProposal(t, h)
@@ -199,8 +286,143 @@ func TestExecutionFailsOnRevisionDriftAndExecutorFailure(t *testing.T) {
 		if err == nil || execution.Outcome() != domain.ExecutionFailed {
 			t.Fatalf("Execute() outcome/error = %s/%v", execution.Outcome(), err)
 		}
+		retry, retryErr := h.services.Executions.Execute(context.Background(), h.incident.ID(), "execute")
+		if retryErr == nil {
+			t.Fatal("completed failed retry error = nil")
+		}
+		if retry.ID() != execution.ID() || retry.Outcome() != domain.ExecutionFailed {
+			t.Fatalf("completed failed retry = %q/%s, want %q/failed", retry.ID(), retry.Outcome(), execution.ID())
+		}
+		if h.infrastructure.ExecutionCount() != 1 {
+			t.Fatalf("execution count after failed retry = %d, want 1", h.infrastructure.ExecutionCount())
+		}
 		assertIncidentStatus(t, h, domain.StatusFailed)
 	})
+}
+
+func TestExecutionRejectsDifferentKeyAfterSuccessfulRollback(t *testing.T) {
+	h := approvedHarness(t)
+	if _, err := h.services.Executions.Execute(context.Background(), h.incident.ID(), "first-execution"); err != nil {
+		t.Fatal(err)
+	}
+	eventsBefore, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = h.services.Executions.Execute(context.Background(), h.incident.ID(), "second-execution")
+	if !errors.Is(err, domain.ErrIllegalTransition) {
+		t.Fatalf("second Execute() error = %v, want illegal transition", err)
+	}
+	if h.infrastructure.ExecutionCount() != 1 {
+		t.Fatalf("execution count = %d, want 1", h.infrastructure.ExecutionCount())
+	}
+	assertIncidentStatus(t, h, domain.StatusVerifying)
+	eventsAfter, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eventsAfter) != len(eventsBefore) {
+		t.Fatalf("second key appended %d events", len(eventsAfter)-len(eventsBefore))
+	}
+
+	h.infrastructure.SetRecoveryMetric(.01)
+	verification, err := h.services.Verifications.Verify(context.Background(), h.incident.ID())
+	if err != nil || !verification.Passed() {
+		t.Fatalf("Verify() passed/error = %v/%v, want true/nil", verification.Passed(), err)
+	}
+	assertIncidentStatus(t, h, domain.StatusResolved)
+}
+
+func TestExecutorRejectsRevisionDriftAtMutationBoundary(t *testing.T) {
+	h := approvedHarness(t)
+	h.infrastructure.BeforeMutation = func(deployment *domain.DeploymentEvidence) {
+		deployment.CurrentRevision = "revision-3"
+	}
+
+	execution, err := h.services.Executions.Execute(context.Background(), h.incident.ID(), "boundary-drift")
+	if err == nil {
+		t.Fatal("Execute() error = nil, want mutation-boundary rejection")
+	}
+	if execution.Outcome() != domain.ExecutionFailed {
+		t.Fatalf("execution outcome = %s, want failed", execution.Outcome())
+	}
+	if h.infrastructure.ExecutionCount() != 0 {
+		t.Fatalf("execution count = %d, want 0", h.infrastructure.ExecutionCount())
+	}
+	assertIncidentStatus(t, h, domain.StatusFailed)
+}
+
+func TestPendingExecutionRevalidatesBeforeRetryingMutation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(phaseHarness)
+		want   error
+	}{
+		{
+			name: "expired approval",
+			mutate: func(h phaseHarness) {
+				h.clock.Advance(10 * time.Minute)
+			},
+			want: domain.ErrExpired,
+		},
+		{
+			name: "revision drift",
+			mutate: func(h phaseHarness) {
+				h.infrastructure.SetCurrentRevision("revision-3")
+			},
+			want: domain.ErrApprovalMismatch,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			executor := &cancelBeforeMutationExecutor{cancel: cancel}
+			h := approvedHarnessWithOverrides(t, harnessOverrides{executor: executor})
+
+			_, err := h.services.Executions.Execute(ctx, h.incident.ID(), "pending-retry")
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("first Execute() error = %v, want context canceled", err)
+			}
+			assertIncidentStatus(t, h, domain.StatusExecuting)
+			test.mutate(h)
+
+			execution, err := h.services.Executions.Execute(context.Background(), h.incident.ID(), "pending-retry")
+			if !errors.Is(err, test.want) {
+				t.Fatalf("retry Execute() error = %v, want %v", err, test.want)
+			}
+			if execution.Outcome() != domain.ExecutionFailed {
+				t.Fatalf("retry outcome = %s, want failed", execution.Outcome())
+			}
+			if executor.calls != 1 {
+				t.Fatalf("executor calls = %d, want 1", executor.calls)
+			}
+			assertIncidentStatus(t, h, domain.StatusFailed)
+			assertLastEventKind(t, h, domain.EventIncidentFailed)
+			assertCompletedAttempt(t, h, "pending-retry", execution.ID())
+		})
+	}
+}
+
+func TestPendingExecutionInspectionFailureRemainsRetryable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	executor := &cancelBeforeMutationExecutor{cancel: cancel}
+	h := approvedHarnessWithOverrides(t, harnessOverrides{executor: executor})
+
+	_, err := h.services.Executions.Execute(ctx, h.incident.ID(), "pending-inspection")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("first Execute() error = %v, want context canceled", err)
+	}
+	h.infrastructure.InspectErr = errors.New("inspection unavailable")
+	_, err = h.services.Executions.Execute(context.Background(), h.incident.ID(), "pending-inspection")
+	if err == nil {
+		t.Fatal("retry Execute() error = nil, want inspection failure")
+	}
+	if executor.calls != 1 {
+		t.Fatalf("executor calls = %d, want 1", executor.calls)
+	}
+	assertIncidentStatus(t, h, domain.StatusExecuting)
+	assertPendingAttempt(t, h, "pending-inspection")
 }
 
 func TestExecutionRetryRecoversAfterResultPersistenceIsCanceled(t *testing.T) {
@@ -330,10 +552,11 @@ type phaseHarness struct {
 }
 
 type harnessOverrides struct {
-	inspector ports.DeploymentInspector
-	metrics   ports.MetricsPort
-	diagnoser ports.Diagnoser
-	executor  ports.RollbackExecutor
+	inspector          ports.DeploymentInspector
+	metrics            ports.MetricsPort
+	diagnoser          ports.Diagnoser
+	executor           ports.RollbackExecutor
+	decorateUnitOfWork func(ports.UnitOfWork) ports.UnitOfWork
 }
 
 func newHarness(t *testing.T, diagnoserOverride ports.Diagnoser) phaseHarness {
@@ -378,6 +601,10 @@ func newHarnessWithOverrides(t *testing.T, overrides harnessOverrides) phaseHarn
 		selectedExecutor = infrastructure
 	}
 	uow := memory.NewUnitOfWork()
+	selectedUnitOfWork := ports.UnitOfWork(uow)
+	if overrides.decorateUnitOfWork != nil {
+		selectedUnitOfWork = overrides.decorateUnitOfWork(selectedUnitOfWork)
+	}
 	policy, err := domain.NewEligibilityPolicy(domain.EligibilityPolicyConfig{MinimumConfidence: .8, CorrelationWindow: 10 * time.Minute, AllowedTargets: []domain.DeploymentTarget{target}})
 	if err != nil {
 		t.Fatal(err)
@@ -387,7 +614,7 @@ func newHarnessWithOverrides(t *testing.T, overrides harnessOverrides) phaseHarn
 		t.Fatal(err)
 	}
 	services, err := application.NewServices(application.Dependencies{
-		UnitOfWork: uow, Inspector: selectedInspector, Metrics: selectedMetrics, Diagnoser: selectedDiagnoser,
+		UnitOfWork: selectedUnitOfWork, Inspector: selectedInspector, Metrics: selectedMetrics, Diagnoser: selectedDiagnoser,
 		Executor: selectedExecutor, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids,
 	}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: systemActor})
 	if err != nil {
@@ -417,13 +644,57 @@ func awaitingApprovalHarness(t *testing.T) phaseHarness {
 
 func approvedHarness(t *testing.T) phaseHarness {
 	t.Helper()
-	h := awaitingApprovalHarness(t)
+	return approvedHarnessWithOverrides(t, harnessOverrides{})
+}
+
+func approvedHarnessWithOverrides(t *testing.T, overrides harnessOverrides) phaseHarness {
+	t.Helper()
+	h := newHarnessWithOverrides(t, overrides)
+	incident, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.incident = incident
 	proposal := mustServiceProposal(t, h)
-	_, err := h.services.Approvals.Approve(context.Background(), application.ApprovalCommand{IncidentID: h.incident.ID(), Actor: h.human, ActionID: proposal.ActionID(), ProposalHash: proposal.Hash()})
+	_, err = h.services.Approvals.Approve(context.Background(), application.ApprovalCommand{IncidentID: h.incident.ID(), Actor: h.human, ActionID: proposal.ActionID(), ProposalHash: proposal.Hash()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return h
+}
+
+func assertPendingAttempt(t *testing.T, h phaseHarness, key domain.IdempotencyKey) {
+	t.Helper()
+	err := h.uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+		record, getErr := repositories.Idempotency().Get(key)
+		if getErr != nil {
+			return getErr
+		}
+		if record.State() != domain.IdempotencyPending {
+			return fmt.Errorf("attempt state = %v, want pending", record.State())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertCompletedAttempt(t *testing.T, h phaseHarness, key domain.IdempotencyKey, executionID domain.ExecutionID) {
+	t.Helper()
+	err := h.uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+		record, getErr := repositories.Idempotency().Get(key)
+		if getErr != nil {
+			return getErr
+		}
+		if record.State() != domain.IdempotencyCompleted || record.ResultID() != executionID {
+			return fmt.Errorf("attempt state/result = %v/%q, want completed/%q", record.State(), record.ResultID(), executionID)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func mustServiceProposal(t *testing.T, h phaseHarness) domain.RollbackProposal {
@@ -477,6 +748,24 @@ type cancelingInspector struct {
 	cancel context.CancelFunc
 }
 
+type failingInspector struct{ err error }
+
+func (f failingInspector) InspectDeployment(context.Context, domain.DeploymentTarget) (domain.DeploymentEvidence, error) {
+	return domain.DeploymentEvidence{}, f.err
+}
+
+type failingMetrics struct{ err error }
+
+func (f failingMetrics) Observe(context.Context, domain.DeploymentTarget, domain.Symptom) (domain.MetricEvidence, error) {
+	return domain.MetricEvidence{}, f.err
+}
+
+type failingDiagnoser struct{ err error }
+
+func (f failingDiagnoser) Diagnose(context.Context, ports.InvestigationInput) (domain.InvestigationConclusion, error) {
+	return domain.InvestigationConclusion{}, f.err
+}
+
 func (c cancelingInspector) InspectDeployment(ctx context.Context, _ domain.DeploymentTarget) (domain.DeploymentEvidence, error) {
 	c.cancel()
 	return domain.DeploymentEvidence{}, ctx.Err()
@@ -493,6 +782,36 @@ func (c cancelingMetrics) Observe(ctx context.Context, _ domain.DeploymentTarget
 
 type cancelingDiagnoser struct {
 	cancel context.CancelFunc
+}
+
+type cancelBeforeMutationExecutor struct {
+	cancel context.CancelFunc
+	calls  int
+}
+
+type failTransactionUnitOfWork struct {
+	mu       sync.Mutex
+	delegate ports.UnitOfWork
+	failAt   int
+	calls    int
+	failure  error
+}
+
+func (u *failTransactionUnitOfWork) WithinTransaction(ctx context.Context, operation func(ports.Repositories) error) error {
+	u.mu.Lock()
+	u.calls++
+	call := u.calls
+	u.mu.Unlock()
+	if call == u.failAt {
+		return u.failure
+	}
+	return u.delegate.WithinTransaction(ctx, operation)
+}
+
+func (e *cancelBeforeMutationExecutor) ExecuteApprovedRollback(ctx context.Context, _ domain.ApprovedRollback, _ domain.IdempotencyKey) (domain.RollbackExecution, error) {
+	e.calls++
+	e.cancel()
+	return domain.RollbackExecution{}, ctx.Err()
 }
 
 func (c cancelingDiagnoser) Diagnose(ctx context.Context, _ ports.InvestigationInput) (domain.InvestigationConclusion, error) {

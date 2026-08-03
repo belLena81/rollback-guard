@@ -57,6 +57,19 @@ func TestCanceledContextCannotCommitTransaction(t *testing.T) {
 	}
 }
 
+func TestNextEventSequenceHonorsCancellation(t *testing.T) {
+	uow := memory.NewUnitOfWork()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+		_, sequenceErr := repositories.Events().NextSequence(ctx, "incident")
+		return sequenceErr
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("NextSequence() error = %v, want context canceled", err)
+	}
+}
+
 func TestOptimisticUpdateRejectsStaleVersion(t *testing.T) {
 	uow := memory.NewUnitOfWork()
 	incident := repositoryIncident(t)

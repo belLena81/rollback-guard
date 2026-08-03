@@ -94,17 +94,19 @@ func (p RollbackProposal) computeHash() (ProposalHash, error) {
 		Cluster          string           `json:"cluster"`
 		Namespace        string           `json:"namespace"`
 		Deployment       string           `json:"deployment"`
+		Service          string           `json:"service"`
 		CurrentRevision  Revision         `json:"current_revision"`
 		TargetRevision   Revision         `json:"target_revision"`
 		ExpiresAt        string           `json:"expires_at"`
 	}{
-		Version:          "v1",
+		Version:          "v2",
 		ActionID:         p.actionID,
 		IncidentID:       p.incidentID,
 		PolicyDecisionID: p.policyDecisionID,
 		Cluster:          p.target.Cluster(),
 		Namespace:        p.target.Namespace(),
 		Deployment:       p.target.Deployment(),
+		Service:          p.target.Service(),
 		CurrentRevision:  p.currentRevision,
 		TargetRevision:   p.targetRevision,
 		ExpiresAt:        p.expiresAt.UTC().Format(time.RFC3339Nano),
