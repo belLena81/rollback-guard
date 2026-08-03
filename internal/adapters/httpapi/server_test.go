@@ -3,8 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 	"github.com/belLena81/rollback-guard/internal/testkit"
 )
 
@@ -52,6 +56,19 @@ func TestHTTPWorkflowCreatesApprovesExecutesAndVerifies(t *testing.T) {
 	if approved.Incident.Status != "resolved" || approved.Execution == nil || approved.Verification == nil || !approved.Verification.Passed {
 		t.Fatalf("approved summary = %+v", approved)
 	}
+	retry := httptest.NewRequest(http.MethodPost, "/v1/incidents/"+created.Incident.ID+"/approve", bytes.NewReader(approveBody))
+	retryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(retryResponse, retry)
+	if retryResponse.Code != http.StatusOK {
+		t.Fatalf("retry approve status = %d body = %s", retryResponse.Code, retryResponse.Body.String())
+	}
+	var retried incidentSummaryDTO
+	if err := json.Unmarshal(retryResponse.Body.Bytes(), &retried); err != nil {
+		t.Fatal(err)
+	}
+	if retried.Incident.Status != "resolved" || retried.Execution == nil || retried.Verification == nil || !retried.Verification.Passed {
+		t.Fatalf("retried summary = %+v", retried)
+	}
 	events := httptest.NewRequest(http.MethodGet, "/v1/incidents/"+created.Incident.ID+"/events", nil)
 	eventsResponse := httptest.NewRecorder()
 	handler.ServeHTTP(eventsResponse, events)
@@ -69,6 +86,65 @@ func TestHTTPWorkflowCreatesApprovesExecutesAndVerifies(t *testing.T) {
 	}
 }
 
+func TestHTTPApproveReturnsCommittedExecutionFailureSummary(t *testing.T) {
+	handler := newTestHandlerWithInfrastructure(t, func(infrastructure *fake.Infrastructure) {
+		infrastructure.ExecuteErr = errors.New("mcp rollback failed")
+	})
+	created := createHTTPIncident(t, handler)
+	approved := approveHTTPProposal(t, handler, created)
+	if approved.Incident.Status != "failed" || approved.Execution == nil || approved.Execution.Outcome != "failed" {
+		t.Fatalf("approval summary = %+v", approved)
+	}
+	if approved.Verification != nil {
+		t.Fatalf("verification = %+v, want nil", approved.Verification)
+	}
+}
+
+func TestHTTPApproveReturnsCommittedVerificationFailureSummary(t *testing.T) {
+	handler := newTestHandlerWithInfrastructure(t, func(infrastructure *fake.Infrastructure) {
+		infrastructure.AfterExecute = nil
+	})
+	created := createHTTPIncident(t, handler)
+	approved := approveHTTPProposal(t, handler, created)
+	if approved.Incident.Status != "failed" || approved.Execution == nil || approved.Execution.Outcome != "succeeded" {
+		t.Fatalf("approval summary = %+v", approved)
+	}
+	if approved.Verification == nil || approved.Verification.Passed {
+		t.Fatalf("verification = %+v, want failed verification", approved.Verification)
+	}
+}
+
+func TestOpenAPIRejectionRequestIsStrictSingleObject(t *testing.T) {
+	data, err := os.ReadFile("../../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(data)
+	rejectionStart := strings.Index(schema, "    RejectionRequest:\n")
+	if rejectionStart < 0 {
+		t.Fatal("RejectionRequest schema not found")
+	}
+	cancelStart := strings.Index(schema[rejectionStart:], "    CancelRequest:\n")
+	if cancelStart < 0 {
+		t.Fatal("CancelRequest schema not found after RejectionRequest")
+	}
+	rejectionSchema := schema[rejectionStart : rejectionStart+cancelStart]
+	if strings.Contains(rejectionSchema, "allOf:") {
+		t.Fatalf("RejectionRequest must not use allOf with additionalProperties: false:\n%s", rejectionSchema)
+	}
+	for _, required := range []string{
+		"required: [actionId, proposalHash, reason]",
+		"additionalProperties: false",
+		"actionId: { type: string }",
+		"proposalHash: { type: string }",
+		"reason: { type: string }",
+	} {
+		if !strings.Contains(rejectionSchema, required) {
+			t.Fatalf("RejectionRequest missing %q:\n%s", required, rejectionSchema)
+		}
+	}
+}
+
 func TestStrictJSONRejectsUnknownFields(t *testing.T) {
 	handler := newTestHandler(t)
 	body := []byte(`{
@@ -83,7 +159,61 @@ func TestStrictJSONRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestListEventsReturnsNotFoundForMissingIncident(t *testing.T) {
+	handler := newTestHandler(t)
+	request := httptest.NewRequest(http.MethodGet, "/v1/incidents/missing/events", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"error":"not_found"`) {
+		t.Fatalf("body = %s", response.Body.String())
+	}
+}
+
+func TestMutatingRouteRequiresRequestActor(t *testing.T) {
+	handler := newUnauthenticatedTestHandler(t)
+	body := []byte(`{
+		"target":{"cluster":"local","namespace":"demo","deployment":"demo-api","service":"demo-api"},
+		"symptom":{"kind":"http_error_rate","observed":0.35,"threshold":0.10,"unit":"ratio","startedAt":"2026-08-03T10:00:00Z"}
+	}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/incidents", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"error":"unauthenticated"`) {
+		t.Fatalf("body = %s", response.Body.String())
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
+	t.Helper()
+	return newTestHandlerWithInfrastructure(t, nil)
+}
+
+func newTestHandlerWithInfrastructure(t *testing.T, configure func(*fake.Infrastructure)) http.Handler {
+	t.Helper()
+	server := newTestServer(t, configure)
+	localActor, err := domain.NewActor("local-admin", domain.ActorHuman)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := httpserver.NewLocalAuthMiddleware(localActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server.Routes(nil, auth)
+}
+
+func newUnauthenticatedTestHandler(t *testing.T) http.Handler {
+	t.Helper()
+	return newTestServer(t, nil).Routes(nil, nil)
+}
+
+func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *Server {
 	t.Helper()
 	now := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
 	clock := testkit.NewClock(now)
@@ -115,6 +245,9 @@ func newTestHandler(t *testing.T) http.Handler {
 	infrastructure.AfterExecute = func() {
 		infrastructure.Metric.Value = 0.02
 	}
+	if configure != nil {
+		configure(infrastructure)
+	}
 	diagnoser, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: 10 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
@@ -141,13 +274,50 @@ func newTestHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	localActor, err := domain.NewActor("local-admin", domain.ActorHuman)
+	server, err := NewServer(services, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := NewServer(services, localActor, nil)
+	return server
+}
+
+func createHTTPIncident(t *testing.T, handler http.Handler) incidentSummaryDTO {
+	t.Helper()
+	body := []byte(`{
+		"target":{"cluster":"local","namespace":"demo","deployment":"demo-api","service":"demo-api"},
+		"symptom":{"kind":"http_error_rate","observed":0.35,"threshold":0.10,"unit":"ratio","startedAt":"2026-08-03T10:00:00Z"}
+	}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/incidents", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body = %s", response.Code, response.Body.String())
+	}
+	var created incidentSummaryDTO
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	return created
+}
+
+func approveHTTPProposal(t *testing.T, handler http.Handler, created incidentSummaryDTO) incidentSummaryDTO {
+	t.Helper()
+	if created.Proposal == nil {
+		t.Fatal("created incident has no proposal")
+	}
+	body, err := json.Marshal(approvalRequest{ActionID: created.Proposal.ActionID, ProposalHash: created.Proposal.ProposalHash})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return server.Routes(nil)
+	request := httptest.NewRequest(http.MethodPost, "/v1/incidents/"+created.Incident.ID+"/approve", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("approve status = %d body = %s", response.Code, response.Body.String())
+	}
+	var approved incidentSummaryDTO
+	if err := json.Unmarshal(response.Body.Bytes(), &approved); err != nil {
+		t.Fatal(err)
+	}
+	return approved
 }

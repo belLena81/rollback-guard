@@ -25,7 +25,7 @@ func TestProposalHashBindsEveryCanonicalField(t *testing.T) {
 		{name: "service", proposal: mustProposal(t, "action", "incident", "policy", mustTarget(t, "cluster", "namespace", "api", "different"), "revision-2", "revision-1", now)},
 		{name: "current revision", proposal: mustProposal(t, "action", "incident", "policy", baseTarget, "revision-3", "revision-1", now)},
 		{name: "target revision", proposal: mustProposal(t, "action", "incident", "policy", baseTarget, "revision-2", "revision-0", now)},
-		{name: "expiry", proposal: mustProposal(t, "action", "incident", "policy", baseTarget, "revision-2", "revision-1", now.Add(time.Nanosecond))},
+		{name: "expiry", proposal: mustProposal(t, "action", "incident", "policy", baseTarget, "revision-2", "revision-1", now.Add(time.Microsecond))},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -33,6 +33,23 @@ func TestProposalHashBindsEveryCanonicalField(t *testing.T) {
 				t.Fatalf("changed field did not change hash %q", base.Hash())
 			}
 		})
+	}
+}
+
+func TestProposalHashSurvivesPostgresTimestampPrecision(t *testing.T) {
+	expiresAt := time.Date(2026, 8, 3, 10, 0, 0, 123456789, time.UTC)
+	proposal := mustProposal(t, "action", "incident", "policy", mustTarget(t, "cluster", "namespace", "api", "service"), "revision-2", "revision-1", expiresAt)
+	snapshot := proposal.Snapshot()
+	snapshot.ExpiresAt = snapshot.ExpiresAt.Truncate(time.Microsecond)
+	rehydrated, err := domain.RehydrateRollbackProposal(snapshot)
+	if err != nil {
+		t.Fatalf("RehydrateRollbackProposal() error = %v", err)
+	}
+	if rehydrated.Hash() != proposal.Hash() {
+		t.Fatalf("rehydrated hash = %s, want %s", rehydrated.Hash(), proposal.Hash())
+	}
+	if rehydrated.ExpiresAt() != snapshot.ExpiresAt {
+		t.Fatalf("rehydrated expires_at = %s, want %s", rehydrated.ExpiresAt(), snapshot.ExpiresAt)
 	}
 }
 

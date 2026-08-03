@@ -13,41 +13,44 @@ import (
 
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 )
 
 const maxJSONBodyBytes = 1 << 20
 
 type Server struct {
 	services *application.Services
-	actor    domain.Actor
 	logger   *slog.Logger
 }
 
-func NewServer(services application.Services, actor domain.Actor, logger *slog.Logger) (*Server, error) {
+func NewServer(services application.Services, logger *slog.Logger) (*Server, error) {
 	if services.Incidents == nil || services.Investigations == nil || services.Approvals == nil || services.Executions == nil || services.Verifications == nil || services.Queries == nil {
 		return nil, fmt.Errorf("all application services are required")
-	}
-	if !actor.IsHuman() {
-		return nil, fmt.Errorf("local actor must be human")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{services: &services, actor: actor, logger: logger}, nil
+	return &Server{services: &services, logger: logger}, nil
 }
 
-func (s *Server) Routes(ready func(context.Context) error) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/incidents", s.createIncident)
-	mux.HandleFunc("GET /v1/incidents/{incidentId}", s.getIncident)
-	mux.HandleFunc("GET /v1/incidents/{incidentId}/events", s.listEvents)
-	mux.HandleFunc("POST /v1/incidents/{incidentId}/approve", s.approve)
-	mux.HandleFunc("POST /v1/incidents/{incidentId}/reject", s.reject)
-	mux.HandleFunc("POST /v1/incidents/{incidentId}/cancel", s.cancel)
-	mux.HandleFunc("GET /health/live", live)
-	mux.HandleFunc("GET /health/ready", readiness(ready))
-	mux.HandleFunc("GET /metrics", metrics)
-	return requestIDMiddleware(mux)
+func (s *Server) Routes(ready func(context.Context) error, auth httpserver.AuthMiddleware) http.Handler {
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("POST /v1/incidents", s.createIncident)
+	apiMux.HandleFunc("GET /v1/incidents/{incidentId}", s.getIncident)
+	apiMux.HandleFunc("GET /v1/incidents/{incidentId}/events", s.listEvents)
+	apiMux.HandleFunc("POST /v1/incidents/{incidentId}/approve", s.approve)
+	apiMux.HandleFunc("POST /v1/incidents/{incidentId}/reject", s.reject)
+	apiMux.HandleFunc("POST /v1/incidents/{incidentId}/cancel", s.cancel)
+	var apiHandler http.Handler = apiMux
+	if auth != nil {
+		apiHandler = auth.Wrap(apiHandler)
+	}
+	rootMux := http.NewServeMux()
+	rootMux.Handle("/v1/", apiHandler)
+	rootMux.HandleFunc("GET /health/live", live)
+	rootMux.HandleFunc("GET /health/ready", readiness(ready))
+	rootMux.HandleFunc("GET /metrics", metrics)
+	return requestIDMiddleware(rootMux)
 }
 
 func live(w http.ResponseWriter, _ *http.Request) {
@@ -98,6 +101,10 @@ type cancelRequest struct {
 }
 
 func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
+	actor, ok := requestActor(w, r)
+	if !ok {
+		return
+	}
 	var request createIncidentRequest
 	if !decodeJSON(w, r, &request) {
 		return
@@ -112,7 +119,7 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	incident, err := s.services.Incidents.CreateIncident(r.Context(), application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: s.actor})
+	incident, err := s.services.Incidents.CreateIncident(r.Context(), application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: actor})
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -139,7 +146,12 @@ func (s *Server) getIncident(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
-	events, err := s.services.Queries.ListEvents(r.Context(), domain.IncidentID(r.PathValue("incidentId")))
+	incidentID := domain.IncidentID(r.PathValue("incidentId"))
+	if _, err := s.services.Queries.GetIncident(r.Context(), incidentID); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	events, err := s.services.Queries.ListEvents(r.Context(), incidentID)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -152,6 +164,10 @@ func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
+	actor, ok := requestActor(w, r)
+	if !ok {
+		return
+	}
 	var request approvalRequest
 	if !decodeJSON(w, r, &request) {
 		return
@@ -159,7 +175,7 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	incidentID := domain.IncidentID(r.PathValue("incidentId"))
 	approval, err := s.services.Approvals.Approve(r.Context(), application.ApprovalCommand{
 		IncidentID:   incidentID,
-		Actor:        s.actor,
+		Actor:        actor,
 		ActionID:     domain.ActionID(strings.TrimSpace(request.ActionID)),
 		ProposalHash: domain.ProposalHash(strings.TrimSpace(request.ProposalHash)),
 	})
@@ -168,10 +184,9 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.services.Executions.Execute(r.Context(), incidentID, domain.IdempotencyKey("approval:"+string(approval.ID()))); err != nil {
-		writeError(w, r, err)
-		return
-	}
-	if _, err := s.services.Verifications.Verify(r.Context(), incidentID); err != nil {
+		if s.writeCommittedExecutionFailure(w, r, incidentID) {
+			return
+		}
 		writeError(w, r, err)
 		return
 	}
@@ -180,10 +195,52 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
+	if summary.Incident.Status() == domain.StatusVerifying {
+		if _, err := s.services.Verifications.Verify(r.Context(), incidentID); err != nil {
+			if s.writeCommittedVerificationFailure(w, r, incidentID) {
+				return
+			}
+			writeError(w, r, err)
+			return
+		}
+		summary, err = s.services.Queries.GetIncidentSummary(r.Context(), incidentID)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, summaryResponse(summary))
 }
 
+func (s *Server) writeCommittedExecutionFailure(w http.ResponseWriter, r *http.Request, incidentID domain.IncidentID) bool {
+	summary, err := s.services.Queries.GetIncidentSummary(r.Context(), incidentID)
+	if err != nil || summary.Execution == nil {
+		return false
+	}
+	if summary.Incident.Status() != domain.StatusFailed || summary.Execution.Outcome() != domain.ExecutionFailed {
+		return false
+	}
+	writeJSON(w, http.StatusOK, summaryResponse(summary))
+	return true
+}
+
+func (s *Server) writeCommittedVerificationFailure(w http.ResponseWriter, r *http.Request, incidentID domain.IncidentID) bool {
+	summary, err := s.services.Queries.GetIncidentSummary(r.Context(), incidentID)
+	if err != nil || summary.Verification == nil {
+		return false
+	}
+	if summary.Incident.Status() != domain.StatusFailed || summary.Verification.Passed() {
+		return false
+	}
+	writeJSON(w, http.StatusOK, summaryResponse(summary))
+	return true
+}
+
 func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
+	actor, ok := requestActor(w, r)
+	if !ok {
+		return
+	}
 	var request rejectionRequest
 	if !decodeJSON(w, r, &request) {
 		return
@@ -191,7 +248,7 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
 	incidentID := domain.IncidentID(r.PathValue("incidentId"))
 	if _, err := s.services.Approvals.Reject(r.Context(), application.RejectionCommand{
 		IncidentID:   incidentID,
-		Actor:        s.actor,
+		Actor:        actor,
 		ActionID:     domain.ActionID(strings.TrimSpace(request.ActionID)),
 		ProposalHash: domain.ProposalHash(strings.TrimSpace(request.ProposalHash)),
 		Reason:       request.Reason,
@@ -208,12 +265,16 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
+	actor, ok := requestActor(w, r)
+	if !ok {
+		return
+	}
 	var request cancelRequest
 	if !decodeJSON(w, r, &request) {
 		return
 	}
 	incidentID := domain.IncidentID(r.PathValue("incidentId"))
-	if _, err := s.services.Incidents.Cancel(r.Context(), application.CancelIncidentCommand{IncidentID: incidentID, Actor: s.actor, Reason: request.Reason}); err != nil {
+	if _, err := s.services.Incidents.Cancel(r.Context(), application.CancelIncidentCommand{IncidentID: incidentID, Actor: actor, Reason: request.Reason}); err != nil {
 		writeError(w, r, err)
 		return
 	}
@@ -223,6 +284,15 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, summaryResponse(summary))
+}
+
+func requestActor(w http.ResponseWriter, r *http.Request) (domain.Actor, bool) {
+	actor, ok := httpserver.ActorFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, errorDTO{Error: "unauthenticated", Message: "request actor is missing", RequestID: requestID(r)})
+		return domain.Actor{}, false
+	}
+	return actor, true
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {

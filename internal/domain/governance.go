@@ -77,7 +77,7 @@ func NewRollbackProposal(actionID ActionID, incidentID IncidentID, policyDecisio
 	if currentRevision == targetRevision {
 		return RollbackProposal{}, invalid("proposal.target_revision", "must differ from current revision")
 	}
-	p := RollbackProposal{actionID: actionID, incidentID: incidentID, policyDecisionID: policyDecisionID, target: target, currentRevision: currentRevision, targetRevision: targetRevision, expiresAt: expiresAt.UTC()}
+	p := RollbackProposal{actionID: actionID, incidentID: incidentID, policyDecisionID: policyDecisionID, target: target, currentRevision: currentRevision, targetRevision: targetRevision, expiresAt: canonicalProposalExpiry(expiresAt)}
 	hash, err := p.computeHash()
 	if err != nil {
 		return RollbackProposal{}, invalid("proposal.hash", err.Error())
@@ -85,6 +85,11 @@ func NewRollbackProposal(actionID ActionID, incidentID IncidentID, policyDecisio
 	p.hash = hash
 	return p, nil
 }
+
+func canonicalProposalExpiry(expiresAt time.Time) time.Time {
+	return expiresAt.UTC().Truncate(time.Microsecond)
+}
+
 func (p RollbackProposal) computeHash() (ProposalHash, error) {
 	canonical := struct {
 		Version          string           `json:"version"`

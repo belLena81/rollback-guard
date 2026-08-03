@@ -538,8 +538,8 @@ func (repo idempotencyRepo) Update(record domain.IdempotencyRecord, expected dom
 	command, err := repo.r.tx.Exec(repo.r.ctx, `
 		UPDATE idempotency_keys
 		SET state = $1, result_id = $2, completed_at = $3
-		WHERE key = $4 AND operation = $5 AND request_hash = $6 AND resource_id = $7 AND state = $8 AND started_at = $9
-	`, idempotencyStateText(s.State), s.ResultID, s.CompletedAt, s.Key, idempotencyOperationText(s.Operation), s.RequestHash, s.ResourceID, idempotencyStateText(expected), s.StartedAt)
+		WHERE key = $4 AND operation = $5 AND request_hash = $6 AND resource_id = $7 AND state = $8
+	`, idempotencyStateText(s.State), s.ResultID, s.CompletedAt, s.Key, idempotencyOperationText(s.Operation), s.RequestHash, s.ResourceID, idempotencyStateText(expected))
 	if err != nil {
 		return mapError(err, "idempotency key", string(s.Key))
 	}

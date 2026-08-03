@@ -17,6 +17,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
+	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 	"github.com/belLena81/rollback-guard/internal/platform/runtime"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -113,13 +114,17 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	api, err := httpapi.NewServer(services, localActor, logger)
+	auth, err := httpserver.NewLocalAuthMiddleware(localActor)
+	if err != nil {
+		return err
+	}
+	api, err := httpapi.NewServer(services, logger)
 	if err != nil {
 		return err
 	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.Routes(func(ctx context.Context) error { return pool.Ping(ctx) }),
+		Handler:           api.Routes(func(ctx context.Context) error { return pool.Ping(ctx) }, auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -146,13 +146,13 @@ components:
         actionId: { type: string }
         proposalHash: { type: string }
     RejectionRequest:
-      allOf:
-        - $ref: '#/components/schemas/ApprovalRequest'
-        - type: object
-          required: [reason]
-          additionalProperties: false
-          properties:
-            reason: { type: string }
+      type: object
+      required: [actionId, proposalHash, reason]
+      additionalProperties: false
+      properties:
+        actionId: { type: string }
+        proposalHash: { type: string }
+        reason: { type: string }
     CancelRequest:
       type: object
       required: [reason]
