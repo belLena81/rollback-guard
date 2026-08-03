@@ -1,0 +1,142 @@
+package domain
+
+import "time"
+
+type EligibilityCandidate struct {
+	DecisionID PolicyDecisionID
+	Incident   Incident
+	Conclusion InvestigationConclusion
+	Evidence   []Evidence
+	Now        time.Time
+}
+
+type EligibilityPolicyConfig struct {
+	MinimumConfidence float64
+	CorrelationWindow time.Duration
+	AllowedTargets    []DeploymentTarget
+}
+
+type EligibilityPolicy struct {
+	minimumConfidence float64
+	correlationWindow time.Duration
+	allowedTargets    []DeploymentTarget
+}
+
+func NewEligibilityPolicy(config EligibilityPolicyConfig) (EligibilityPolicy, error) {
+	policy := EligibilityPolicy{
+		minimumConfidence: config.MinimumConfidence,
+		correlationWindow: config.CorrelationWindow,
+		allowedTargets:    append([]DeploymentTarget(nil), config.AllowedTargets...),
+	}
+	if err := policy.Validate(); err != nil {
+		return EligibilityPolicy{}, err
+	}
+	return policy, nil
+}
+
+func (p EligibilityPolicy) Validate() error {
+	if p.minimumConfidence < 0 || p.minimumConfidence > 1 || p.correlationWindow <= 0 {
+		return invalid("eligibility_policy", "invalid configuration")
+	}
+	if len(p.allowedTargets) == 0 {
+		return invalid("eligibility_policy.allowed_targets", "must not be empty")
+	}
+	seen := make(map[DeploymentTarget]struct{}, len(p.allowedTargets))
+	for _, target := range p.allowedTargets {
+		if !target.Valid() {
+			return invalid("eligibility_policy.allowed_targets", "contains invalid target")
+		}
+		if _, duplicate := seen[target]; duplicate {
+			return invalid("eligibility_policy.allowed_targets", "contains duplicate target")
+		}
+		seen[target] = struct{}{}
+	}
+	return nil
+}
+
+func (p EligibilityPolicy) Evaluate(candidate EligibilityCandidate) (PolicyDecision, error) {
+	if err := p.Validate(); err != nil {
+		return PolicyDecision{}, err
+	}
+	belongs := true
+	referenced := map[EvidenceID]bool{}
+	for _, id := range candidate.Conclusion.EvidenceIDs() {
+		referenced[id] = true
+	}
+	var deployment *DeploymentEvidence
+	var metric *MetricEvidence
+	deploymentReferenced := false
+	metricReferenced := false
+	for _, evidence := range candidate.Evidence {
+		isReferenced := referenced[evidence.ID()]
+		if d, ok := evidence.Deployment(); ok && isReferenced {
+			copyValue := d
+			deployment = &copyValue
+			deploymentReferenced = true
+		}
+		if m, ok := evidence.Metric(); ok && isReferenced {
+			copyValue := m
+			metric = &copyValue
+			metricReferenced = true
+		}
+		if isReferenced && evidence.IncidentID() != candidate.Incident.ID() {
+			belongs = false
+		}
+	}
+	for id := range referenced {
+		found := false
+		for _, e := range candidate.Evidence {
+			if e.ID() == id && e.IncidentID() == candidate.Incident.ID() {
+				found = true
+				break
+			}
+		}
+		belongs = belongs && found
+	}
+	targetAllowed := false
+	for _, allowed := range p.allowedTargets {
+		if candidate.Incident.Target().Equal(allowed) {
+			targetAllowed = true
+			break
+		}
+	}
+	deploymentMatches, unhealthy, correlated, stable := false, false, false, false
+	if deployment != nil {
+		deploymentMatches = deployment.Target.Equal(candidate.Incident.Target())
+		unhealthy = !deployment.Healthy
+		stable = deployment.PreviousStableRevision != "" && deployment.PreviousStableRevision != deployment.CurrentRevision
+		delta := candidate.Incident.Symptom().StartedAt().Sub(deployment.RolloutAt)
+		correlated = delta >= 0 && delta <= p.correlationWindow
+	}
+	metricMatches, metricBreached := false, false
+	if metric != nil {
+		metricMatches = metric.Name == candidate.Incident.Symptom().Kind() && metric.Unit == candidate.Incident.Symptom().Unit()
+		metricBreached = metric.Value >= candidate.Incident.Symptom().Threshold()
+	}
+	rules := []RuleResult{
+		{Name: "rollback_recommended", Passed: candidate.Conclusion.Recommendation() == RecommendRollback},
+		{Name: "minimum_confidence", Passed: candidate.Conclusion.Confidence() >= p.minimumConfidence},
+		{Name: "conclusion_belongs_to_incident", Passed: candidate.Conclusion.IncidentID() == candidate.Incident.ID()},
+		{Name: "evidence_belongs_to_incident", Passed: belongs},
+		{Name: "deployment_evidence_referenced", Passed: deploymentReferenced},
+		{Name: "metric_evidence_referenced", Passed: metricReferenced},
+		{Name: "deployment_target_allowed", Passed: targetAllowed},
+		{Name: "deployment_evidence_matches_incident_target", Passed: deploymentMatches},
+		{Name: "metric_matches_symptom", Passed: metricMatches},
+		{Name: "current_metric_threshold_breached", Passed: metricBreached},
+		{Name: "symptom_threshold_breached", Passed: candidate.Incident.Symptom().Breached()},
+		{Name: "current_rollout_unhealthy", Passed: unhealthy},
+		{Name: "rollout_temporally_correlated", Passed: correlated},
+		{Name: "previous_stable_revision_distinct", Passed: stable},
+	}
+	return NewPolicyDecision(candidate.DecisionID, candidate.Incident.ID(), rules, candidate.Now)
+}
+
+func EvaluateRecovery(target DeploymentTarget, targetRevision Revision, deployment DeploymentEvidence, metric MetricEvidence, symptom Symptom, incidentID IncidentID, executionID ExecutionID, now time.Time) (RecoveryVerification, error) {
+	passed := deployment.Target.Equal(target) && deployment.CurrentRevision == targetRevision && deployment.Healthy && deployment.DesiredReplicas == deployment.ReadyReplicas && deployment.DesiredReplicas == deployment.AvailableReplicas && metric.Name == symptom.Kind() && metric.Unit == symptom.Unit() && metric.Value < symptom.Threshold()
+	reason := ""
+	if !passed {
+		reason = "revision, replicas, rollout health, or recovery metric did not recover"
+	}
+	return NewRecoveryVerification(incidentID, executionID, passed, deployment.CurrentRevision, deployment.DesiredReplicas, deployment.ReadyReplicas, deployment.AvailableReplicas, metric.Value, now, reason)
+}

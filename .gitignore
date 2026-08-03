@@ -8,6 +8,7 @@
 .codex/
 .claude/
 AGENTS.md
+_log/
 
 # Local Go/build outputs
 bin/

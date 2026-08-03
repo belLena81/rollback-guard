@@ -1,0 +1,20 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - errorlint
+    - gocritic
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+formatters:
+  enable:
+    - gofmt
