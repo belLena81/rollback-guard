@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -11,6 +12,7 @@ import (
 )
 
 const investigationFailureAuditReason = "investigation failed"
+const executionFailureAuditReason = "rollback execution failed"
 
 func (s *ExecutionService) Execute(ctx context.Context, incidentID domain.IncidentID, key domain.IdempotencyKey) (domain.RollbackExecution, error) {
 	if key == "" {
@@ -180,7 +182,17 @@ func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loade
 	if err != nil {
 		return executionPreparation{}, fmt.Errorf("reinspect pending deployment: %w", err)
 	}
+	authorizationTime := loaded.record.StartedAt()
 	if freshDeployment.Target.Equal(loaded.proposal.Target()) && freshDeployment.CurrentRevision == loaded.proposal.TargetRevision() {
+		if _, err := c.approvalPolicy.Authorize(
+			loaded.proposal,
+			loaded.decision,
+			loaded.approval,
+			domain.DeploymentEvidence{Target: loaded.proposal.Target(), CurrentRevision: loaded.proposal.CurrentRevision()},
+			authorizationTime,
+		); err != nil {
+			return s.completePendingRevalidationFailure(ctx, loaded, startedAt, err), nil
+		}
 		execution, createErr := domain.NewRollbackExecution(
 			domain.ExecutionID(c.ids.NewID("execution")),
 			loaded.proposal.IncidentID(),
@@ -198,8 +210,7 @@ func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loade
 		completionErr := s.completeExecution(ctx, loaded.proposal, loaded.record, execution)
 		return executionPreparation{execution: execution, executionErr: completionErr, completed: true}, nil
 	}
-	authorizationTime := c.clock.Now()
-	approvedRollback, err := c.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, authorizationTime)
+	approvedRollback, err := c.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, c.clock.Now())
 	if err != nil {
 		return s.completePendingRevalidationFailure(ctx, loaded, startedAt, err), nil
 	}
@@ -248,7 +259,7 @@ func (s *ExecutionService) newFailedExecution(proposal domain.RollbackProposal, 
 		domain.ExecutionFailed,
 		startedAt,
 		s.workflow.clock.Now(),
-		cause.Error(),
+		executionFailureAuditReason,
 	)
 }
 
@@ -404,6 +415,9 @@ type CancelIncidentCommand struct {
 }
 
 func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentCommand) (domain.Incident, error) {
+	if strings.TrimSpace(command.Reason) == "" {
+		return domain.Incident{}, &domain.ValidationError{Field: "cancel.reason", Reason: "must not be empty"}
+	}
 	c := s.workflow
 	now := c.clock.Now()
 	var result domain.Incident

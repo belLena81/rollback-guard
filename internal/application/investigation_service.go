@@ -246,15 +246,17 @@ func (s *ApprovalService) recordDecision(ctx context.Context, command ApprovalCo
 			return existingErr
 		}
 		if proposal.Expired(now) {
-			expected := incident.Version()
-			if transitionErr := incident.Expire(now); transitionErr != nil {
-				return transitionErr
-			}
-			if updateErr := repositories.Incidents().Update(incident, expected); updateErr != nil {
-				return updateErr
-			}
-			if eventErr := c.appendEvent(ctx, repositories, command.IncidentID, domain.EventIncidentExpired, c.systemActor, domain.TerminalDetail{Reason: "proposal expired"}, now); eventErr != nil {
-				return eventErr
+			if incident.Status() != domain.StatusExpired {
+				expected := incident.Version()
+				if transitionErr := incident.Expire(now); transitionErr != nil {
+					return transitionErr
+				}
+				if updateErr := repositories.Incidents().Update(incident, expected); updateErr != nil {
+					return updateErr
+				}
+				if eventErr := c.appendEvent(ctx, repositories, command.IncidentID, domain.EventIncidentExpired, c.systemActor, domain.TerminalDetail{Reason: "proposal expired"}, now); eventErr != nil {
+					return eventErr
+				}
 			}
 			expired = true
 			return nil
