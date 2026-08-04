@@ -321,13 +321,10 @@ func (s *Service) PrepareRollback(ctx context.Context, proposal domain.RollbackP
 	if evidence.CurrentRevision != proposal.CurrentRevision() || evidence.PreviousStableRevision != proposal.TargetRevision() || evidence.CurrentRevision == evidence.PreviousStableRevision {
 		return ErrRevisionDrift
 	}
-	if proposal.Expired(s.now()) {
-		return &domain.ExpiryError{Resource: "proposal"}
-	}
 	return nil
 }
 
-func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.ProposalHash, key domain.IdempotencyKey) (MutationResult, error) {
+func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.ProposalHash, key domain.IdempotencyKey) (result MutationResult, resultErr error) {
 	if key == "" || hash == "" || s.guard == nil {
 		return MutationResult{}, &domain.ValidationError{Field: "rollback_mutation", Reason: "trusted mutation guard, key, and proposal hash are required"}
 	}
@@ -338,6 +335,12 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 	if attempt.Mutation.State() == domain.RollbackMutationCompleted {
 		return mutationResult(attempt.Mutation), nil
 	}
+	releasePending := true
+	defer func() {
+		if releasePending {
+			resultErr = errors.Join(resultErr, s.releaseMutation(ctx, attempt.Mutation))
+		}
+	}()
 	proposal := attempt.Approved.Proposal()
 	deployment, replicaSets, err := s.loadDeployment(ctx, proposal.Target())
 	if err != nil {
@@ -348,10 +351,11 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 		return MutationResult{}, err
 	}
 	if currentRevision == proposal.TargetRevision() {
-		completed, completeErr := s.guard.Complete(ctx, attempt.Mutation, true, s.now())
+		completed, completeErr := s.guard.Complete(ctx, attempt.Mutation, true, s.mutationCompletedAt(attempt.Mutation))
 		if completeErr != nil {
 			return MutationResult{}, completeErr
 		}
+		releasePending = false
 		return mutationResult(completed), nil
 	}
 	if currentRevision != proposal.CurrentRevision() {
@@ -362,7 +366,7 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 		return MutationResult{}, err
 	}
 	fresh := domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: currentRevision}
-	if _, err := domain.AuthorizeRollback(proposal, attempt.Approved.PolicyDecision(), attempt.Approved.Approval(), fresh, s.now()); err != nil {
+	if _, err := domain.AuthorizeRollback(proposal, attempt.Approved.PolicyDecision(), attempt.Approved.Approval(), fresh, attempt.Mutation.StartedAt()); err != nil {
 		return MutationResult{}, err
 	}
 	patch, err := rollbackPatch(deployment.ResourceVersion, stable.Spec.Template)
@@ -371,18 +375,23 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 	}
 	if _, err := s.client.AppsV1().Deployments(proposal.Target().Namespace()).Patch(ctx, proposal.Target().Deployment(), types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		if apierrors.IsConflict(err) {
+			if releaseErr := s.releaseMutation(ctx, attempt.Mutation); releaseErr != nil {
+				return MutationResult{}, releaseErr
+			}
+			releasePending = false
 			return s.reconcileMutation(ctx, key, hash)
 		}
 		return MutationResult{}, fmt.Errorf("patch approved deployment template: %w", err)
 	}
-	completed, err := s.guard.Complete(ctx, attempt.Mutation, false, s.now())
+	completed, err := s.guard.Complete(ctx, attempt.Mutation, false, s.mutationCompletedAt(attempt.Mutation))
 	if err != nil {
 		return MutationResult{}, err
 	}
+	releasePending = false
 	return mutationResult(completed), nil
 }
 
-func (s *Service) reconcileMutation(ctx context.Context, key domain.IdempotencyKey, hash domain.ProposalHash) (MutationResult, error) {
+func (s *Service) reconcileMutation(ctx context.Context, key domain.IdempotencyKey, hash domain.ProposalHash) (result MutationResult, resultErr error) {
 	attempt, err := s.guard.Begin(ctx, key, hash, s.now())
 	if err != nil {
 		return MutationResult{}, err
@@ -390,6 +399,12 @@ func (s *Service) reconcileMutation(ctx context.Context, key domain.IdempotencyK
 	if attempt.Mutation.State() == domain.RollbackMutationCompleted {
 		return mutationResult(attempt.Mutation), nil
 	}
+	releasePending := true
+	defer func() {
+		if releasePending {
+			resultErr = errors.Join(resultErr, s.releaseMutation(ctx, attempt.Mutation))
+		}
+	}()
 	proposal := attempt.Approved.Proposal()
 	deployment, _, err := s.loadDeployment(ctx, proposal.Target())
 	if err != nil {
@@ -402,11 +417,32 @@ func (s *Service) reconcileMutation(ctx context.Context, key domain.IdempotencyK
 	if currentRevision != proposal.TargetRevision() {
 		return MutationResult{}, ErrRevisionDrift
 	}
-	completed, err := s.guard.Complete(ctx, attempt.Mutation, true, s.now())
+	completed, err := s.guard.Complete(ctx, attempt.Mutation, true, s.mutationCompletedAt(attempt.Mutation))
 	if err != nil {
 		return MutationResult{}, err
 	}
+	releasePending = false
 	return mutationResult(completed), nil
+}
+
+type rollbackMutationReleaser interface {
+	Release(context.Context, domain.RollbackMutation) error
+}
+
+func (s *Service) releaseMutation(ctx context.Context, mutation domain.RollbackMutation) error {
+	releaser, ok := s.guard.(rollbackMutationReleaser)
+	if !ok {
+		return nil
+	}
+	return releaser.Release(ctx, mutation)
+}
+
+func (s *Service) mutationCompletedAt(mutation domain.RollbackMutation) time.Time {
+	completedAt := s.now()
+	if completedAt.Before(mutation.StartedAt()) {
+		return mutation.StartedAt()
+	}
+	return completedAt
 }
 
 func (s *Service) loadDeployment(ctx context.Context, target domain.DeploymentTarget) (*appsv1.Deployment, []appsv1.ReplicaSet, error) {

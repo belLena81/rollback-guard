@@ -271,6 +271,56 @@ func TestRollbackExecutorRoutesAlreadyAppliedThroughGuardedMutation(t *testing.T
 	}
 }
 
+func TestRollbackExecutorClampsSuccessfulCompletionAfterMutationStart(t *testing.T) {
+	now := time.Now().UTC()
+	approved := testApprovedRollback(t, now)
+	proposal := approved.Proposal()
+	mutationStartedAt := now.Add(time.Hour)
+	mutationCompletedAt := mutationStartedAt.Add(time.Second)
+	readonlyCalls := 0
+	readonly := callerFunc(func(_ context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
+		readonlyCalls++
+		switch readonlyCalls {
+		case 1:
+			return successfulToolResult(deploymentOutput(proposal, proposal.CurrentRevision(), false, now)), nil
+		case 2:
+			if params.Name != ToolWatchRollout {
+				t.Fatalf("second readonly call = %q, want %q", params.Name, ToolWatchRollout)
+			}
+			return successfulToolResult(RolloutOutput{Revision: string(proposal.TargetRevision()), DesiredReplicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1, ObservedGeneration: 2, Generation: 2, Complete: true}), nil
+		default:
+			t.Fatalf("unexpected readonly call %d to %q", readonlyCalls, params.Name)
+			return nil, nil
+		}
+	})
+	rollback := callerFunc(func(_ context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
+		switch params.Name {
+		case ToolPrepareRollback:
+			return successfulToolResult(PrepareRollbackOutput{ProposalHash: string(proposal.Hash()), TargetRevision: string(proposal.TargetRevision())}), nil
+		case ToolExecuteApprovedRollback:
+			return successfulToolResult(ExecuteRollbackOutput{ExecutionID: "mutation-future-clock", FromRevision: string(proposal.CurrentRevision()), ToRevision: string(proposal.TargetRevision()), StartedAt: mutationStartedAt, CompletedAt: mutationCompletedAt}), nil
+		default:
+			t.Fatalf("unexpected rollback call to %q", params.Name)
+			return nil, nil
+		}
+	})
+	executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	execution, err := executor.ExecuteApprovedRollback(context.Background(), approved, "future-clock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !execution.StartedAt().Equal(mutationStartedAt) {
+		t.Fatalf("started at = %s, want %s", execution.StartedAt(), mutationStartedAt)
+	}
+	if !execution.CompletedAt().Equal(mutationCompletedAt) {
+		t.Fatalf("completed at = %s, want %s", execution.CompletedAt(), mutationCompletedAt)
+	}
+}
+
 func TestNewRollbackExecutorRejectsSubSecondWatchTimeout(t *testing.T) {
 	caller := callerFunc(func(context.Context, *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
 		t.Fatal("constructor should reject before any tool call")

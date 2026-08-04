@@ -204,6 +204,33 @@ func TestRollbackPatchReplacesWholeTemplate(t *testing.T) {
 	}
 }
 
+func TestPrepareRollbackAllowsExpiredApprovedProposalPreflight(t *testing.T) {
+	target := mustTarget(t)
+	deployment := testDeployment("broken:v2")
+	current := testReplicaSet(deployment, "current", "broken:v2", false, time.Now())
+	stable := testReplicaSet(deployment, "stable", "healthy:v1", true, time.Now().Add(-time.Minute))
+	client := fake.NewClientset(deployment, current, stable)
+	currentRevision := mustRevision(t, deployment.Spec.Template)
+	targetRevision := mustRevision(t, stable.Spec.Template)
+	startedAt := time.Now().UTC()
+	proposal, err := domain.NewRollbackProposal("action", "incident", "policy", target, currentRevision, targetRevision, startedAt.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(client, Config{
+		ClusterID:      "local",
+		AllowedTargets: []domain.DeploymentTarget{target},
+		Now:            func() time.Time { return startedAt.Add(2 * time.Second) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := service.PrepareRollback(context.Background(), proposal); err != nil {
+		t.Fatalf("PrepareRollback() error = %v", err)
+	}
+}
+
 func TestRollbackIdempotencySurvivesServiceReplacement(t *testing.T) {
 	target := mustTarget(t)
 	deployment := testDeployment("broken:v2")
@@ -242,6 +269,127 @@ func TestRollbackIdempotencySurvivesServiceReplacement(t *testing.T) {
 	}
 	if got := patchActionCount(client.Actions()); got != 1 {
 		t.Fatalf("patch actions after conflict = %d, want 1", got)
+	}
+}
+
+func TestExecuteApprovedRollbackUsesLedgerSafeCompletionTimeAfterPatch(t *testing.T) {
+	target := mustTarget(t)
+	deployment := testDeployment("broken:v2")
+	current := testReplicaSet(deployment, "current", "broken:v2", false, time.Now())
+	stable := testReplicaSet(deployment, "stable", "healthy:v1", true, time.Now().Add(-time.Minute))
+	client := fake.NewClientset(deployment, current, stable)
+	startedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	currentRevision := mustRevision(t, deployment.Spec.Template)
+	targetRevision := mustRevision(t, stable.Spec.Template)
+	proposal, err := domain.NewRollbackProposal("action", "incident", "policy", target, currentRevision, targetRevision, startedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := domain.NewPolicyDecision("policy", "incident", []domain.RuleResult{{Name: "allowed", Passed: true}}, startedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor, err := domain.NewActor("alice", domain.ActorHuman)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := domain.NewApproval("approval", actor, domain.ApprovalApproved, proposal.ActionID(), proposal.Hash(), startedAt, startedAt.Add(time.Minute), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := domain.AuthorizeRollback(proposal, decision, approval, domain.DeploymentEvidence{Target: target, CurrentRevision: currentRevision}, startedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	times := []time.Time{
+		startedAt,
+		startedAt,
+		startedAt.Add(-time.Second),
+	}
+	now := func() time.Time {
+		if len(times) == 0 {
+			return startedAt
+		}
+		next := times[0]
+		times = times[1:]
+		return next
+	}
+	service, err := NewService(client, Config{ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, MutationGuard: newSharedMutationGuard(approved), Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.ExecuteApprovedRollback(context.Background(), proposal.Hash(), "clock-skew-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CompletedAt != result.StartedAt {
+		t.Fatalf("completed at = %s, want started at %s", result.CompletedAt, result.StartedAt)
+	}
+	if result.AlreadyApplied {
+		t.Fatalf("already applied = true, want false after patch")
+	}
+	if got := patchActionCount(client.Actions()); got != 1 {
+		t.Fatalf("patch actions = %d, want 1", got)
+	}
+}
+
+func TestExecuteApprovedRollbackRevalidatesAtMutationStartTime(t *testing.T) {
+	target := mustTarget(t)
+	deployment := testDeployment("broken:v2")
+	current := testReplicaSet(deployment, "current", "broken:v2", false, time.Now())
+	stable := testReplicaSet(deployment, "stable", "healthy:v1", true, time.Now().Add(-time.Minute))
+	client := fake.NewClientset(deployment, current, stable)
+	startedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	currentRevision := mustRevision(t, deployment.Spec.Template)
+	targetRevision := mustRevision(t, stable.Spec.Template)
+	proposal, err := domain.NewRollbackProposal("action", "incident", "policy", target, currentRevision, targetRevision, startedAt.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := domain.NewPolicyDecision("policy", "incident", []domain.RuleResult{{Name: "allowed", Passed: true}}, startedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor, err := domain.NewActor("alice", domain.ActorHuman)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := domain.NewApproval("approval", actor, domain.ApprovalApproved, proposal.ActionID(), proposal.Hash(), startedAt, startedAt.Add(time.Second), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := domain.AuthorizeRollback(proposal, decision, approval, domain.DeploymentEvidence{Target: target, CurrentRevision: currentRevision}, startedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	times := []time.Time{
+		startedAt,
+		startedAt.Add(2 * time.Second),
+		startedAt.Add(2 * time.Second),
+	}
+	now := func() time.Time {
+		if len(times) == 0 {
+			return startedAt.Add(2 * time.Second)
+		}
+		next := times[0]
+		times = times[1:]
+		return next
+	}
+	service, err := NewService(client, Config{ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, MutationGuard: newSharedMutationGuard(approved), Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.ExecuteApprovedRollback(context.Background(), proposal.Hash(), "expired-revalidation-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FromRevision != currentRevision || result.ToRevision != targetRevision {
+		t.Fatalf("mutation result = %#v", result)
+	}
+	if got := patchActionCount(client.Actions()); got != 1 {
+		t.Fatalf("patch actions = %d, want 1", got)
 	}
 }
 

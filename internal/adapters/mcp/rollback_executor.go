@@ -59,7 +59,7 @@ func (a *RollbackExecutor) ExecuteApprovedRollback(ctx context.Context, approved
 		}
 		waitCtx = reconcileCtx
 	}
-	return a.waitAndBuild(waitCtx, approved, key, mutation.StartedAt)
+	return a.waitAndBuild(waitCtx, approved, key, mutation.StartedAt, mutation.CompletedAt)
 }
 
 func (a *RollbackExecutor) executeMutation(ctx context.Context, input ExecuteRollbackInput, proposal domain.RollbackProposal) (ExecuteRollbackOutput, error) {
@@ -73,7 +73,7 @@ func (a *RollbackExecutor) executeMutation(ctx context.Context, input ExecuteRol
 	return mutation, nil
 }
 
-func (a *RollbackExecutor) waitAndBuild(ctx context.Context, approved domain.ApprovedRollback, key domain.IdempotencyKey, startedAt time.Time) (domain.RollbackExecution, error) {
+func (a *RollbackExecutor) waitAndBuild(ctx context.Context, approved domain.ApprovedRollback, key domain.IdempotencyKey, startedAt time.Time, mutationCompletedAt time.Time) (domain.RollbackExecution, error) {
 	proposal := approved.Proposal()
 	watchCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
@@ -82,7 +82,8 @@ func (a *RollbackExecutor) waitAndBuild(ctx context.Context, approved domain.App
 		return domain.RollbackExecution{}, fmt.Errorf("watch approved rollback: %w", ports.ErrRollbackOutcomeUnknown)
 	}
 	sum := deterministicExecutionID(key, proposal.Hash())
-	return domain.NewRollbackExecution(sum, proposal.IncidentID(), key, proposal.CurrentRevision(), proposal.TargetRevision(), domain.ExecutionSucceeded, startedAt, time.Now().UTC(), "")
+	completedAt := rollbackExecutionCompletedAt(startedAt, mutationCompletedAt, time.Now().UTC())
+	return domain.NewRollbackExecution(sum, proposal.IncidentID(), key, proposal.CurrentRevision(), proposal.TargetRevision(), domain.ExecutionSucceeded, startedAt, completedAt, "")
 }
 
 func (a *RollbackExecutor) inspect(ctx context.Context, target domain.DeploymentTarget) (domain.DeploymentEvidence, error) {
@@ -95,4 +96,15 @@ func (a *RollbackExecutor) inspect(ctx context.Context, target domain.Deployment
 
 func deterministicExecutionID(key domain.IdempotencyKey, hash domain.ProposalHash) domain.ExecutionID {
 	return domain.ExecutionID("execution-" + sha256Hex(string(key) + "\n" + string(hash))[:32])
+}
+
+func rollbackExecutionCompletedAt(startedAt, mutationCompletedAt, observedAt time.Time) time.Time {
+	completedAt := observedAt.UTC()
+	if completedAt.Before(startedAt) {
+		completedAt = startedAt
+	}
+	if !mutationCompletedAt.IsZero() && completedAt.Before(mutationCompletedAt) {
+		completedAt = mutationCompletedAt
+	}
+	return completedAt
 }

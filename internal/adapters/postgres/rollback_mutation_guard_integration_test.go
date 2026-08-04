@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestRollbackMutationGuardSerializesFirstUseAcrossInstances(t *testing.T) {
+func TestRollbackMutationGuardBlocksReplayUntilCompletion(t *testing.T) {
 	pool := isolatedRollbackGuardPool(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	proposal := seedTrustedRollback(t, pool, "incident-1", "key-1", now)
@@ -32,42 +31,29 @@ func TestRollbackMutationGuardSerializesFirstUseAcrossInstances(t *testing.T) {
 		}
 	}
 
-	start := make(chan struct{})
-	results := make(chan ports.RollbackMutationAttempt, len(guards))
-	errCh := make(chan error, len(guards))
-	var wait sync.WaitGroup
-	for _, guard := range guards {
-		wait.Add(1)
-		go func(guard *RollbackMutationGuard) {
-			defer wait.Done()
-			<-start
-			attempt, err := guard.Begin(context.Background(), "key-1", proposal.Hash(), now)
-			results <- attempt
-			errCh <- err
-		}(guard)
+	first, err := guards[0].Begin(context.Background(), "key-1", proposal.Hash(), now)
+	if err != nil {
+		t.Fatal(err)
 	}
-	close(start)
-	wait.Wait()
-	close(results)
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			t.Fatal(err)
-		}
+
+	secondStarted := make(chan struct{})
+	secondResult := make(chan ports.RollbackMutationAttempt, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		close(secondStarted)
+		attempt, beginErr := guards[1].Begin(context.Background(), "key-1", proposal.Hash(), now)
+		secondResult <- attempt
+		secondErr <- beginErr
+	}()
+	<-secondStarted
+	select {
+	case attempt := <-secondResult:
+		t.Fatalf("second Begin returned before completion with %#v", attempt.Mutation.Snapshot())
+	case err := <-secondErr:
+		t.Fatalf("second Begin errored before completion: %v", err)
+	case <-time.After(100 * time.Millisecond):
 	}
-	var want domain.RollbackMutationSnapshot
-	var attempts []ports.RollbackMutationAttempt
-	for attempt := range results {
-		attempts = append(attempts, attempt)
-		got := attempt.Mutation.Snapshot()
-		if want.Key == "" {
-			want = got
-			continue
-		}
-		if got != want {
-			t.Fatalf("concurrent mutation = %#v, want %#v", got, want)
-		}
-	}
+
 	var count int
 	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM rollback_mutations WHERE idempotency_key = 'key-1'`).Scan(&count); err != nil {
 		t.Fatal(err)
@@ -76,35 +62,16 @@ func TestRollbackMutationGuardSerializesFirstUseAcrossInstances(t *testing.T) {
 		t.Fatalf("rollback mutation rows = %d, want 1", count)
 	}
 
-	completionResults := make(chan domain.RollbackMutation, len(guards))
-	errCh = make(chan error, len(guards))
-	for index, guard := range guards {
-		wait.Add(1)
-		go func(index int, guard *RollbackMutationGuard) {
-			defer wait.Done()
-			completed, err := guard.Complete(context.Background(), attempts[index].Mutation, index == 1, now.Add(time.Duration(index+1)*time.Second))
-			completionResults <- completed
-			errCh <- err
-		}(index, guard)
+	completed, err := guards[0].Complete(context.Background(), first.Mutation, false, now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
 	}
-	wait.Wait()
-	close(completionResults)
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			t.Fatal(err)
-		}
+	if err := <-secondErr; err != nil {
+		t.Fatal(err)
 	}
-	var completed domain.RollbackMutationSnapshot
-	for result := range completionResults {
-		got := result.Snapshot()
-		if completed.Key == "" {
-			completed = got
-			continue
-		}
-		if got != completed {
-			t.Fatalf("concurrent completion = %#v, want %#v", got, completed)
-		}
+	replayed := <-secondResult
+	if replayed.Mutation.Snapshot() != completed.Snapshot() {
+		t.Fatalf("replayed mutation = %#v, want %#v", replayed.Mutation.Snapshot(), completed.Snapshot())
 	}
 	if _, err := pool.Exec(context.Background(), `
 		UPDATE idempotency_keys SET state = 'completed', result_id = 'application-execution', completed_at = $1 WHERE key = 'key-1';
@@ -112,15 +79,68 @@ func TestRollbackMutationGuardSerializesFirstUseAcrossInstances(t *testing.T) {
 	`, now.Add(3*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := guards[0].Begin(context.Background(), "key-1", proposal.Hash(), now.Add(4*time.Second))
+	replayed, err = guards[0].Begin(context.Background(), "key-1", proposal.Hash(), now.Add(4*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed.Mutation.Snapshot() != completed {
-		t.Fatalf("completed replay = %#v, want %#v", replayed.Mutation.Snapshot(), completed)
+	if replayed.Mutation.Snapshot() != completed.Snapshot() {
+		t.Fatalf("completed replay = %#v, want %#v", replayed.Mutation.Snapshot(), completed.Snapshot())
 	}
 	if _, err := guards[1].Begin(context.Background(), "key-1", "different-hash", now.Add(4*time.Second)); !errors.Is(err, domain.ErrIdempotencyConflict) {
 		t.Fatalf("completed conflicting replay error = %v", err)
+	}
+}
+
+func TestRollbackMutationGuardAllowsStalePendingReplay(t *testing.T) {
+	pool := isolatedRollbackGuardPool(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	proposal := seedTrustedRollback(t, pool, "incident-2", "key-2", now)
+	first, err := NewRollbackMutationGuard(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewRollbackMutationGuard(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := first.Begin(context.Background(), "key-2", proposal.Hash(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Release(context.Background(), attempt.Mutation); err != nil {
+		t.Fatal(err)
+	}
+
+	replayed, err := second.Begin(context.Background(), "key-2", proposal.Hash(), now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Mutation.Snapshot() != attempt.Mutation.Snapshot() {
+		t.Fatalf("stale pending replay = %#v, want %#v", replayed.Mutation.Snapshot(), attempt.Mutation.Snapshot())
+	}
+	if err := second.Release(context.Background(), replayed.Mutation); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRollbackMutationGuardAuthorizesFirstUseAtRecordStart(t *testing.T) {
+	pool := isolatedRollbackGuardPool(t)
+	recordStartedAt := time.Now().UTC().Truncate(time.Microsecond)
+	proposal := seedTrustedRollbackWithExpiry(t, pool, "incident-3", "key-3", recordStartedAt, recordStartedAt.Add(time.Second))
+	guard, err := NewRollbackMutationGuard(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	attempt, err := guard.Begin(context.Background(), "key-3", proposal.Hash(), recordStartedAt.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("Begin() error = %v", err)
+	}
+	if !attempt.Mutation.StartedAt().Equal(recordStartedAt) {
+		t.Fatalf("mutation started at = %s, want %s", attempt.Mutation.StartedAt(), recordStartedAt)
+	}
+	if err := guard.Release(context.Background(), attempt.Mutation); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -180,6 +200,11 @@ func isolatedRollbackGuardPool(t *testing.T) *pgxpool.Pool {
 
 func seedTrustedRollback(t *testing.T, pool *pgxpool.Pool, incidentID string, key domain.IdempotencyKey, now time.Time) domain.RollbackProposal {
 	t.Helper()
+	return seedTrustedRollbackWithExpiry(t, pool, incidentID, key, now, now.Add(5*time.Minute))
+}
+
+func seedTrustedRollbackWithExpiry(t *testing.T, pool *pgxpool.Pool, incidentID string, key domain.IdempotencyKey, now time.Time, expiresAt time.Time) domain.RollbackProposal {
+	t.Helper()
 	target, err := domain.NewDeploymentTarget("local", "demo", "demo-api", "demo-api")
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +213,7 @@ func seedTrustedRollback(t *testing.T, pool *pgxpool.Pool, incidentID string, ke
 	if err != nil {
 		t.Fatal(err)
 	}
-	proposal, err := domain.NewRollbackProposal(domain.ActionID("action-"+incidentID), domain.IncidentID(incidentID), decision.ID(), target, "revision-bad", "revision-stable", now.Add(5*time.Minute))
+	proposal, err := domain.NewRollbackProposal(domain.ActionID("action-"+incidentID), domain.IncidentID(incidentID), decision.ID(), target, "revision-bad", "revision-stable", expiresAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +221,7 @@ func seedTrustedRollback(t *testing.T, pool *pgxpool.Pool, incidentID string, ke
 	if err != nil {
 		t.Fatal(err)
 	}
-	approval, err := domain.NewApproval(domain.ApprovalID("approval-"+incidentID), actor, domain.ApprovalApproved, proposal.ActionID(), proposal.Hash(), now, now.Add(5*time.Minute), "")
+	approval, err := domain.NewApproval(domain.ApprovalID("approval-"+incidentID), actor, domain.ApprovalApproved, proposal.ActionID(), proposal.Hash(), now, expiresAt, "")
 	if err != nil {
 		t.Fatal(err)
 	}

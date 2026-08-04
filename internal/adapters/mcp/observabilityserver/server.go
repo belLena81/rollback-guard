@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	protocol "github.com/belLena81/rollback-guard/internal/adapters/mcp"
@@ -114,6 +115,10 @@ func evaluateRecovery(backend Backend) mcp.ToolHandlerFor[protocol.RecoveryInput
 	return func(ctx context.Context, _ *mcp.CallToolRequest, input protocol.RecoveryInput) (*mcp.CallToolResult, protocol.Response[protocol.RecoveryOutput], error) {
 		if !validWindow(input.WindowSeconds) || input.Threshold <= 0 || math.IsNaN(input.Threshold) || math.IsInf(input.Threshold, 0) || input.DesiredReplicas < 0 || input.ReadyReplicas < 0 || input.AvailableReplicas < 0 {
 			result, response := protocol.Failure[protocol.RecoveryOutput](&domain.ValidationError{Field: "recovery", Reason: "recovery bounds are invalid"})
+			return result, response, nil
+		}
+		if strings.TrimSpace(input.ExpectedRevision) == "" || strings.TrimSpace(input.ObservedRevision) == "" {
+			result, response := protocol.Failure[protocol.RecoveryOutput](&domain.ValidationError{Field: "recovery.revision", Reason: "expected and observed revisions are required"})
 			return result, response, nil
 		}
 		target, err := input.Target.Domain()

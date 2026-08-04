@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -15,21 +16,33 @@ import (
 )
 
 type RollbackMutationGuard struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	mu    sync.Mutex
+	locks map[domain.IdempotencyKey]*rollbackMutationLock
 }
 
 func NewRollbackMutationGuard(pool *pgxpool.Pool) (*RollbackMutationGuard, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("postgres pool is required")
 	}
-	return &RollbackMutationGuard{pool: pool}, nil
+	return &RollbackMutationGuard{pool: pool, locks: make(map[domain.IdempotencyKey]*rollbackMutationLock)}, nil
 }
 
 func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.IdempotencyKey, hash domain.ProposalHash, startedAt time.Time) (_ ports.RollbackMutationAttempt, resultErr error) {
 	if key == "" || hash == "" || startedAt.IsZero() {
 		return ports.RollbackMutationAttempt{}, &domain.ValidationError{Field: "rollback_mutation", Reason: "invalid key, hash, or start time"}
 	}
-	tx, err := g.pool.BeginTx(ctx, pgx.TxOptions{})
+	lock, err := g.acquireRollbackMutationLock(ctx, key)
+	if err != nil {
+		return ports.RollbackMutationAttempt{}, err
+	}
+	releaseOnReturn := true
+	defer func() {
+		if releaseOnReturn {
+			resultErr = errors.Join(resultErr, lock.release(context.Background()))
+		}
+	}()
+	tx, err := lock.conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return ports.RollbackMutationAttempt{}, fmt.Errorf("begin rollback mutation: %w", err)
 	}
@@ -39,9 +52,6 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 		}
 	}()
 
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
-		return ports.RollbackMutationAttempt{}, fmt.Errorf("lock rollback mutation key: %w", err)
-	}
 	existing, found, err := loadRollbackMutation(ctx, tx, key)
 	if err != nil {
 		return ports.RollbackMutationAttempt{}, err
@@ -103,7 +113,7 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 			decision,
 			approval,
 			domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: proposal.CurrentRevision()},
-			startedAt,
+			record.StartedAt(),
 		)
 	}
 	if err != nil {
@@ -127,15 +137,24 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 	if err := tx.Commit(ctx); err != nil {
 		return ports.RollbackMutationAttempt{}, fmt.Errorf("commit rollback mutation start: %w", err)
 	}
+	releaseOnReturn = false
+	g.retainRollbackMutationLock(key, lock)
 	return ports.RollbackMutationAttempt{Mutation: existing, Approved: approved}, nil
 }
 
 func (g *RollbackMutationGuard) Complete(ctx context.Context, pending domain.RollbackMutation, alreadyApplied bool, completedAt time.Time) (_ domain.RollbackMutation, resultErr error) {
+	lock, err := g.takeRollbackMutationLock(ctx, pending.Key())
+	if err != nil {
+		return domain.RollbackMutation{}, err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, lock.release(context.Background()))
+	}()
 	completed, err := pending.Complete(alreadyApplied, completedAt)
 	if err != nil {
 		return domain.RollbackMutation{}, err
 	}
-	tx, err := g.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := lock.conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return domain.RollbackMutation{}, fmt.Errorf("begin rollback mutation completion: %w", err)
 	}
@@ -170,6 +189,68 @@ func (g *RollbackMutationGuard) Complete(ctx context.Context, pending domain.Rol
 		return domain.RollbackMutation{}, fmt.Errorf("commit rollback mutation completion: %w", err)
 	}
 	return completed, nil
+}
+
+func (g *RollbackMutationGuard) Release(_ context.Context, pending domain.RollbackMutation) error {
+	lock := g.removeRollbackMutationLock(pending.Key())
+	if lock == nil {
+		return nil
+	}
+	return lock.release(context.Background())
+}
+
+type rollbackMutationLock struct {
+	key  domain.IdempotencyKey
+	conn *pgxpool.Conn
+}
+
+func (g *RollbackMutationGuard) acquireRollbackMutationLock(ctx context.Context, key domain.IdempotencyKey) (*rollbackMutationLock, error) {
+	conn, err := g.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire rollback mutation lock connection: %w", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended($1, 0))`, key); err != nil {
+		conn.Release()
+		return nil, fmt.Errorf("lock rollback mutation key: %w", err)
+	}
+	return &rollbackMutationLock{key: key, conn: conn}, nil
+}
+
+func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.IdempotencyKey, lock *rollbackMutationLock) {
+	g.mu.Lock()
+	previous := g.locks[key]
+	g.locks[key] = lock
+	g.mu.Unlock()
+	if previous != nil {
+		_ = previous.release(context.Background())
+	}
+}
+
+func (g *RollbackMutationGuard) takeRollbackMutationLock(ctx context.Context, key domain.IdempotencyKey) (*rollbackMutationLock, error) {
+	lock := g.removeRollbackMutationLock(key)
+	if lock != nil {
+		return lock, nil
+	}
+	return g.acquireRollbackMutationLock(ctx, key)
+}
+
+func (g *RollbackMutationGuard) removeRollbackMutationLock(key domain.IdempotencyKey) *rollbackMutationLock {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	lock := g.locks[key]
+	delete(g.locks, key)
+	return lock
+}
+
+func (l *rollbackMutationLock) release(ctx context.Context) error {
+	if l == nil || l.conn == nil {
+		return nil
+	}
+	defer l.conn.Release()
+	if _, err := l.conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, l.key); err != nil {
+		return fmt.Errorf("unlock rollback mutation key: %w", err)
+	}
+	return nil
 }
 
 func loadRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.IdempotencyKey) (domain.RollbackMutation, bool, error) {

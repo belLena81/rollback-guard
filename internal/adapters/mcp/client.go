@@ -139,6 +139,8 @@ func errorFromTool(toolError ToolError) error {
 	switch toolError.Code {
 	case CodeInvalidArgument:
 		return &domain.ValidationError{Field: "mcp_tool_input", Reason: toolError.Message}
+	case CodeTargetForbidden:
+		return &domain.ValidationError{Field: "mcp_target", Reason: toolError.Message}
 	case CodeNotFound:
 		return &domain.NotFoundError{Resource: "MCP resource", ID: "requested"}
 	case CodeRevisionDrift, CodeApprovalMismatch:
