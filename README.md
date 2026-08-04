@@ -19,11 +19,11 @@ deterministic recovery verification
 
 This rule is the main project invariant. The AI layer may diagnose and recommend; it may not approve, bypass policy, or directly call mutation tools.
 
-## Planned Services
+## Services
 
-- `cmd/orchestrator`: public REST API, incident lifecycle, approvals, audit timeline.
+- `cmd/orchestrator`: public REST API, incident lifecycle, approvals, audit timeline, and MCP client composition.
 - `cmd/investigator`: A2A agent that gathers evidence and returns a structured diagnosis.
-- `cmd/kubernetes-mcp`: Kubernetes MCP tools for read-only rollout inspection plus scoped approved rollback execution.
+- `cmd/kubernetes-mcp`: separately deployed read-only and rollback MCP tool catalogs backed by `client-go`.
 - `cmd/observability-mcp`: metrics and recovery-evaluation MCP tools.
 - `cmd/demo-api`: intentionally breakable Kubernetes workload used for the local demo.
 
@@ -60,7 +60,7 @@ docs/
 .agents/
 ```
 
-The current repository is only a starter Go module. Build implementation phase by phase, and do not start a later phase until the current phase exit criteria in `DEVELOPMENT_PLAN.md` pass.
+Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus while preserving the same application ports. See [docs/phase3-mcp.md](./docs/phase3-mcp.md) for runtime configuration, RBAC, and verification.
 
 ## Canonical Choices
 

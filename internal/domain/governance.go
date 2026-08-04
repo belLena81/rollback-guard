@@ -229,6 +229,7 @@ func (a Approval) Expired(now time.Time) bool {
 
 type ApprovedRollback struct {
 	proposal RollbackProposal
+	decision PolicyDecision
 	approval Approval
 }
 
@@ -237,6 +238,9 @@ func (a ApprovedRollback) Proposal() RollbackProposal {
 }
 func (a ApprovedRollback) Approval() Approval {
 	return a.approval
+}
+func (a ApprovedRollback) PolicyDecision() PolicyDecision {
+	return a.decision
 }
 
 func AuthorizeRollback(proposal RollbackProposal, decision PolicyDecision, approval Approval, fresh DeploymentEvidence, now time.Time) (ApprovedRollback, error) {
@@ -262,7 +266,7 @@ func AuthorizeRollback(proposal RollbackProposal, decision PolicyDecision, appro
 	if err != nil || proposal.Hash() != hash {
 		return ApprovedRollback{}, &ApprovalMismatchError{Reason: "proposal hash is invalid"}
 	}
-	return ApprovedRollback{proposal: proposal, approval: approval}, nil
+	return ApprovedRollback{proposal: proposal, decision: decision, approval: approval}, nil
 }
 
 func ResumeApprovedRollback(proposal RollbackProposal, decision PolicyDecision, approval Approval, record IdempotencyRecord, key IdempotencyKey) (ApprovedRollback, error) {
@@ -286,7 +290,7 @@ func ResumeApprovedRollback(proposal RollbackProposal, decision PolicyDecision, 
 	if err != nil || proposal.Hash() != hash {
 		return ApprovedRollback{}, &ApprovalMismatchError{Reason: "proposal hash is invalid"}
 	}
-	return ApprovedRollback{proposal: proposal, approval: approval}, nil
+	return ApprovedRollback{proposal: proposal, decision: decision, approval: approval}, nil
 }
 
 type ApprovalAuthorizer struct{}

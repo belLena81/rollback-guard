@@ -23,18 +23,33 @@ type Config struct {
 	RuleMinimumConfidence float64
 	RuleCorrelationWindow time.Duration
 	AllowedTargets        []domain.DeploymentTarget
-	FakeInfrastructure    FakeInfrastructureConfig
+	KubernetesReadMCPURL  string
+	KubernetesWriteMCPURL string
+	ObservabilityMCPURL   string
+	MCPConnectTimeout     time.Duration
+	MCPCallTimeout        time.Duration
+	MCPWatchTimeout       time.Duration
+	MetricsWindow         time.Duration
 }
 
-type FakeInfrastructureConfig struct {
-	CurrentRevision        domain.Revision
-	PreviousStableRevision domain.Revision
-	DesiredReplicas        int
-	ReadyReplicas          int
-	AvailableReplicas      int
-	Healthy                bool
-	MetricValue            float64
-	RecoveryMetricValue    float64
+type KubernetesMCPConfig struct {
+	HTTPAddr       string
+	Mode           string
+	ClusterID      string
+	Kubeconfig     string
+	AllowedTargets []domain.DeploymentTarget
+	RequestTimeout time.Duration
+	SessionTimeout time.Duration
+}
+
+type ObservabilityMCPConfig struct {
+	HTTPAddr       string
+	PrometheusURL  string
+	AllowedTargets []domain.DeploymentTarget
+	RequestTimeout time.Duration
+	SessionTimeout time.Duration
+	MetricsWindow  time.Duration
+	MaxSampleAge   time.Duration
 }
 
 func Load() (Config, error) {
@@ -70,6 +85,22 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	mcpConnectTimeout, err := durationEnv("MCP_CONNECT_TIMEOUT", 5*time.Second)
+	if err != nil || mcpConnectTimeout > 30*time.Second {
+		return Config{}, fmt.Errorf("MCP_CONNECT_TIMEOUT must be positive and no greater than 30s")
+	}
+	mcpCallTimeout, err := durationEnv("MCP_CALL_TIMEOUT", 10*time.Second)
+	if err != nil || mcpCallTimeout > 30*time.Second {
+		return Config{}, fmt.Errorf("MCP_CALL_TIMEOUT must be positive and no greater than 30s")
+	}
+	mcpWatchTimeout, err := durationEnv("MCP_WATCH_TIMEOUT", 90*time.Second)
+	if err != nil || mcpWatchTimeout > 2*time.Minute {
+		return Config{}, fmt.Errorf("MCP_WATCH_TIMEOUT must be positive and no greater than 2m")
+	}
+	metricsWindow, err := durationEnv("METRICS_WINDOW", 5*time.Minute)
+	if err != nil || metricsWindow < 30*time.Second || metricsWindow > time.Hour {
+		return Config{}, fmt.Errorf("METRICS_WINDOW must be between 30s and 1h")
+	}
 	cfg := Config{
 		HTTPAddr:              stringEnv("HTTP_ADDR", ":8080"),
 		DatabaseURL:           os.Getenv("DATABASE_URL"),
@@ -83,21 +114,72 @@ func Load() (Config, error) {
 		RuleMinimumConfidence: confidence,
 		RuleCorrelationWindow: ruleWindow,
 		AllowedTargets:        targets,
-		FakeInfrastructure: FakeInfrastructureConfig{
-			CurrentRevision:        domain.Revision(stringEnv("FAKE_CURRENT_REVISION", "revision-2")),
-			PreviousStableRevision: domain.Revision(stringEnv("FAKE_PREVIOUS_STABLE_REVISION", "revision-1")),
-			DesiredReplicas:        mustInt("FAKE_DESIRED_REPLICAS", 3),
-			ReadyReplicas:          mustInt("FAKE_READY_REPLICAS", 1),
-			AvailableReplicas:      mustInt("FAKE_AVAILABLE_REPLICAS", 1),
-			Healthy:                mustBool("FAKE_HEALTHY", false),
-			MetricValue:            mustFloat("FAKE_METRIC_VALUE", 0.35),
-			RecoveryMetricValue:    mustFloat("FAKE_RECOVERY_METRIC_VALUE", 0.02),
-		},
+		KubernetesReadMCPURL:  stringEnv("KUBERNETES_READ_MCP_URL", "http://127.0.0.1:8091/mcp"),
+		KubernetesWriteMCPURL: stringEnv("KUBERNETES_ROLLBACK_MCP_URL", "http://127.0.0.1:8092/mcp"),
+		ObservabilityMCPURL:   stringEnv("OBSERVABILITY_MCP_URL", "http://127.0.0.1:8093/mcp"),
+		MCPConnectTimeout:     mcpConnectTimeout,
+		MCPCallTimeout:        mcpCallTimeout,
+		MCPWatchTimeout:       mcpWatchTimeout,
+		MetricsWindow:         metricsWindow,
 	}
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
 	return cfg, nil
+}
+
+func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
+	targets, err := targetsEnv("ALLOWED_TARGETS", "local/demo/demo-api/demo-api")
+	if err != nil {
+		return KubernetesMCPConfig{}, err
+	}
+	requestTimeout, err := durationEnv("MCP_REQUEST_TIMEOUT", 2*time.Minute)
+	if err != nil || requestTimeout > 2*time.Minute {
+		return KubernetesMCPConfig{}, fmt.Errorf("MCP_REQUEST_TIMEOUT must be positive and no greater than 2m")
+	}
+	sessionTimeout, err := durationEnv("MCP_SESSION_TIMEOUT", 5*time.Minute)
+	if err != nil {
+		return KubernetesMCPConfig{}, err
+	}
+	mode := stringEnv("KUBERNETES_MCP_MODE", "readonly")
+	if mode != "readonly" && mode != "rollback" {
+		return KubernetesMCPConfig{}, fmt.Errorf("KUBERNETES_MCP_MODE must be readonly or rollback")
+	}
+	clusterID := stringEnv("CLUSTER_ID", "local")
+	for _, target := range targets {
+		if target.Cluster() != clusterID {
+			return KubernetesMCPConfig{}, fmt.Errorf("ALLOWED_TARGETS must use CLUSTER_ID %q", clusterID)
+		}
+	}
+	defaultAddr := ":8091"
+	if mode == "rollback" {
+		defaultAddr = ":8092"
+	}
+	return KubernetesMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", defaultAddr), Mode: mode, ClusterID: clusterID, Kubeconfig: strings.TrimSpace(os.Getenv("KUBECONFIG")), AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout}, nil
+}
+
+func LoadObservabilityMCP() (ObservabilityMCPConfig, error) {
+	targets, err := targetsEnv("ALLOWED_TARGETS", "local/demo/demo-api/demo-api")
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
+	requestTimeout, err := durationEnv("PROMETHEUS_TIMEOUT", 5*time.Second)
+	if err != nil || requestTimeout > 30*time.Second {
+		return ObservabilityMCPConfig{}, fmt.Errorf("PROMETHEUS_TIMEOUT must be positive and no greater than 30s")
+	}
+	sessionTimeout, err := durationEnv("MCP_SESSION_TIMEOUT", 5*time.Minute)
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
+	window, err := durationEnv("METRICS_WINDOW", 5*time.Minute)
+	if err != nil || window < 30*time.Second || window > time.Hour {
+		return ObservabilityMCPConfig{}, fmt.Errorf("METRICS_WINDOW must be between 30s and 1h")
+	}
+	maxAge, err := durationEnv("METRICS_MAX_SAMPLE_AGE", time.Minute)
+	if err != nil || maxAge > 15*time.Minute {
+		return ObservabilityMCPConfig{}, fmt.Errorf("METRICS_MAX_SAMPLE_AGE must be positive and no greater than 15m")
+	}
+	return ObservabilityMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", ":8093"), PrometheusURL: stringEnv("PROMETHEUS_URL", "http://127.0.0.1:9090"), AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout, MetricsWindow: window, MaxSampleAge: maxAge}, nil
 }
 
 func stringEnv(name string, fallback string) string {
@@ -159,32 +241,4 @@ func targetsEnv(name string, fallback string) ([]domain.DeploymentTarget, error)
 		targets = append(targets, target)
 	}
 	return targets, nil
-}
-
-func mustInt(name string, fallback int) int {
-	value, err := intEnv(name, fallback)
-	if err != nil {
-		return fallback
-	}
-	return value
-}
-
-func mustFloat(name string, fallback float64) float64 {
-	value, err := floatEnv(name, fallback)
-	if err != nil {
-		return fallback
-	}
-	return value
-}
-
-func mustBool(name string, fallback bool) bool {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
 }

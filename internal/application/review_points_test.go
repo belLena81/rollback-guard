@@ -27,6 +27,10 @@ func TestResumedExecutionRevalidatesApprovalBeforeShortcut(t *testing.T) {
 			Target:                 proposal.Target(),
 			CurrentRevision:        proposal.TargetRevision(),
 			PreviousStableRevision: proposal.CurrentRevision(),
+			DesiredReplicas:        1,
+			ReadyReplicas:          1,
+			AvailableReplicas:      1,
+			Healthy:                true,
 			RolloutAt:              now.Add(-time.Minute),
 		},
 	}
@@ -124,6 +128,45 @@ func TestExecutorFailureReasonIsRedactedBeforePersistence(t *testing.T) {
 	}
 	if detail.Reason != executionFailureAuditReason {
 		t.Fatalf("failure event reason = %q, want %q", detail.Reason, executionFailureAuditReason)
+	}
+}
+
+func TestUnknownRollbackOutcomeLeavesDurableAttemptPending(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 4, 14, 0, 0, 0, time.UTC)
+	uow := memory.NewUnitOfWork()
+	incidentID, proposal := seedApprovedRollbackState(t, uow, now)
+	systemActor := mustActor(t, "guardian", domain.ActorSystem)
+	inspector := &fake.Infrastructure{Deployment: domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: proposal.CurrentRevision(), PreviousStableRevision: proposal.TargetRevision(), RolloutAt: now.Add(-time.Minute)}}
+	svc := &ExecutionService{workflow: &workflow{uow: uow, inspector: inspector, executor: &failingRollbackExecutor{err: ports.ErrRollbackOutcomeUnknown}, approvalPolicy: domain.ApprovalAuthorizer{}, clock: testkit.NewClock(now), ids: &testkit.IDGenerator{}, config: WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Minute, SystemActor: systemActor}, systemActor: systemActor}}
+
+	_, err := svc.Execute(context.Background(), incidentID, "unknown-outcome")
+	if !errors.Is(err, ports.ErrRollbackOutcomeUnknown) {
+		t.Fatalf("Execute() error = %v, want unknown outcome", err)
+	}
+	incident, err := loadIncident(t, uow, incidentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incident.Status() != domain.StatusExecuting {
+		t.Fatalf("incident status = %s, want executing", incident.Status())
+	}
+	if _, err := loadExecution(t, uow, incidentID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("execution lookup error = %v, want not found", err)
+	}
+	err = uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+		record, getErr := repositories.Idempotency().Get("unknown-outcome")
+		if getErr != nil {
+			return getErr
+		}
+		if record.State() != domain.IdempotencyPending {
+			return errors.New("idempotency attempt is not pending")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

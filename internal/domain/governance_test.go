@@ -185,8 +185,8 @@ func TestResumeApprovedRollbackRequiresMatchingPendingRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if approved.Proposal().Hash() != proposal.Hash() || approved.Approval().ID() != approval.ID() {
-		t.Fatal("resumed rollback does not preserve proposal and approval")
+	if approved.Proposal().Hash() != proposal.Hash() || approved.Approval().ID() != approval.ID() || approved.PolicyDecision().ID() != decision.ID() {
+		t.Fatal("resumed rollback does not preserve proposal, policy decision, and approval")
 	}
 
 	tests := []struct {

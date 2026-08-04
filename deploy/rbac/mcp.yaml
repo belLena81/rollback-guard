@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rollback-guardian-kubernetes-readonly
+  namespace: rollback-demo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rollback-guardian-kubernetes-rollback
+  namespace: rollback-demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rollback-guardian-kubernetes-readonly
+  namespace: rollback-demo
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["demo-api"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rollback-guardian-kubernetes-rollback
+  namespace: rollback-demo
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["demo-api"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rollback-guardian-kubernetes-readonly
+  namespace: rollback-demo
+subjects:
+  - kind: ServiceAccount
+    name: rollback-guardian-kubernetes-readonly
+    namespace: rollback-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rollback-guardian-kubernetes-readonly
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rollback-guardian-kubernetes-rollback
+  namespace: rollback-demo
+subjects:
+  - kind: ServiceAccount
+    name: rollback-guardian-kubernetes-rollback
+    namespace: rollback-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rollback-guardian-kubernetes-rollback

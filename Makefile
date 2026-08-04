@@ -1,4 +1,4 @@
-.PHONY: fmt-check test test-race vet lint
+.PHONY: fmt-check test test-race vet lint contract-test phase3-integration
 
 fmt-check:
 	@test -z "$$(gofmt -l $$(find . -name '*.go'))"
@@ -14,3 +14,9 @@ vet:
 
 lint: fmt-check vet
 	golangci-lint run ./...
+
+contract-test:
+	go test ./test/contract/...
+
+phase3-integration:
+	go test -tags=integration ./test/integration/phase3/...

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,8 +12,8 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/adapters/diagnosis"
-	"github.com/belLena81/rollback-guard/internal/adapters/fake"
 	"github.com/belLena81/rollback-guard/internal/adapters/httpapi"
+	mcpadapter "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/adapters/postgres"
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -71,36 +72,54 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	target := cfg.AllowedTargets[0]
-	infra := &fake.Infrastructure{
-		Deployment: domain.DeploymentEvidence{
-			Target:                 target,
-			CurrentRevision:        cfg.FakeInfrastructure.CurrentRevision,
-			PreviousStableRevision: cfg.FakeInfrastructure.PreviousStableRevision,
-			DesiredReplicas:        cfg.FakeInfrastructure.DesiredReplicas,
-			ReadyReplicas:          cfg.FakeInfrastructure.ReadyReplicas,
-			AvailableReplicas:      cfg.FakeInfrastructure.AvailableReplicas,
-			Healthy:                cfg.FakeInfrastructure.Healthy,
-			RolloutAt:              clock.Now().Add(-time.Minute),
-		},
-		Metric: domain.MetricEvidence{
-			Name:       "http_error_rate",
-			Value:      cfg.FakeInfrastructure.MetricValue,
-			Threshold:  0.10,
-			Unit:       "ratio",
-			ObservedAt: clock.Now(),
-		},
-		Now: clock.Now,
+	connectCtx, cancelConnect := context.WithTimeout(context.Background(), cfg.MCPConnectTimeout)
+	defer cancelConnect()
+	mcpHTTPClient := &http.Client{Timeout: cfg.MCPWatchTimeout + cfg.MCPCallTimeout}
+	readClient, err := connectMCP(connectCtx, cfg.KubernetesReadMCPURL, mcpHTTPClient, []string{mcpadapter.ToolGetDeployment, mcpadapter.ToolGetReplicaSets, mcpadapter.ToolListPods, mcpadapter.ToolGetPodEvents, mcpadapter.ToolGetRolloutStatus, mcpadapter.ToolWatchRollout})
+	if err != nil {
+		return fmt.Errorf("connect readonly kubernetes MCP: %w", err)
 	}
-	infra.AfterExecute = func() {
-		infra.Metric.Value = cfg.FakeInfrastructure.RecoveryMetricValue
+	defer closeMCP(readClient, "readonly kubernetes", logger)
+	writeClient, err := connectMCP(connectCtx, cfg.KubernetesWriteMCPURL, mcpHTTPClient, []string{mcpadapter.ToolPrepareRollback, mcpadapter.ToolExecuteApprovedRollback})
+	if err != nil {
+		return fmt.Errorf("connect rollback kubernetes MCP: %w", err)
+	}
+	defer closeMCP(writeClient, "rollback kubernetes", logger)
+	observabilityClient, err := connectMCP(connectCtx, cfg.ObservabilityMCPURL, mcpHTTPClient, []string{mcpadapter.ToolGetHTTPErrorRate, mcpadapter.ToolCompareErrorRateWindows, mcpadapter.ToolGetRequestLatency, mcpadapter.ToolGetPodCPUUsage, mcpadapter.ToolGetPodMemoryUsage, mcpadapter.ToolEvaluateRecovery})
+	if err != nil {
+		return fmt.Errorf("connect observability MCP: %w", err)
+	}
+	defer closeMCP(observabilityClient, "observability", logger)
+	boundedRead, err := mcpadapter.BoundCalls(readClient, cfg.MCPCallTimeout)
+	if err != nil {
+		return err
+	}
+	boundedWrite, err := mcpadapter.BoundCalls(writeClient, cfg.MCPCallTimeout)
+	if err != nil {
+		return err
+	}
+	boundedObservability, err := mcpadapter.BoundCalls(observabilityClient, cfg.MCPCallTimeout)
+	if err != nil {
+		return err
+	}
+	inspector, err := mcpadapter.NewDeploymentInspector(boundedRead)
+	if err != nil {
+		return err
+	}
+	metrics, err := mcpadapter.NewMetricsAdapter(boundedObservability, cfg.MetricsWindow)
+	if err != nil {
+		return err
+	}
+	executor, err := mcpadapter.NewRollbackExecutor(boundedWrite, boundedRead, cfg.MCPWatchTimeout)
+	if err != nil {
+		return err
 	}
 	services, err := application.NewServices(application.Dependencies{
 		UnitOfWork:     uow,
-		Inspector:      infra,
-		Metrics:        infra,
+		Inspector:      inspector,
+		Metrics:        metrics,
 		Diagnoser:      diagnoser,
-		Executor:       infra,
+		Executor:       executor,
 		RollbackPolicy: policy,
 		ApprovalPolicy: domain.ApprovalAuthorizer{},
 		Clock:          clock,
@@ -123,8 +142,18 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           api.Routes(func(ctx context.Context) error { return pool.Ping(ctx) }, cfg.DBPingTimeout, auth),
+		Addr: cfg.HTTPAddr,
+		Handler: api.Routes(func(ctx context.Context) error {
+			if err := pool.Ping(ctx); err != nil {
+				return err
+			}
+			for _, client := range []*mcpadapter.Client{readClient, writeClient, observabilityClient} {
+				if err := client.Ping(ctx); err != nil {
+					return err
+				}
+			}
+			return nil
+		}, cfg.DBPingTimeout, auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -144,5 +173,22 @@ func run(logger *slog.Logger) error {
 			return nil
 		}
 		return err
+	}
+}
+
+func connectMCP(ctx context.Context, endpoint string, httpClient *http.Client, tools []string) (*mcpadapter.Client, error) {
+	client, err := mcpadapter.Connect(ctx, endpoint, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	if err := client.RequireTools(ctx, tools); err != nil {
+		return nil, errors.Join(err, client.Close())
+	}
+	return client, nil
+}
+
+func closeMCP(client *mcpadapter.Client, name string, logger *slog.Logger) {
+	if err := client.Close(); err != nil {
+		logger.Warn("close MCP client", "server", name, "error", err)
 	}
 }

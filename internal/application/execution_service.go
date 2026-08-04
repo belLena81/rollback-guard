@@ -174,7 +174,7 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loaded loadedExecution, key domain.IdempotencyKey) (executionPreparation, error) {
 	c := s.workflow
 	startedAt := loaded.record.StartedAt()
-	_, err := domain.ResumeApprovedRollback(loaded.proposal, loaded.decision, loaded.approval, loaded.record, key)
+	resumed, err := domain.ResumeApprovedRollback(loaded.proposal, loaded.decision, loaded.approval, loaded.record, key)
 	if err != nil {
 		return s.completePendingRevalidationFailure(ctx, loaded, startedAt, fmt.Errorf("resume approved rollback: %w", err)), nil
 	}
@@ -184,6 +184,9 @@ func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loade
 	}
 	authorizationTime := loaded.record.StartedAt()
 	if freshDeployment.Target.Equal(loaded.proposal.Target()) && freshDeployment.CurrentRevision == loaded.proposal.TargetRevision() {
+		if !deploymentRecovered(freshDeployment) {
+			return executionPreparation{approved: resumed, record: loaded.record, startedAt: startedAt}, nil
+		}
 		if _, err := c.approvalPolicy.Authorize(
 			loaded.proposal,
 			loaded.decision,
@@ -217,6 +220,12 @@ func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loade
 	return executionPreparation{approved: approvedRollback, record: loaded.record, startedAt: startedAt}, nil
 }
 
+func deploymentRecovered(deployment domain.DeploymentEvidence) bool {
+	return deployment.Healthy &&
+		deployment.DesiredReplicas == deployment.ReadyReplicas &&
+		deployment.DesiredReplicas == deployment.AvailableReplicas
+}
+
 func (s *ExecutionService) completePendingRevalidationFailure(ctx context.Context, loaded loadedExecution, startedAt time.Time, cause error) executionPreparation {
 	c := s.workflow
 	execution, createErr := s.newFailedExecution(loaded.proposal, loaded.record, startedAt, cause)
@@ -236,6 +245,9 @@ func (s *ExecutionService) completePendingRevalidationFailure(ctx context.Contex
 func (s *ExecutionService) invokeExecutor(ctx context.Context, approved domain.ApprovedRollback, proposal domain.RollbackProposal, record domain.IdempotencyRecord, startedAt time.Time) (domain.RollbackExecution, error) {
 	c := s.workflow
 	execution, executeErr := c.executor.ExecuteApprovedRollback(ctx, approved, record.Key())
+	if errors.Is(executeErr, ports.ErrRollbackOutcomeUnknown) {
+		return domain.RollbackExecution{}, fmt.Errorf("execute approved rollback: %w", executeErr)
+	}
 	if executeErr == nil {
 		executeErr = validateExecutionResult(execution, proposal, record.Key())
 	}

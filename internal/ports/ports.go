@@ -2,10 +2,13 @@ package ports
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
 )
+
+var ErrRollbackOutcomeUnknown = errors.New("rollback outcome is unknown")
 
 type DeploymentInspector interface {
 	InspectDeployment(context.Context, domain.DeploymentTarget) (domain.DeploymentEvidence, error)
