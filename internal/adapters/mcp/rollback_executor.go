@@ -40,17 +40,19 @@ func (a *RollbackExecutor) ExecuteApprovedRollback(ctx context.Context, approved
 	if prepared.ProposalHash != string(proposal.Hash()) || prepared.TargetRevision != string(proposal.TargetRevision()) {
 		return domain.RollbackExecution{}, fmt.Errorf("rollback MCP preparation mismatch")
 	}
-	input := ExecuteRollbackInput{Proposal: prepare.Proposal, PolicyDecision: PolicyDecisionFromDomain(approved.PolicyDecision()), Approval: ApprovalFromDomain(approved.Approval()), IdempotencyKey: string(key)}
+	input := ExecuteRollbackInput{ProposalHash: string(proposal.Hash()), IdempotencyKey: string(key)}
 	mutation, err := callTool[ExecuteRollbackInput, ExecuteRollbackOutput](ctx, a.rollback, ToolExecuteApprovedRollback, input)
 	if err != nil {
-		if !ambiguousToolError(err) && !errors.Is(err, context.DeadlineExceeded) {
+		if !ambiguousToolError(err) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 			return domain.RollbackExecution{}, err
 		}
-		reconciled, reconcileErr := a.inspect(ctx, proposal.Target())
+		reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.timeout)
+		defer cancel()
+		reconciled, reconcileErr := a.inspect(reconcileCtx, proposal.Target())
 		if reconcileErr != nil || reconciled.CurrentRevision != proposal.TargetRevision() {
 			return domain.RollbackExecution{}, fmt.Errorf("execute rollback outcome: %w", ports.ErrRollbackOutcomeUnknown)
 		}
-		return a.waitAndBuild(ctx, approved, key, time.Now().UTC())
+		return a.waitAndBuild(reconcileCtx, approved, key, time.Now().UTC())
 	}
 	if mutation.FromRevision != string(proposal.CurrentRevision()) || mutation.ToRevision != string(proposal.TargetRevision()) || mutation.ExecutionID == "" {
 		return domain.RollbackExecution{}, fmt.Errorf("rollback MCP returned inconsistent mutation result")

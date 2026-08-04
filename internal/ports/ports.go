@@ -33,6 +33,14 @@ type RollbackExecutor interface {
 	// repeating the mutation when called again with the same idempotency key.
 	ExecuteApprovedRollback(context.Context, domain.ApprovedRollback, domain.IdempotencyKey) (domain.RollbackExecution, error)
 }
+type RollbackMutationAttempt struct {
+	Mutation domain.RollbackMutation
+	Approved domain.ApprovedRollback
+}
+type RollbackMutationGuard interface {
+	Begin(context.Context, domain.IdempotencyKey, domain.ProposalHash, time.Time) (RollbackMutationAttempt, error)
+	Complete(context.Context, domain.RollbackMutation, bool, time.Time) (domain.RollbackMutation, error)
+}
 type RollbackPolicy interface {
 	Evaluate(domain.EligibilityCandidate) (domain.PolicyDecision, error)
 }

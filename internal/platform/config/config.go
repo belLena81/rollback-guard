@@ -37,6 +37,9 @@ type KubernetesMCPConfig struct {
 	Mode           string
 	ClusterID      string
 	Kubeconfig     string
+	DatabaseURL    string
+	DBMaxConns     int32
+	DBPingTimeout  time.Duration
 	AllowedTargets []domain.DeploymentTarget
 	RequestTimeout time.Duration
 	SessionTimeout time.Duration
@@ -152,10 +155,26 @@ func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
 		}
 	}
 	defaultAddr := ":8091"
+	databaseURL := ""
+	var dbMaxConns int32
+	var dbPingTimeout time.Duration
 	if mode == "rollback" {
 		defaultAddr = ":8092"
+		databaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+		if databaseURL == "" {
+			return KubernetesMCPConfig{}, fmt.Errorf("DATABASE_URL is required in rollback mode")
+		}
+		maxConns, maxConnsErr := intEnv("DB_MAX_CONNS", 4)
+		if maxConnsErr != nil {
+			return KubernetesMCPConfig{}, maxConnsErr
+		}
+		dbMaxConns = int32(maxConns)
+		dbPingTimeout, err = durationEnv("DB_PING_TIMEOUT", 2*time.Second)
+		if err != nil {
+			return KubernetesMCPConfig{}, err
+		}
 	}
-	return KubernetesMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", defaultAddr), Mode: mode, ClusterID: clusterID, Kubeconfig: strings.TrimSpace(os.Getenv("KUBECONFIG")), AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout}, nil
+	return KubernetesMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", defaultAddr), Mode: mode, ClusterID: clusterID, Kubeconfig: strings.TrimSpace(os.Getenv("KUBECONFIG")), DatabaseURL: databaseURL, DBMaxConns: dbMaxConns, DBPingTimeout: dbPingTimeout, AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout}, nil
 }
 
 func LoadObservabilityMCP() (ObservabilityMCPConfig, error) {

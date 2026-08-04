@@ -181,34 +181,9 @@ type PrepareRollbackOutput struct {
 	TargetRevision string `json:"targetRevision"`
 }
 
-type Rule struct {
-	Name   string `json:"name"`
-	Passed bool   `json:"passed"`
-}
-
-type PolicyDecision struct {
-	ID         string    `json:"id"`
-	IncidentID string    `json:"incidentId"`
-	Rules      []Rule    `json:"rules"`
-	DecidedAt  time.Time `json:"decidedAt"`
-}
-
-type Approval struct {
-	ID           string    `json:"id"`
-	ActorID      string    `json:"actorId"`
-	ActorKind    string    `json:"actorKind"`
-	Decision     string    `json:"decision"`
-	ActionID     string    `json:"actionId"`
-	ProposalHash string    `json:"proposalHash"`
-	DecidedAt    time.Time `json:"decidedAt"`
-	ExpiresAt    time.Time `json:"expiresAt"`
-}
-
 type ExecuteRollbackInput struct {
-	Proposal       Proposal       `json:"proposal"`
-	PolicyDecision PolicyDecision `json:"policyDecision"`
-	Approval       Approval       `json:"approval"`
-	IdempotencyKey string         `json:"idempotencyKey"`
+	ProposalHash   string `json:"proposalHash"`
+	IdempotencyKey string `json:"idempotencyKey"`
 }
 
 type ExecuteRollbackOutput struct {

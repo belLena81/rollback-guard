@@ -16,6 +16,8 @@ rollback-guardian.io/stable: "true"
 
 Revisions are deterministic SHA-256 digests of normalized Pod templates, rather than mutable image tags or ReplicaSet names. A rollback patch replaces only `spec.template` and includes the observed Deployment `resourceVersion` to reject concurrent rollout drift.
 
+The mutating tool accepts only a proposal hash and idempotency key. Before any Kubernetes access, the rollback MCP loads the matching pending execution, canonical proposal, allowed policy decision, and approved human approval from PostgreSQL. Its separate `rollback_mutations` ledger preserves the key-to-proposal binding and exact mutation result across restarts and replicas. The orchestrator remains responsible for completing its own execution/idempotency record and audit transition.
+
 ## Configuration
 
 The orchestrator requires `DATABASE_URL` and accepts:
@@ -30,9 +32,11 @@ The orchestrator requires `DATABASE_URL` and accepts:
 | `MCP_WATCH_TIMEOUT` | `90s` |
 | `METRICS_WINDOW` | `5m` |
 
-Both Kubernetes processes use `ALLOWED_TARGETS` in `cluster/namespace/deployment/service` form, `CLUSTER_ID`, optional `KUBECONFIG`, `MCP_REQUEST_TIMEOUT`, and `MCP_SESSION_TIMEOUT`. The observability process uses `PROMETHEUS_URL`, `PROMETHEUS_TIMEOUT`, `METRICS_MAX_SAMPLE_AGE`, the same target allow-list, and metrics window.
+Both Kubernetes processes use `ALLOWED_TARGETS` in `cluster/namespace/deployment/service` form, `CLUSTER_ID`, optional `KUBECONFIG`, `MCP_REQUEST_TIMEOUT`, and `MCP_SESSION_TIMEOUT`. Rollback mode additionally requires `DATABASE_URL` and accepts `DB_MAX_CONNS` (default `4`) and `DB_PING_TIMEOUT` (default `2s`); readonly mode does not connect to PostgreSQL. The observability process uses `PROMETHEUS_URL`, `PROMETHEUS_TIMEOUT`, `METRICS_MAX_SAMPLE_AGE`, the same target allow-list, and metrics window.
 
-All processes expose `/health/live` and `/health/ready`. The orchestrator is ready only when PostgreSQL and all three MCP sessions respond. It validates each server's exact tool catalog during startup and fails closed if a tool is missing or an unexpected capability appears.
+Use a dedicated rollback MCP database role. It needs `SELECT` on `incidents`, `action_proposals`, `policy_decisions`, `approvals`, and `idempotency_keys`, plus `SELECT`, `INSERT`, and `UPDATE` on `rollback_mutations`. It does not need write access to workflow or audit tables. Database URLs and credentials must not be logged.
+
+All processes expose `/health/live` and `/health/ready`. Rollback-mode Kubernetes MCP readiness checks both Kubernetes and PostgreSQL; readonly mode checks only Kubernetes. The orchestrator is ready only when PostgreSQL and all three MCP sessions respond. It validates each server's exact tool catalog during startup and fails closed if a tool is missing or an unexpected capability appears.
 
 ## Verification
 

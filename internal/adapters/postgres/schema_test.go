@@ -94,6 +94,28 @@ func TestInitialSchemaEnforcesIncidentScopedBindings(t *testing.T) {
 	}
 }
 
+func TestRollbackMutationMigrationPersistsTrustedIdempotencyBinding(t *testing.T) {
+	data, err := os.ReadFile("../../../migrations/000002_rollback_mutation_ledger.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(data)
+	for _, required := range []string{
+		"CREATE TYPE rollback_mutation_state AS ENUM",
+		"idempotency_keys_key_request_hash_unique UNIQUE (key, request_hash)",
+		"CREATE TABLE rollback_mutations",
+		"PRIMARY KEY",
+		"FOREIGN KEY (idempotency_key, proposal_hash)",
+		"REFERENCES idempotency_keys(key, request_hash)",
+		"state = 'pending' AND completed_at IS NULL AND already_applied IS NULL",
+		"state = 'completed' AND completed_at IS NOT NULL",
+	} {
+		if !strings.Contains(schema, required) {
+			t.Fatalf("rollback mutation migration missing %q", required)
+		}
+	}
+}
+
 func readInitialSchema(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile("../../../migrations/000001_initial_schema.up.sql")

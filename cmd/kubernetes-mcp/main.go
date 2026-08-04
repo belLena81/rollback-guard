@@ -13,7 +13,10 @@ import (
 
 	kubernetesadapter "github.com/belLena81/rollback-guard/internal/adapters/kubernetes"
 	"github.com/belLena81/rollback-guard/internal/adapters/mcp/kubernetesserver"
+	postgresadapter "github.com/belLena81/rollback-guard/internal/adapters/postgres"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
+	"github.com/belLena81/rollback-guard/internal/ports"
+	"github.com/jackc/pgx/v5/pgxpool"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -42,14 +45,41 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("create kubernetes client: %w", err)
 	}
-	backend, err := kubernetesadapter.NewService(clientset, kubernetesadapter.Config{ClusterID: cfg.ClusterID, AllowedTargets: cfg.AllowedTargets})
+	var pool *pgxpool.Pool
+	var mutationGuard ports.RollbackMutationGuard
+	if cfg.Mode == string(kubernetesserver.ModeRollback) {
+		poolConfig, parseErr := pgxpool.ParseConfig(cfg.DatabaseURL)
+		if parseErr != nil {
+			return fmt.Errorf("parse rollback database configuration: %w", parseErr)
+		}
+		poolConfig.MaxConns = cfg.DBMaxConns
+		pool, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
+		if err != nil {
+			return fmt.Errorf("create rollback database pool: %w", err)
+		}
+		defer pool.Close()
+		mutationGuard, err = postgresadapter.NewRollbackMutationGuard(pool)
+		if err != nil {
+			return err
+		}
+	}
+	backend, err := kubernetesadapter.NewService(clientset, kubernetesadapter.Config{ClusterID: cfg.ClusterID, AllowedTargets: cfg.AllowedTargets, MutationGuard: mutationGuard})
 	if err != nil {
 		return err
 	}
 	mode := kubernetesserver.Mode(cfg.Mode)
 	ready := func(ctx context.Context) error {
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		readinessTimeout := 2 * time.Second
+		if cfg.DBPingTimeout > 0 {
+			readinessTimeout = cfg.DBPingTimeout
+		}
+		ctx, cancel := context.WithTimeout(ctx, readinessTimeout)
 		defer cancel()
+		if pool != nil {
+			if err := pool.Ping(ctx); err != nil {
+				return err
+			}
+		}
 		target := cfg.AllowedTargets[0]
 		_, err := clientset.AppsV1().Deployments(target.Namespace()).Get(ctx, target.Deployment(), metav1.GetOptions{})
 		return err

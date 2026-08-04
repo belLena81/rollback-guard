@@ -29,6 +29,28 @@ func TestLoadKubernetesMCPRejectsUnsafeConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadKubernetesMCPRequiresDatabaseOnlyForRollbackMode(t *testing.T) {
+	clearConfigEnvironment(t)
+	if _, err := LoadKubernetesMCP(); err != nil {
+		t.Fatalf("readonly configuration error = %v", err)
+	}
+
+	clearConfigEnvironment(t)
+	t.Setenv("KUBERNETES_MCP_MODE", "rollback")
+	if _, err := LoadKubernetesMCP(); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Fatalf("rollback configuration error = %v", err)
+	}
+
+	t.Setenv("DATABASE_URL", "postgres://rollback@database/rollback_guard")
+	cfg, err := LoadKubernetesMCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseURL == "" || cfg.DBMaxConns != 4 || cfg.DBPingTimeout <= 0 {
+		t.Fatalf("rollback database configuration = %#v", cfg)
+	}
+}
+
 func TestLoadObservabilityMCPRejectsUnsafeWindow(t *testing.T) {
 	clearConfigEnvironment(t)
 	t.Setenv("METRICS_WINDOW", "10s")
@@ -49,7 +71,7 @@ func TestLoadObservabilityMCPRejectsUnboundedDependencyTimeout(t *testing.T) {
 
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"ALLOWED_TARGETS", "CLUSTER_ID", "KUBERNETES_MCP_MODE", "MCP_REQUEST_TIMEOUT", "MCP_SESSION_TIMEOUT", "METRICS_WINDOW", "METRICS_MAX_SAMPLE_AGE", "PROMETHEUS_TIMEOUT"} {
+	for _, key := range []string{"ALLOWED_TARGETS", "CLUSTER_ID", "KUBERNETES_MCP_MODE", "MCP_REQUEST_TIMEOUT", "MCP_SESSION_TIMEOUT", "METRICS_WINDOW", "METRICS_MAX_SAMPLE_AGE", "PROMETHEUS_TIMEOUT", "DATABASE_URL", "DB_MAX_CONNS", "DB_PING_TIMEOUT"} {
 		t.Setenv(key, "")
 	}
 }

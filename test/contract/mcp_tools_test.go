@@ -50,6 +50,9 @@ func TestMCPToolCatalogsAreExactAndNarrow(t *testing.T) {
 				got[index] = tool.Name
 				if schema, ok := tool.InputSchema.(map[string]any); ok {
 					assertClosedSchema(t, tool.Name, schema)
+					if tool.Name == protocol.ToolExecuteApprovedRollback {
+						assertExecuteRollbackSchema(t, schema)
+					}
 					encoded, err := json.Marshal(schema)
 					if err != nil {
 						t.Fatal(err)
@@ -71,6 +74,22 @@ func TestMCPToolCatalogsAreExactAndNarrow(t *testing.T) {
 				t.Fatalf("tools = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func assertExecuteRollbackSchema(t *testing.T, schema map[string]any) {
+	t.Helper()
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("execute rollback properties = %#v", schema["properties"])
+	}
+	if len(properties) != 2 || properties["proposalHash"] == nil || properties["idempotencyKey"] == nil {
+		t.Fatalf("execute rollback properties = %#v", properties)
+	}
+	for _, forbidden := range []string{"proposal", "policyDecision", "approval"} {
+		if _, exists := properties[forbidden]; exists {
+			t.Fatalf("execute rollback exposes caller-asserted %s", forbidden)
+		}
 	}
 }
 
@@ -146,7 +165,7 @@ func (*fakeKubernetesBackend) WatchRollout(context.Context, domain.DeploymentTar
 func (*fakeKubernetesBackend) PrepareRollback(context.Context, domain.RollbackProposal) error {
 	return nil
 }
-func (*fakeKubernetesBackend) ExecuteApprovedRollback(context.Context, domain.ApprovedRollback, domain.IdempotencyKey) (kubernetes.MutationResult, error) {
+func (*fakeKubernetesBackend) ExecuteApprovedRollback(context.Context, domain.ProposalHash, domain.IdempotencyKey) (kubernetes.MutationResult, error) {
 	return kubernetes.MutationResult{}, nil
 }
 

@@ -58,6 +58,7 @@ func TestPortsOperateAcrossStreamableHTTPMCP(t *testing.T) {
 	}
 
 	approved := approvedRollback(t, now, target)
+	kube.approvedHash = approved.Proposal().Hash()
 	executor, err := protocol.NewRollbackExecutor(writeClient, readClient, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +133,7 @@ type kubernetesBackend struct {
 	now             time.Time
 	target          domain.DeploymentTarget
 	current, stable domain.Revision
+	approvedHash    domain.ProposalHash
 }
 
 func (b *kubernetesBackend) InspectDeployment(context.Context, domain.DeploymentTarget) (domain.DeploymentEvidence, error) {
@@ -158,9 +160,14 @@ func (b *kubernetesBackend) WatchRollout(context.Context, domain.DeploymentTarge
 	return b.status(), nil
 }
 func (*kubernetesBackend) PrepareRollback(context.Context, domain.RollbackProposal) error { return nil }
-func (b *kubernetesBackend) ExecuteApprovedRollback(_ context.Context, approved domain.ApprovedRollback, _ domain.IdempotencyKey) (kubernetes.MutationResult, error) {
+
+func (b *kubernetesBackend) ExecuteApprovedRollback(_ context.Context, hash domain.ProposalHash, _ domain.IdempotencyKey) (kubernetes.MutationResult, error) {
+	if hash != b.approvedHash {
+		return kubernetes.MutationResult{}, &domain.ApprovalMismatchError{Reason: "trusted execution record is missing"}
+	}
+	from := b.current
 	b.current = b.stable
-	return kubernetes.MutationResult{ExecutionID: "mcp-execution", FromRevision: approved.Proposal().CurrentRevision(), ToRevision: b.stable, StartedAt: b.now, CompletedAt: b.now}, nil
+	return kubernetes.MutationResult{ExecutionID: "mcp-execution", FromRevision: from, ToRevision: b.stable, StartedAt: b.now, CompletedAt: b.now}, nil
 }
 func (b *kubernetesBackend) status() kubernetes.RolloutStatus {
 	return kubernetes.RolloutStatus{Revision: b.current, DesiredReplicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1, ObservedGeneration: 2, Generation: 2, Complete: b.current == b.stable}

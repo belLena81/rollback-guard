@@ -27,7 +27,7 @@ type Backend interface {
 	GetRolloutStatus(context.Context, domain.DeploymentTarget) (kubernetes.RolloutStatus, error)
 	WatchRollout(context.Context, domain.DeploymentTarget, domain.Revision) (kubernetes.RolloutStatus, error)
 	PrepareRollback(context.Context, domain.RollbackProposal) error
-	ExecuteApprovedRollback(context.Context, domain.ApprovedRollback, domain.IdempotencyKey) (kubernetes.MutationResult, error)
+	ExecuteApprovedRollback(context.Context, domain.ProposalHash, domain.IdempotencyKey) (kubernetes.MutationResult, error)
 }
 
 func New(backend Backend, mode Mode) (*mcp.Server, error) {
@@ -199,32 +199,11 @@ func prepareRollback(backend Backend) mcp.ToolHandlerFor[protocol.PrepareRollbac
 
 func executeRollback(backend Backend) mcp.ToolHandlerFor[protocol.ExecuteRollbackInput, protocol.Response[protocol.ExecuteRollbackOutput]] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, input protocol.ExecuteRollbackInput) (*mcp.CallToolResult, protocol.Response[protocol.ExecuteRollbackOutput], error) {
-		proposal, err := input.Proposal.Domain()
-		if err != nil {
-			result, response := protocol.Failure[protocol.ExecuteRollbackOutput](err)
+		if input.ProposalHash == "" || input.IdempotencyKey == "" {
+			result, response := protocol.Failure[protocol.ExecuteRollbackOutput](&domain.ValidationError{Field: "rollback_mutation", Reason: "proposal hash and idempotency key are required"})
 			return result, response, nil
 		}
-		decision, err := input.PolicyDecision.Domain()
-		if err != nil {
-			result, response := protocol.Failure[protocol.ExecuteRollbackOutput](err)
-			return result, response, nil
-		}
-		approval, err := input.Approval.Domain()
-		if err != nil {
-			result, response := protocol.Failure[protocol.ExecuteRollbackOutput](err)
-			return result, response, nil
-		}
-		fresh, err := backend.InspectDeployment(ctx, proposal.Target())
-		if err != nil {
-			result, response := protocol.Failure[protocol.ExecuteRollbackOutput](err)
-			return result, response, nil
-		}
-		approved, err := domain.AuthorizeRollback(proposal, decision, approval, fresh, time.Now())
-		if err != nil {
-			result, response := protocol.Failure[protocol.ExecuteRollbackOutput](err)
-			return result, response, nil
-		}
-		mutation, err := backend.ExecuteApprovedRollback(ctx, approved, domain.IdempotencyKey(input.IdempotencyKey))
+		mutation, err := backend.ExecuteApprovedRollback(ctx, domain.ProposalHash(input.ProposalHash), domain.IdempotencyKey(input.IdempotencyKey))
 		if err != nil {
 			result, response := protocol.Failure[protocol.ExecuteRollbackOutput](err)
 			return result, response, nil

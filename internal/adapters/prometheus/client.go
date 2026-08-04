@@ -98,6 +98,28 @@ func (c *Client) QueryMetric(ctx context.Context, target domain.DeploymentTarget
 		return MetricSample{}, err
 	}
 	observedAt := c.now().UTC()
+	sourceQuery, err := c.sourceFreshnessQuery(target, request.Kind)
+	if err != nil {
+		return MetricSample{}, err
+	}
+	effectiveEnd := observedAt.Add(-request.Offset)
+	sourceValue, sourceWarnings, err := c.api.Query(ctx, sourceQuery, effectiveEnd)
+	if err != nil {
+		return MetricSample{}, fmt.Errorf("query prometheus source freshness: %w", err)
+	}
+	if len(sourceWarnings) > 0 {
+		return MetricSample{}, fmt.Errorf("prometheus returned source freshness warnings: %w", ErrInvalidResult)
+	}
+	sourceSample, err := c.singleSample(sourceValue, effectiveEnd)
+	if err != nil {
+		return MetricSample{}, err
+	}
+	sourceTimestamp := float64(sourceSample.Value)
+	seconds, fraction := math.Modf(sourceTimestamp)
+	sourceObservedAt := time.Unix(int64(seconds), int64(fraction*float64(time.Second))).UTC()
+	if sourceTimestamp <= 0 || sourceObservedAt.After(effectiveEnd.Add(time.Second)) || effectiveEnd.Sub(sourceObservedAt) > c.maxAge {
+		return MetricSample{}, ErrInvalidResult
+	}
 	value, warnings, err := c.api.Query(ctx, query, observedAt)
 	if err != nil {
 		return MetricSample{}, fmt.Errorf("query prometheus metric: %w", err)
@@ -109,11 +131,11 @@ func (c *Client) QueryMetric(ctx context.Context, target domain.DeploymentTarget
 	if err != nil {
 		return MetricSample{}, err
 	}
-	return MetricSample{Name: request.Kind, Value: float64(sample.Value), Unit: unit, ObservedAt: sample.Timestamp.Time().UTC()}, nil
+	return MetricSample{Name: request.Kind, Value: float64(sample.Value), Unit: unit, ObservedAt: sourceObservedAt}, nil
 }
 
 func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (string, string, error) {
-	matchers := fmt.Sprintf("cluster=%s,namespace=%s,deployment=%s,service=%s", quote(target.Cluster()), quote(target.Namespace()), quote(target.Deployment()), quote(target.Service()))
+	matchers := targetMatchers(target)
 	window := durationLiteral(request.Window)
 	offset := ""
 	if request.Offset > 0 {
@@ -123,7 +145,9 @@ func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (st
 	case "http_error_rate":
 		all := "rollback_guardian_http_requests_total{" + matchers + "}"
 		errorsOnly := "rollback_guardian_http_requests_total{" + matchers + ",code=~\"5..\"}"
-		return fmt.Sprintf("sum(rate(%s[%s]%s)) / clamp_min(sum(rate(%s[%s]%s)), 1)", errorsOnly, window, offset, all, window, offset), "ratio", nil
+		errorRate := fmt.Sprintf("sum(rate(%s[%s]%s))", errorsOnly, window, offset)
+		totalRate := fmt.Sprintf("sum(rate(%s[%s]%s))", all, window, offset)
+		return fmt.Sprintf("(%s / (%s > 0)) or (%s * 0)", errorRate, totalRate, totalRate), "ratio", nil
 	case "request_latency":
 		if request.Percentile != 0.50 && request.Percentile != 0.95 && request.Percentile != 0.99 {
 			return "", "", &domain.ValidationError{Field: "percentile", Reason: "must be p50, p95, or p99"}
@@ -136,6 +160,27 @@ func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (st
 	default:
 		return "", "", fmt.Errorf("metric %q: %w", request.Kind, ErrUnsupportedKind)
 	}
+}
+
+func (c *Client) sourceFreshnessQuery(target domain.DeploymentTarget, kind string) (string, error) {
+	var metric string
+	switch kind {
+	case "http_error_rate":
+		metric = "rollback_guardian_http_requests_total"
+	case "request_latency":
+		metric = "rollback_guardian_http_request_duration_seconds_bucket"
+	case "pod_cpu_usage":
+		metric = "rollback_guardian_pod_cpu_usage_cores"
+	case "pod_memory_usage":
+		metric = "rollback_guardian_pod_memory_usage_bytes"
+	default:
+		return "", fmt.Errorf("metric %q: %w", kind, ErrUnsupportedKind)
+	}
+	return "min(timestamp(" + metric + "{" + targetMatchers(target) + "}))", nil
+}
+
+func targetMatchers(target domain.DeploymentTarget) string {
+	return fmt.Sprintf("cluster=%s,namespace=%s,deployment=%s,service=%s", quote(target.Cluster()), quote(target.Namespace()), quote(target.Deployment()), quote(target.Service()))
 }
 
 func (c *Client) singleSample(value model.Value, now time.Time) (*model.Sample, error) {

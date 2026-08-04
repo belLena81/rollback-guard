@@ -2,19 +2,18 @@ package kubernetes
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/ports"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
@@ -30,6 +29,7 @@ var (
 type Config struct {
 	ClusterID      string
 	AllowedTargets []domain.DeploymentTarget
+	MutationGuard  ports.RollbackMutationGuard
 	Now            func() time.Time
 }
 
@@ -37,14 +37,8 @@ type Service struct {
 	client  kubernetes.Interface
 	cluster string
 	allowed map[domain.DeploymentTarget]struct{}
+	guard   ports.RollbackMutationGuard
 	now     func() time.Time
-	mu      sync.Mutex
-	results map[domain.IdempotencyKey]mutationRecord
-}
-
-type mutationRecord struct {
-	hash   domain.ProposalHash
-	result MutationResult
 }
 
 type ReplicaSetSummary struct {
@@ -110,7 +104,7 @@ func NewService(client kubernetes.Interface, config Config) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{client: client, cluster: config.ClusterID, allowed: allowed, now: now, results: map[domain.IdempotencyKey]mutationRecord{}}, nil
+	return &Service{client: client, cluster: config.ClusterID, allowed: allowed, guard: config.MutationGuard, now: now}, nil
 }
 
 func (s *Service) InspectDeployment(ctx context.Context, target domain.DeploymentTarget) (domain.DeploymentEvidence, error) {
@@ -233,21 +227,36 @@ func (s *Service) PodEvents(ctx context.Context, target domain.DeploymentTarget,
 	if strings.TrimSpace(podName) == "" || limit <= 0 || limit > 100 {
 		return nil, false, &domain.ValidationError{Field: "pod_events", Reason: "invalid pod name or limit"}
 	}
-	pods, _, err := s.ListPods(ctx, target, 100)
+	_, replicaSets, err := s.loadDeployment(ctx, target)
 	if err != nil {
 		return nil, false, err
 	}
-	var podUID string
-	for _, pod := range pods {
-		if pod.Name == podName {
-			podUID = pod.UID
+	owned := make(map[types.UID]struct{}, len(replicaSets))
+	for _, replicaSet := range replicaSets {
+		owned[replicaSet.UID] = struct{}{}
+	}
+	pods, err := s.client.CoreV1().Pods(target.Namespace()).List(ctx, metav1.ListOptions{FieldSelector: fields.OneTermEqualSelector("metadata.name", podName).String()})
+	if err != nil {
+		return nil, false, fmt.Errorf("list deployment pod: %w", err)
+	}
+	var pod *corev1.Pod
+	for index := range pods.Items {
+		if pods.Items[index].Name == podName {
+			pod = &pods.Items[index]
 			break
 		}
 	}
-	if podUID == "" {
+	if pod == nil {
 		return nil, false, &domain.NotFoundError{Resource: "deployment pod", ID: podName}
 	}
-	events, err := s.client.CoreV1().Events(target.Namespace()).List(ctx, metav1.ListOptions{FieldSelector: fields.OneTermEqualSelector("involvedObject.uid", podUID).String()})
+	owner := metav1.GetControllerOf(pod)
+	if owner == nil || owner.Kind != "ReplicaSet" {
+		return nil, false, &domain.NotFoundError{Resource: "deployment pod", ID: podName}
+	}
+	if _, ok := owned[owner.UID]; !ok {
+		return nil, false, &domain.NotFoundError{Resource: "deployment pod", ID: podName}
+	}
+	events, err := s.client.CoreV1().Events(target.Namespace()).List(ctx, metav1.ListOptions{FieldSelector: fields.OneTermEqualSelector("involvedObject.uid", string(pod.UID)).String()})
 	if err != nil {
 		return nil, false, fmt.Errorf("list pod events: %w", err)
 	}
@@ -318,20 +327,18 @@ func (s *Service) PrepareRollback(ctx context.Context, proposal domain.RollbackP
 	return nil
 }
 
-func (s *Service) ExecuteApprovedRollback(ctx context.Context, approved domain.ApprovedRollback, key domain.IdempotencyKey) (MutationResult, error) {
-	if key == "" {
-		return MutationResult{}, &domain.ValidationError{Field: "idempotency_key", Reason: "must not be empty"}
+func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.ProposalHash, key domain.IdempotencyKey) (MutationResult, error) {
+	if key == "" || hash == "" || s.guard == nil {
+		return MutationResult{}, &domain.ValidationError{Field: "rollback_mutation", Reason: "trusted mutation guard, key, and proposal hash are required"}
 	}
-	proposal := approved.Proposal()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if record, exists := s.results[key]; exists {
-		if record.hash != proposal.Hash() {
-			return MutationResult{}, &domain.IdempotencyConflictError{Key: key}
-		}
-		return record.result, nil
+	attempt, err := s.guard.Begin(ctx, key, hash, s.now())
+	if err != nil {
+		return MutationResult{}, err
 	}
-
+	if attempt.Mutation.State() == domain.RollbackMutationCompleted {
+		return mutationResult(attempt.Mutation), nil
+	}
+	proposal := attempt.Approved.Proposal()
 	deployment, replicaSets, err := s.loadDeployment(ctx, proposal.Target())
 	if err != nil {
 		return MutationResult{}, err
@@ -341,9 +348,11 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, approved domain.A
 		return MutationResult{}, err
 	}
 	if currentRevision == proposal.TargetRevision() {
-		result := newMutationResult(key, proposal, s.now(), true)
-		s.results[key] = mutationRecord{hash: proposal.Hash(), result: result}
-		return result, nil
+		completed, completeErr := s.guard.Complete(ctx, attempt.Mutation, true, s.now())
+		if completeErr != nil {
+			return MutationResult{}, completeErr
+		}
+		return mutationResult(completed), nil
 	}
 	if currentRevision != proposal.CurrentRevision() {
 		return MutationResult{}, ErrRevisionDrift
@@ -353,20 +362,51 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, approved domain.A
 		return MutationResult{}, err
 	}
 	fresh := domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: currentRevision}
-	if _, err := domain.AuthorizeRollback(proposal, approved.PolicyDecision(), approved.Approval(), fresh, s.now()); err != nil {
+	if _, err := domain.AuthorizeRollback(proposal, attempt.Approved.PolicyDecision(), attempt.Approved.Approval(), fresh, s.now()); err != nil {
 		return MutationResult{}, err
 	}
 	patch, err := rollbackPatch(deployment.ResourceVersion, stable.Spec.Template)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	startedAt := s.now().UTC()
 	if _, err := s.client.AppsV1().Deployments(proposal.Target().Namespace()).Patch(ctx, proposal.Target().Deployment(), types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		if apierrors.IsConflict(err) {
+			return s.reconcileMutation(ctx, key, hash)
+		}
 		return MutationResult{}, fmt.Errorf("patch approved deployment template: %w", err)
 	}
-	result := newMutationResult(key, proposal, startedAt, false)
-	s.results[key] = mutationRecord{hash: proposal.Hash(), result: result}
-	return result, nil
+	completed, err := s.guard.Complete(ctx, attempt.Mutation, false, s.now())
+	if err != nil {
+		return MutationResult{}, err
+	}
+	return mutationResult(completed), nil
+}
+
+func (s *Service) reconcileMutation(ctx context.Context, key domain.IdempotencyKey, hash domain.ProposalHash) (MutationResult, error) {
+	attempt, err := s.guard.Begin(ctx, key, hash, s.now())
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if attempt.Mutation.State() == domain.RollbackMutationCompleted {
+		return mutationResult(attempt.Mutation), nil
+	}
+	proposal := attempt.Approved.Proposal()
+	deployment, _, err := s.loadDeployment(ctx, proposal.Target())
+	if err != nil {
+		return MutationResult{}, err
+	}
+	currentRevision, err := TemplateRevision(deployment.Spec.Template)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if currentRevision != proposal.TargetRevision() {
+		return MutationResult{}, ErrRevisionDrift
+	}
+	completed, err := s.guard.Complete(ctx, attempt.Mutation, true, s.now())
+	if err != nil {
+		return MutationResult{}, err
+	}
+	return mutationResult(completed), nil
 }
 
 func (s *Service) loadDeployment(ctx context.Context, target domain.DeploymentTarget) (*appsv1.Deployment, []appsv1.ReplicaSet, error) {
@@ -460,12 +500,13 @@ func rolloutComplete(deployment *appsv1.Deployment) bool {
 	return true
 }
 
-func newMutationResult(key domain.IdempotencyKey, proposal domain.RollbackProposal, startedAt time.Time, alreadyApplied bool) MutationResult {
-	sum := sha256String(string(key) + "\n" + string(proposal.Hash()))
-	return MutationResult{ExecutionID: domain.ExecutionID("execution-" + sum[:32]), FromRevision: proposal.CurrentRevision(), ToRevision: proposal.TargetRevision(), StartedAt: startedAt.UTC(), CompletedAt: startedAt.UTC(), AlreadyApplied: alreadyApplied}
-}
-
-func sha256String(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
+func mutationResult(record domain.RollbackMutation) MutationResult {
+	return MutationResult{
+		ExecutionID:    record.ExecutionID(),
+		FromRevision:   record.FromRevision(),
+		ToRevision:     record.ToRevision(),
+		StartedAt:      record.StartedAt(),
+		CompletedAt:    record.CompletedAt(),
+		AlreadyApplied: record.AlreadyApplied(),
+	}
 }
