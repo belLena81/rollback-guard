@@ -10,6 +10,8 @@ import (
 	"github.com/belLena81/rollback-guard/internal/domain"
 )
 
+const defaultAllowedTargets = "local/rollback-demo/demo-api/demo-api"
+
 type Config struct {
 	HTTPAddr              string
 	DatabaseURL           string
@@ -84,7 +86,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	targets, err := targetsEnv("ALLOWED_TARGETS", "local/demo/demo-api/demo-api")
+	targets, err := targetsEnv("ALLOWED_TARGETS", defaultAllowedTargets)
 	if err != nil {
 		return Config{}, err
 	}
@@ -97,8 +99,8 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("MCP_CALL_TIMEOUT must be positive and no greater than 30s")
 	}
 	mcpWatchTimeout, err := durationEnv("MCP_WATCH_TIMEOUT", 90*time.Second)
-	if err != nil || mcpWatchTimeout > 2*time.Minute {
-		return Config{}, fmt.Errorf("MCP_WATCH_TIMEOUT must be positive and no greater than 2m")
+	if err != nil || mcpWatchTimeout < time.Second || mcpWatchTimeout > 2*time.Minute {
+		return Config{}, fmt.Errorf("MCP_WATCH_TIMEOUT must be between 1s and 2m")
 	}
 	metricsWindow, err := durationEnv("METRICS_WINDOW", 5*time.Minute)
 	if err != nil || metricsWindow < 30*time.Second || metricsWindow > time.Hour {
@@ -132,7 +134,7 @@ func Load() (Config, error) {
 }
 
 func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
-	targets, err := targetsEnv("ALLOWED_TARGETS", "local/demo/demo-api/demo-api")
+	targets, err := targetsEnv("ALLOWED_TARGETS", defaultAllowedTargets)
 	if err != nil {
 		return KubernetesMCPConfig{}, err
 	}
@@ -178,7 +180,7 @@ func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
 }
 
 func LoadObservabilityMCP() (ObservabilityMCPConfig, error) {
-	targets, err := targetsEnv("ALLOWED_TARGETS", "local/demo/demo-api/demo-api")
+	targets, err := targetsEnv("ALLOWED_TARGETS", defaultAllowedTargets)
 	if err != nil {
 		return ObservabilityMCPConfig{}, err
 	}

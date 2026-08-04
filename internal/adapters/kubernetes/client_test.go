@@ -123,6 +123,29 @@ func TestInspectDeploymentUsesOwnedStableReplicaSet(t *testing.T) {
 	}
 }
 
+func TestGetRolloutStatusWaitsForOldReplicasToTerminate(t *testing.T) {
+	target := mustTarget(t)
+	deployment := testDeployment("healthy:v1")
+	deployment.Status.Replicas = 2
+	deployment.Status.UpdatedReplicas = 1
+	deployment.Status.ReadyReplicas = 1
+	deployment.Status.AvailableReplicas = 1
+	deployment.Status.UnavailableReplicas = 0
+	client := fake.NewClientset(deployment)
+	service, err := NewService(client, Config{ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := service.GetRolloutStatus(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Complete {
+		t.Fatalf("rollout complete with total replicas %d and desired replicas %d", deployment.Status.Replicas, status.DesiredReplicas)
+	}
+}
+
 func TestRollbackPatchReplacesWholeTemplate(t *testing.T) {
 	target := mustTarget(t)
 	deployment := testDeployment("broken:v2")

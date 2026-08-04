@@ -13,7 +13,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/testkit"
 )
 
-func TestResumedExecutionRevalidatesApprovalBeforeShortcut(t *testing.T) {
+func TestRecoveredPendingExecutionRetryInvokesExecutorBeforeCompletion(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 8, 3, 13, 0, 0, 0, time.UTC)
@@ -34,10 +34,16 @@ func TestResumedExecutionRevalidatesApprovalBeforeShortcut(t *testing.T) {
 			RolloutAt:              now.Add(-time.Minute),
 		},
 	}
+	executor := &successfulRollbackExecutor{
+		executionID: "executor-execution",
+		startedAt:   now.Add(-time.Minute),
+		completedAt: now,
+	}
 	svc := &ExecutionService{
 		workflow: &workflow{
 			uow:            uow,
 			inspector:      inspector,
+			executor:       executor,
 			approvalPolicy: policy,
 			clock:          clock,
 			ids:            &testkit.IDGenerator{},
@@ -57,6 +63,15 @@ func TestResumedExecutionRevalidatesApprovalBeforeShortcut(t *testing.T) {
 	if policy.calls != 1 {
 		t.Fatalf("approval policy calls = %d, want 1", policy.calls)
 	}
+	if executor.calls != 1 {
+		t.Fatalf("executor calls = %d, want 1", executor.calls)
+	}
+	if executor.key != "execute-1" {
+		t.Fatalf("executor key = %q, want execute-1", executor.key)
+	}
+	if executor.approved.Proposal().Hash() != proposal.Hash() {
+		t.Fatalf("executor proposal hash = %s, want %s", executor.approved.Proposal().Hash(), proposal.Hash())
+	}
 
 	incident, err := loadIncident(t, uow, incidentID)
 	if err != nil {
@@ -71,6 +86,9 @@ func TestResumedExecutionRevalidatesApprovalBeforeShortcut(t *testing.T) {
 	}
 	if stored.Outcome() != domain.ExecutionSucceeded {
 		t.Fatalf("stored execution outcome = %s, want succeeded", stored.Outcome())
+	}
+	if stored.ID() != executor.executionID {
+		t.Fatalf("stored execution ID = %s, want executor result", stored.ID())
 	}
 }
 
@@ -514,6 +532,33 @@ type failingRollbackExecutor struct {
 
 func (f *failingRollbackExecutor) ExecuteApprovedRollback(context.Context, domain.ApprovedRollback, domain.IdempotencyKey) (domain.RollbackExecution, error) {
 	return domain.RollbackExecution{}, f.err
+}
+
+type successfulRollbackExecutor struct {
+	executionID domain.ExecutionID
+	startedAt   time.Time
+	completedAt time.Time
+	calls       int
+	approved    domain.ApprovedRollback
+	key         domain.IdempotencyKey
+}
+
+func (e *successfulRollbackExecutor) ExecuteApprovedRollback(_ context.Context, approved domain.ApprovedRollback, key domain.IdempotencyKey) (domain.RollbackExecution, error) {
+	e.calls++
+	e.approved = approved
+	e.key = key
+	proposal := approved.Proposal()
+	return domain.NewRollbackExecution(
+		e.executionID,
+		proposal.IncidentID(),
+		key,
+		proposal.CurrentRevision(),
+		proposal.TargetRevision(),
+		domain.ExecutionSucceeded,
+		e.startedAt,
+		e.completedAt,
+		"",
+	)
 }
 
 func mustActor(t *testing.T, id string, kind domain.ActorKind) domain.Actor {

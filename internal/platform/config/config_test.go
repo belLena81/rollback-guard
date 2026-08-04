@@ -3,7 +3,70 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/belLena81/rollback-guard/internal/domain"
 )
+
+func TestDefaultAllowedTargetsMatchDemoRBACNamespace(t *testing.T) {
+	tests := []struct {
+		name string
+		load func(t *testing.T) []string
+	}{
+		{
+			name: "orchestrator",
+			load: func(t *testing.T) []string {
+				t.Helper()
+				t.Setenv("DATABASE_URL", "postgres://rollback@database/rollback_guard")
+				cfg, err := Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return targetStrings(cfg.AllowedTargets)
+			},
+		},
+		{
+			name: "kubernetes MCP",
+			load: func(t *testing.T) []string {
+				t.Helper()
+				cfg, err := LoadKubernetesMCP()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return targetStrings(cfg.AllowedTargets)
+			},
+		},
+		{
+			name: "observability MCP",
+			load: func(t *testing.T) []string {
+				t.Helper()
+				cfg, err := LoadObservabilityMCP()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return targetStrings(cfg.AllowedTargets)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnvironment(t)
+			got := test.load(t)
+			if len(got) != 1 || got[0] != "local/rollback-demo/demo-api/demo-api" {
+				t.Fatalf("default targets = %v", got)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsSubSecondMCPWatchTimeout(t *testing.T) {
+	clearConfigEnvironment(t)
+	t.Setenv("DATABASE_URL", "postgres://rollback@database/rollback_guard")
+	t.Setenv("MCP_WATCH_TIMEOUT", "500ms")
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "between 1s and 2m") {
+		t.Fatalf("Load() error = %v, want watch timeout range error", err)
+	}
+}
 
 func TestLoadKubernetesMCPRejectsUnsafeConfiguration(t *testing.T) {
 	tests := []struct {
@@ -71,7 +134,15 @@ func TestLoadObservabilityMCPRejectsUnboundedDependencyTimeout(t *testing.T) {
 
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"ALLOWED_TARGETS", "CLUSTER_ID", "KUBERNETES_MCP_MODE", "MCP_REQUEST_TIMEOUT", "MCP_SESSION_TIMEOUT", "METRICS_WINDOW", "METRICS_MAX_SAMPLE_AGE", "PROMETHEUS_TIMEOUT", "DATABASE_URL", "DB_MAX_CONNS", "DB_PING_TIMEOUT"} {
+	for _, key := range []string{"ALLOWED_TARGETS", "CLUSTER_ID", "KUBERNETES_MCP_MODE", "MCP_REQUEST_TIMEOUT", "MCP_SESSION_TIMEOUT", "METRICS_WINDOW", "METRICS_MAX_SAMPLE_AGE", "PROMETHEUS_TIMEOUT", "DATABASE_URL", "DB_MAX_CONNS", "DB_PING_TIMEOUT", "MCP_CONNECT_TIMEOUT", "MCP_CALL_TIMEOUT", "MCP_WATCH_TIMEOUT"} {
 		t.Setenv(key, "")
 	}
+}
+
+func targetStrings(targets []domain.DeploymentTarget) []string {
+	out := make([]string, len(targets))
+	for index, target := range targets {
+		out[index] = target.Cluster() + "/" + target.Namespace() + "/" + target.Deployment() + "/" + target.Service()
+	}
+	return out
 }

@@ -489,7 +489,7 @@ func desiredReplicas(deployment *appsv1.Deployment) int {
 
 func rolloutComplete(deployment *appsv1.Deployment) bool {
 	desired := int32(desiredReplicas(deployment))
-	if deployment.Spec.Paused || deployment.Status.ObservedGeneration < deployment.Generation || deployment.Status.UpdatedReplicas != desired || deployment.Status.ReadyReplicas != desired || deployment.Status.AvailableReplicas != desired || deployment.Status.UnavailableReplicas != 0 {
+	if deployment.Spec.Paused || deployment.Status.ObservedGeneration < deployment.Generation || deployment.Status.Replicas != desired || deployment.Status.UpdatedReplicas != desired || deployment.Status.ReadyReplicas != desired || deployment.Status.AvailableReplicas != desired || deployment.Status.UnavailableReplicas != 0 {
 		return false
 	}
 	for _, condition := range deployment.Status.Conditions {

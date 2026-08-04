@@ -34,6 +34,8 @@ The orchestrator requires `DATABASE_URL` and accepts:
 
 Both Kubernetes processes use `ALLOWED_TARGETS` in `cluster/namespace/deployment/service` form, `CLUSTER_ID`, optional `KUBECONFIG`, `MCP_REQUEST_TIMEOUT`, and `MCP_SESSION_TIMEOUT`. Rollback mode additionally requires `DATABASE_URL` and accepts `DB_MAX_CONNS` (default `4`) and `DB_PING_TIMEOUT` (default `2s`); readonly mode does not connect to PostgreSQL. The observability process uses `PROMETHEUS_URL`, `PROMETHEUS_TIMEOUT`, `METRICS_MAX_SAMPLE_AGE`, the same target allow-list, and metrics window.
 
+`ALLOWED_TARGETS` defaults to `local/rollback-demo/demo-api/demo-api`, matching the namespace and deployment in `deploy/rbac/mcp.yaml`.
+
 Use a dedicated rollback MCP database role. It needs `SELECT` on `incidents`, `action_proposals`, `policy_decisions`, `approvals`, and `idempotency_keys`, plus `SELECT`, `INSERT`, and `UPDATE` on `rollback_mutations`. It does not need write access to workflow or audit tables. Database URLs and credentials must not be logged.
 
 All processes expose `/health/live` and `/health/ready`. Rollback-mode Kubernetes MCP readiness checks both Kubernetes and PostgreSQL; readonly mode checks only Kubernetes. The orchestrator is ready only when PostgreSQL and all three MCP sessions respond. It validates each server's exact tool catalog during startup and fails closed if a tool is missing or an unexpected capability appears.

@@ -48,13 +48,32 @@ func TestRollbackExecutorReconcilesCanceledMutationWithDetachedBoundedContext(t 
 			return nil, nil
 		}
 	})
-	rollback := callerFunc(func(_ context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
+	executeCalls := 0
+	rollback := callerFunc(func(callCtx context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
 		switch params.Name {
 		case ToolPrepareRollback:
 			return successfulToolResult(PrepareRollbackOutput{ProposalHash: string(proposal.Hash()), TargetRevision: string(proposal.TargetRevision())}), nil
 		case ToolExecuteApprovedRollback:
-			cancel()
-			return nil, context.Canceled
+			executeCalls++
+			switch executeCalls {
+			case 1:
+				cancel()
+				return nil, context.Canceled
+			case 2:
+				if callCtx.Err() != nil {
+					return nil, callCtx.Err()
+				}
+				if callCtx.Value(reconciliationContextKey{}) != "trace" {
+					t.Error("replayed mutation context lost request values")
+				}
+				if _, ok := callCtx.Deadline(); !ok {
+					t.Error("replayed mutation context has no deadline")
+				}
+				return successfulToolResult(ExecuteRollbackOutput{ExecutionID: "mutation-replayed", FromRevision: string(proposal.CurrentRevision()), ToRevision: string(proposal.TargetRevision()), StartedAt: now, CompletedAt: now.Add(time.Second), AlreadyApplied: true}), nil
+			default:
+				t.Fatalf("unexpected execute call %d", executeCalls)
+				return nil, nil
+			}
 		default:
 			t.Fatalf("unexpected rollback call to %q", params.Name)
 			return nil, nil
@@ -71,6 +90,9 @@ func TestRollbackExecutorReconcilesCanceledMutationWithDetachedBoundedContext(t 
 	}
 	if execution.Outcome() != domain.ExecutionSucceeded || execution.ToRevision() != proposal.TargetRevision() {
 		t.Fatalf("execution = %#v", execution)
+	}
+	if executeCalls != 2 {
+		t.Fatalf("execute calls = %d, want 2", executeCalls)
 	}
 }
 
@@ -143,6 +165,120 @@ func TestRollbackExecutorDoesNotReconcileCancellationBeforeMutation(t *testing.T
 	}
 	if executeCalls != 0 {
 		t.Fatalf("execute calls = %d, want 0", executeCalls)
+	}
+}
+
+func TestRollbackExecutorReturnsUnknownWhenMutationReplayDoesNotCompleteLedger(t *testing.T) {
+	now := time.Now().UTC()
+	approved := testApprovedRollback(t, now)
+	proposal := approved.Proposal()
+
+	readCalls := 0
+	readonly := callerFunc(func(_ context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
+		readCalls++
+		switch readCalls {
+		case 1:
+			return successfulToolResult(deploymentOutput(proposal, proposal.CurrentRevision(), false, now)), nil
+		case 2:
+			return successfulToolResult(deploymentOutput(proposal, proposal.TargetRevision(), true, now)), nil
+		default:
+			if params.Name == ToolWatchRollout {
+				t.Fatal("watch_rollout should not run without durable mutation replay")
+			}
+			t.Fatalf("unexpected readonly call %d to %q", readCalls, params.Name)
+			return nil, nil
+		}
+	})
+	executeCalls := 0
+	rollback := callerFunc(func(_ context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
+		switch params.Name {
+		case ToolPrepareRollback:
+			return successfulToolResult(PrepareRollbackOutput{ProposalHash: string(proposal.Hash()), TargetRevision: string(proposal.TargetRevision())}), nil
+		case ToolExecuteApprovedRollback:
+			executeCalls++
+			return nil, context.DeadlineExceeded
+		default:
+			t.Fatalf("unexpected rollback call to %q", params.Name)
+			return nil, nil
+		}
+	})
+	executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = executor.ExecuteApprovedRollback(context.Background(), approved, "replay-unknown")
+	if !errors.Is(err, ports.ErrRollbackOutcomeUnknown) {
+		t.Fatalf("ExecuteApprovedRollback() error = %v, want unknown outcome", err)
+	}
+	if executeCalls != 2 {
+		t.Fatalf("execute calls = %d, want 2", executeCalls)
+	}
+}
+
+func TestRollbackExecutorRoutesAlreadyAppliedThroughGuardedMutation(t *testing.T) {
+	now := time.Now().UTC()
+	approved := testApprovedRollback(t, now)
+	proposal := approved.Proposal()
+	readonlyCalls := 0
+	readonly := callerFunc(func(callCtx context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
+		readonlyCalls++
+		switch readonlyCalls {
+		case 1:
+			return successfulToolResult(deploymentOutput(proposal, proposal.TargetRevision(), true, now)), nil
+		case 2:
+			if params.Name != ToolWatchRollout {
+				t.Fatalf("second readonly call = %q, want %q", params.Name, ToolWatchRollout)
+			}
+			if callCtx.Err() != nil {
+				return nil, callCtx.Err()
+			}
+			return successfulToolResult(RolloutOutput{Revision: string(proposal.TargetRevision()), DesiredReplicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1, ObservedGeneration: 2, Generation: 2, Complete: true}), nil
+		default:
+			t.Fatalf("unexpected readonly call %d to %q", readonlyCalls, params.Name)
+			return nil, nil
+		}
+	})
+	prepareCalls := 0
+	executeCalls := 0
+	rollback := callerFunc(func(_ context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
+		switch params.Name {
+		case ToolPrepareRollback:
+			prepareCalls++
+			t.Fatal("already-applied rollback should not call prepare_rollback")
+		case ToolExecuteApprovedRollback:
+			executeCalls++
+			return successfulToolResult(ExecuteRollbackOutput{ExecutionID: "mutation-already-applied", FromRevision: string(proposal.CurrentRevision()), ToRevision: string(proposal.TargetRevision()), StartedAt: now, CompletedAt: now, AlreadyApplied: true}), nil
+		default:
+			t.Fatalf("unexpected rollback call to %q", params.Name)
+		}
+		return nil, nil
+	})
+	executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	execution, err := executor.ExecuteApprovedRollback(context.Background(), approved, "already-applied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Outcome() != domain.ExecutionSucceeded || execution.ToRevision() != proposal.TargetRevision() {
+		t.Fatalf("execution = %#v", execution)
+	}
+	if prepareCalls != 0 || executeCalls != 1 {
+		t.Fatalf("prepare/execute calls = %d/%d, want 0/1", prepareCalls, executeCalls)
+	}
+}
+
+func TestNewRollbackExecutorRejectsSubSecondWatchTimeout(t *testing.T) {
+	caller := callerFunc(func(context.Context, *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
+		t.Fatal("constructor should reject before any tool call")
+		return nil, nil
+	})
+	_, err := NewRollbackExecutor(caller, caller, 500*time.Millisecond)
+	if err == nil {
+		t.Fatal("NewRollbackExecutor() error = nil, want invalid configuration")
 	}
 }
 

@@ -196,22 +196,7 @@ func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loade
 		); err != nil {
 			return s.completePendingRevalidationFailure(ctx, loaded, startedAt, err), nil
 		}
-		execution, createErr := domain.NewRollbackExecution(
-			domain.ExecutionID(c.ids.NewID("execution")),
-			loaded.proposal.IncidentID(),
-			loaded.record.Key(),
-			loaded.proposal.CurrentRevision(),
-			loaded.proposal.TargetRevision(),
-			domain.ExecutionSucceeded,
-			startedAt,
-			c.clock.Now(),
-			"",
-		)
-		if createErr != nil {
-			return executionPreparation{}, fmt.Errorf("create reconciled execution result: %w", createErr)
-		}
-		completionErr := s.completeExecution(ctx, loaded.proposal, loaded.record, execution)
-		return executionPreparation{execution: execution, executionErr: completionErr, completed: true}, nil
+		return executionPreparation{approved: resumed, record: loaded.record, startedAt: startedAt}, nil
 	}
 	approvedRollback, err := c.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, c.clock.Now())
 	if err != nil {
