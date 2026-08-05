@@ -176,7 +176,9 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	errCh := make(chan error, 2)
-	go func() { errCh <- coordinator.Run(ctx) }()
+	go func() {
+		forwardCoordinatorError(ctx, errCh, coordinator.Run(ctx))
+	}()
 	go func() {
 		logger.Info("orchestrator listening", "addr", cfg.HTTPAddr)
 		errCh <- server.ListenAndServe()
@@ -192,6 +194,13 @@ func run(logger *slog.Logger) error {
 		}
 		return err
 	}
+}
+
+func forwardCoordinatorError(ctx context.Context, errCh chan<- error, err error) {
+	if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+		return
+	}
+	errCh <- err
 }
 
 func connectMCP(ctx context.Context, endpoint string, httpClient *http.Client, tools []string) (*mcpadapter.Client, error) {

@@ -141,8 +141,8 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	a2aLeaseTTL, err := durationEnv("A2A_LEASE_TTL", a2aTaskTimeout+a2aCancelTimeout)
-	if err != nil || a2aLeaseTTL < a2aTaskTimeout {
-		return Config{}, fmt.Errorf("A2A_LEASE_TTL must be at least A2A_TASK_TIMEOUT")
+	if err != nil || a2aLeaseTTL < a2aTaskTimeout+a2aCancelTimeout {
+		return Config{}, fmt.Errorf("A2A_LEASE_TTL must be at least A2A_TASK_TIMEOUT plus A2A_CANCEL_TIMEOUT")
 	}
 	a2aMaxAttempts, err := intEnv("A2A_MAX_ATTEMPTS", 3)
 	if err != nil {

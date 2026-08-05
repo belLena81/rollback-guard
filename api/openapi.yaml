@@ -165,7 +165,7 @@ components:
         reason: { type: string }
     IncidentSummary:
       type: object
-      required: [incident, investigation]
+      required: [incident]
       additionalProperties: true
       properties:
         incident:

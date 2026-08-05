@@ -172,6 +172,35 @@ func TestDecodeRequestRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestResultFromArtifactsRequiresExactlyOneResultArtifact(t *testing.T) {
+	valid := validResultArtifact(t)
+	unexpected := &a2a.Artifact{Name: "debug-log", Parts: a2a.ContentParts{a2a.NewTextPart("ignored")}}
+	duplicate := validResultArtifact(t)
+
+	tests := []struct {
+		name      string
+		artifacts []*a2a.Artifact
+		wantErr   bool
+	}{
+		{name: "valid single result", artifacts: []*a2a.Artifact{valid}},
+		{name: "extra artifact", artifacts: []*a2a.Artifact{valid, unexpected}, wantErr: true},
+		{name: "duplicate result artifact", artifacts: []*a2a.Artifact{valid, duplicate}, wantErr: true},
+		{name: "only unexpected artifact", artifacts: []*a2a.Artifact{unexpected}, wantErr: true},
+		{name: "nil artifact", artifacts: []*a2a.Artifact{nil}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := resultFromArtifacts(test.artifacts)
+			if test.wantErr && err == nil {
+				t.Fatal("expected result artifact validation error")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("result artifact validation error = %v", err)
+			}
+		})
+	}
+}
+
 func TestAgentCardDeclaresOnlyTypedRESTInvestigation(t *testing.T) {
 	card := AgentCard("http://127.0.0.1:8094")
 	if len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0].ProtocolBinding != "HTTP+JSON" || card.SupportedInterfaces[0].URL != "http://127.0.0.1:8094/a2a" {
@@ -189,4 +218,25 @@ type investigatorFunc func(context.Context, ports.InvestigationRequest) (ports.I
 
 func (f investigatorFunc) Investigate(ctx context.Context, request ports.InvestigationRequest) (ports.InvestigationResult, error) {
 	return f(ctx, request)
+}
+
+func validResultArtifact(t *testing.T) *a2a.Artifact {
+	t.Helper()
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	target, err := domain.NewDeploymentTarget("local", "payments", "api", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := domain.DeploymentEvidence{Target: target, CurrentRevision: "rev-2", PreviousStableRevision: "rev-1", DesiredReplicas: 3, ReadyReplicas: 3, AvailableReplicas: 3, Healthy: true, RolloutAt: now.Add(-2 * time.Minute)}
+	evidence, err := domain.NewDeploymentEvidence("evidence-1", "incident-1", deployment, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conclusion, err := domain.NewInvestigationConclusion("conclusion-1", "incident-1", domain.StrategyRules, "new revision is unhealthy", 0.98, []domain.EvidenceID{"evidence-1"}, domain.RecommendRollback, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := a2a.NewDataPart(encodeResult("incident-1", ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}))
+	part.MediaType = JSONMediaType
+	return &a2a.Artifact{Name: ResultArtifactName, Parts: a2a.ContentParts{part}}
 }

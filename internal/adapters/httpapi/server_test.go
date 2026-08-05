@@ -179,6 +179,37 @@ func TestOpenAPIRejectionRequestIsStrictSingleObject(t *testing.T) {
 	}
 }
 
+func TestOpenAPIIncidentSummaryKeepsInvestigationOptional(t *testing.T) {
+	data, err := os.ReadFile("../../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(data)
+	summaryStart := strings.Index(schema, "    IncidentSummary:\n")
+	if summaryStart < 0 {
+		t.Fatal("IncidentSummary schema not found")
+	}
+	investigationStart := strings.Index(schema[summaryStart:], "    Investigation:\n")
+	if investigationStart < 0 {
+		t.Fatal("Investigation schema not found after IncidentSummary")
+	}
+	summarySchema := schema[summaryStart : summaryStart+investigationStart]
+	if !strings.Contains(summarySchema, "required: [incident]") {
+		t.Fatalf("IncidentSummary must require only incident:\n%s", summarySchema)
+	}
+	if strings.Contains(summarySchema, "required: [incident, investigation]") {
+		t.Fatalf("IncidentSummary must not require investigation:\n%s", summarySchema)
+	}
+	for _, required := range []string{
+		"investigation:",
+		"$ref: '#/components/schemas/Investigation'",
+	} {
+		if !strings.Contains(summarySchema, required) {
+			t.Fatalf("IncidentSummary missing %q:\n%s", required, summarySchema)
+		}
+	}
+}
+
 func TestStrictJSONRejectsUnknownFields(t *testing.T) {
 	handler := newTestHandler(t)
 	body := []byte(`{

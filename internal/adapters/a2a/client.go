@@ -215,12 +215,14 @@ func resultFromTask(task *a2a.Task) (ports.InvestigationResult, error) {
 	return resultFromArtifacts(task.Artifacts)
 }
 func resultFromArtifacts(artifacts []*a2a.Artifact) (ports.InvestigationResult, error) {
-	for _, artifact := range artifacts {
-		if artifact != nil && artifact.Name == ResultArtifactName {
-			return resultFromParts(artifact.Parts)
-		}
+	if len(artifacts) != 1 {
+		return ports.InvestigationResult{}, fmt.Errorf("result artifact count must be exactly one")
 	}
-	return ports.InvestigationResult{}, fmt.Errorf("result artifact is missing")
+	artifact := artifacts[0]
+	if artifact == nil || artifact.Name != ResultArtifactName {
+		return ports.InvestigationResult{}, fmt.Errorf("unexpected result artifact")
+	}
+	return resultFromParts(artifact.Parts)
 }
 func resultFromParts(parts a2a.ContentParts) (ports.InvestigationResult, error) {
 	if len(parts) != 1 || parts[0].Data() == nil || parts[0].MediaType != JSONMediaType {

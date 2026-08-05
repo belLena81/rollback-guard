@@ -138,9 +138,7 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 		return ports.RollbackMutationAttempt{}, fmt.Errorf("commit rollback mutation start: %w", err)
 	}
 	releaseOnReturn = false
-	if err := g.retainRollbackMutationLock(key, lock); err != nil {
-		return ports.RollbackMutationAttempt{}, err
-	}
+	g.retainRollbackMutationLock(key, lock)
 	return ports.RollbackMutationAttempt{Mutation: existing, Approved: approved}, nil
 }
 
@@ -202,8 +200,9 @@ func (g *RollbackMutationGuard) Release(_ context.Context, pending domain.Rollba
 }
 
 type rollbackMutationLock struct {
-	key  domain.IdempotencyKey
-	conn *pgxpool.Conn
+	key         domain.IdempotencyKey
+	conn        *pgxpool.Conn
+	releaseHook func(context.Context) error
 }
 
 func (g *RollbackMutationGuard) acquireRollbackMutationLock(ctx context.Context, key domain.IdempotencyKey) (*rollbackMutationLock, error) {
@@ -218,17 +217,14 @@ func (g *RollbackMutationGuard) acquireRollbackMutationLock(ctx context.Context,
 	return &rollbackMutationLock{key: key, conn: conn}, nil
 }
 
-func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.IdempotencyKey, lock *rollbackMutationLock) error {
+func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.IdempotencyKey, lock *rollbackMutationLock) {
 	g.mu.Lock()
 	previous := g.locks[key]
 	g.locks[key] = lock
 	g.mu.Unlock()
 	if previous != nil {
-		if err := previous.release(context.Background()); err != nil {
-			return fmt.Errorf("release replaced rollback mutation lock: %w", err)
-		}
+		_ = previous.release(context.Background())
 	}
-	return nil
 }
 
 func (g *RollbackMutationGuard) takeRollbackMutationLock(ctx context.Context, key domain.IdempotencyKey) (*rollbackMutationLock, error) {
@@ -248,6 +244,9 @@ func (g *RollbackMutationGuard) removeRollbackMutationLock(key domain.Idempotenc
 }
 
 func (l *rollbackMutationLock) release(ctx context.Context) error {
+	if l != nil && l.releaseHook != nil {
+		return l.releaseHook(ctx)
+	}
 	if l == nil || l.conn == nil {
 		return nil
 	}
