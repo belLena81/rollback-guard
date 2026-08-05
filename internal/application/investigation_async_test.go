@@ -226,6 +226,47 @@ func TestCoordinatorRejectsProgressAfterTimeoutFailure(t *testing.T) {
 	}
 }
 
+func TestCoordinatorShutdownPreservesLeasedInvestigationOnFinalAttempt(t *testing.T) {
+	services, coordinator, target, symptom, actor := asyncHarness(t)
+	gateway := &blockedWatchGateway{started: make(chan struct{})}
+	coordinator.gateway = gateway
+	coordinator.config.MaxAttempts = 1
+	coordinator.config.TaskTimeout = time.Minute
+	incident, err := services.Incidents.CreateIncidentAsync(context.Background(), CreateIncidentCommand{Target: target, Symptom: symptom, Actor: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	processed := make(chan error, 1)
+	go func() {
+		processed <- coordinator.ProcessNext(ctx)
+	}()
+	waitForSignal(t, gateway.started, "watch to start")
+	cancel()
+	if err := waitForResult(t, processed, "coordinator shutdown"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown error = %v, want context canceled", err)
+	}
+	if gateway.cancelCalls.Load() != 0 {
+		t.Fatalf("remote cancellation calls = %d, want 0", gateway.cancelCalls.Load())
+	}
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Incident.Status() != domain.StatusInvestigating {
+		t.Fatalf("incident status = %s, want investigating", summary.Incident.Status())
+	}
+	if summary.Investigation == nil {
+		t.Fatal("missing investigation dispatch")
+	}
+	if summary.Investigation.State.Terminal() || summary.Investigation.State != ports.InvestigationTaskSubmitted {
+		t.Fatalf("investigation state = %s, want submitted non-terminal", summary.Investigation.State)
+	}
+	if summary.Investigation.Ref.TaskID != "task-1" || summary.Investigation.LeaseExpiresAt.IsZero() || !summary.Investigation.CompletedAt.IsZero() || summary.Investigation.FailureCode != "" {
+		t.Fatalf("investigation after shutdown = %#v", summary.Investigation)
+	}
+}
+
 func TestInvestigationRequestHashUsesPostgresTimestampPrecision(t *testing.T) {
 	now := time.Date(2026, 8, 5, 12, 0, 0, 123456789, time.UTC)
 	target, err := domain.NewDeploymentTarget("local", "payments", "api", "api")

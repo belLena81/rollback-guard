@@ -122,6 +122,9 @@ func (c *InvestigationCoordinator) ProcessNext(ctx context.Context) error {
 		return err
 	}
 	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) && errors.Is(taskCtx.Err(), context.Canceled) {
+			return ctx.Err()
+		}
 		latest, loadErr := c.loadDispatch(ctx, dispatch.IncidentID)
 		if loadErr == nil && (latest.State == ports.InvestigationTaskCancelRequested || latest.State == ports.InvestigationTaskCanceled) {
 			return c.cancelInvestigation(ctx, latest)
@@ -163,6 +166,9 @@ func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskC
 	completed := make(chan investigationWatchResult, 1)
 	go func() {
 		result, err := c.gateway.Watch(watchCtx, ref, func(stage ports.InvestigationStage) error {
+			if err := taskCtx.Err(); err != nil {
+				return err
+			}
 			return c.recordProgress(watchCtx, dispatch.IncidentID, stage)
 		})
 		completed <- investigationWatchResult{result: result, err: err}
