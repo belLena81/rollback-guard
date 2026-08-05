@@ -3,46 +3,49 @@ package memory
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
 type data struct {
-	incidents     map[domain.IncidentID]domain.Incident
-	evidence      map[domain.IncidentID][]domain.Evidence
-	evidenceIDs   map[domain.EvidenceID]domain.IncidentID
-	conclusions   map[domain.IncidentID]domain.InvestigationConclusion
-	conclusionIDs map[domain.ConclusionID]domain.IncidentID
-	decisions     map[domain.PolicyDecisionID]domain.PolicyDecision
-	proposals     map[domain.IncidentID]domain.RollbackProposal
-	actions       map[domain.ActionID]domain.IncidentID
-	approvals     map[domain.IncidentID]domain.Approval
-	approvalIDs   map[domain.ApprovalID]domain.IncidentID
-	executions    map[domain.IncidentID]domain.RollbackExecution
-	executionIDs  map[domain.ExecutionID]domain.IncidentID
-	verifications map[domain.IncidentID]domain.RecoveryVerification
-	idempotency   map[domain.IdempotencyKey]domain.IdempotencyRecord
-	events        map[domain.IncidentID][]domain.OperationEvent
+	incidents      map[domain.IncidentID]domain.Incident
+	evidence       map[domain.IncidentID][]domain.Evidence
+	evidenceIDs    map[domain.EvidenceID]domain.IncidentID
+	conclusions    map[domain.IncidentID]domain.InvestigationConclusion
+	conclusionIDs  map[domain.ConclusionID]domain.IncidentID
+	decisions      map[domain.PolicyDecisionID]domain.PolicyDecision
+	proposals      map[domain.IncidentID]domain.RollbackProposal
+	actions        map[domain.ActionID]domain.IncidentID
+	approvals      map[domain.IncidentID]domain.Approval
+	approvalIDs    map[domain.ApprovalID]domain.IncidentID
+	executions     map[domain.IncidentID]domain.RollbackExecution
+	executionIDs   map[domain.ExecutionID]domain.IncidentID
+	verifications  map[domain.IncidentID]domain.RecoveryVerification
+	idempotency    map[domain.IdempotencyKey]domain.IdempotencyRecord
+	investigations map[domain.IncidentID]ports.InvestigationDispatch
+	events         map[domain.IncidentID][]domain.OperationEvent
 }
 
 func newData() *data {
 	return &data{
-		incidents:     map[domain.IncidentID]domain.Incident{},
-		evidence:      map[domain.IncidentID][]domain.Evidence{},
-		evidenceIDs:   map[domain.EvidenceID]domain.IncidentID{},
-		conclusions:   map[domain.IncidentID]domain.InvestigationConclusion{},
-		conclusionIDs: map[domain.ConclusionID]domain.IncidentID{},
-		decisions:     map[domain.PolicyDecisionID]domain.PolicyDecision{},
-		proposals:     map[domain.IncidentID]domain.RollbackProposal{},
-		actions:       map[domain.ActionID]domain.IncidentID{},
-		approvals:     map[domain.IncidentID]domain.Approval{},
-		approvalIDs:   map[domain.ApprovalID]domain.IncidentID{},
-		executions:    map[domain.IncidentID]domain.RollbackExecution{},
-		executionIDs:  map[domain.ExecutionID]domain.IncidentID{},
-		verifications: map[domain.IncidentID]domain.RecoveryVerification{},
-		idempotency:   map[domain.IdempotencyKey]domain.IdempotencyRecord{},
-		events:        map[domain.IncidentID][]domain.OperationEvent{},
+		incidents:      map[domain.IncidentID]domain.Incident{},
+		evidence:       map[domain.IncidentID][]domain.Evidence{},
+		evidenceIDs:    map[domain.EvidenceID]domain.IncidentID{},
+		conclusions:    map[domain.IncidentID]domain.InvestigationConclusion{},
+		conclusionIDs:  map[domain.ConclusionID]domain.IncidentID{},
+		decisions:      map[domain.PolicyDecisionID]domain.PolicyDecision{},
+		proposals:      map[domain.IncidentID]domain.RollbackProposal{},
+		actions:        map[domain.ActionID]domain.IncidentID{},
+		approvals:      map[domain.IncidentID]domain.Approval{},
+		approvalIDs:    map[domain.ApprovalID]domain.IncidentID{},
+		executions:     map[domain.IncidentID]domain.RollbackExecution{},
+		executionIDs:   map[domain.ExecutionID]domain.IncidentID{},
+		verifications:  map[domain.IncidentID]domain.RecoveryVerification{},
+		idempotency:    map[domain.IdempotencyKey]domain.IdempotencyRecord{},
+		investigations: map[domain.IncidentID]ports.InvestigationDispatch{},
+		events:         map[domain.IncidentID][]domain.OperationEvent{},
 	}
 }
 func (d *data) clone() *data {
@@ -88,6 +91,9 @@ func (d *data) clone() *data {
 	}
 	for k, v := range d.idempotency {
 		c.idempotency[k] = v
+	}
+	for k, v := range d.investigations {
+		c.investigations[k] = v
 	}
 	for k, v := range d.events {
 		c.events[k] = append([]domain.OperationEvent(nil), v...)
@@ -151,6 +157,9 @@ func (r *repositories) Verifications() ports.VerificationRepository {
 }
 func (r *repositories) Idempotency() ports.IdempotencyRepository {
 	return idempotencyRepo{r.data}
+}
+func (r *repositories) InvestigationTasks() ports.InvestigationTaskRepository {
+	return investigationTaskRepo{r.data}
 }
 func (r *repositories) Events() ports.EventRepository {
 	return eventRepo{r.data}
@@ -417,6 +426,59 @@ func (r idempotencyRepo) Update(v domain.IdempotencyRecord, expected domain.Idem
 }
 
 type eventRepo struct{ d *data }
+
+type investigationTaskRepo struct{ d *data }
+
+func (r investigationTaskRepo) Create(v ports.InvestigationDispatch) error {
+	if _, ok := r.d.incidents[v.IncidentID]; !ok {
+		return &domain.NotFoundError{Resource: "incident", ID: string(v.IncidentID)}
+	}
+	if _, exists := r.d.investigations[v.IncidentID]; exists {
+		return &domain.ValidationError{Field: "investigation.incident_id", Reason: "already exists"}
+	}
+	r.d.investigations[v.IncidentID] = v
+	return nil
+}
+
+func (r investigationTaskRepo) GetByIncident(id domain.IncidentID) (ports.InvestigationDispatch, error) {
+	v, ok := r.d.investigations[id]
+	if !ok {
+		return v, &domain.NotFoundError{Resource: "investigation", ID: string(id)}
+	}
+	return v, nil
+}
+
+func (r investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUntil time.Time) (ports.InvestigationDispatch, error) {
+	for id, task := range r.d.investigations {
+		staleActive := (task.State == ports.InvestigationTaskSubmitting || task.State == ports.InvestigationTaskSubmitted || task.State == ports.InvestigationTaskWorking) && !task.LeaseExpiresAt.After(now)
+		if task.State != ports.InvestigationTaskQueued && task.State != ports.InvestigationTaskCancelRequested && !staleActive {
+			continue
+		}
+		if task.State != ports.InvestigationTaskCancelRequested && task.Ref.TaskID == "" {
+			task.State = ports.InvestigationTaskSubmitting
+		}
+		task.LeaseOwner = owner
+		task.LeaseExpiresAt = leaseUntil
+		task.Attempts++
+		task.Version++
+		task.UpdatedAt = now
+		r.d.investigations[id] = task
+		return task, nil
+	}
+	return ports.InvestigationDispatch{}, &domain.NotFoundError{Resource: "investigation", ID: "ready"}
+}
+
+func (r investigationTaskRepo) Update(v ports.InvestigationDispatch, expected uint64) error {
+	old, ok := r.d.investigations[v.IncidentID]
+	if !ok {
+		return &domain.NotFoundError{Resource: "investigation", ID: string(v.IncidentID)}
+	}
+	if old.Version != expected || v.Version != expected+1 {
+		return &domain.VersionConflictError{Expected: expected, Actual: old.Version}
+	}
+	r.d.investigations[v.IncidentID] = v
+	return nil
+}
 
 func (r eventRepo) NextSequence(ctx context.Context, id domain.IncidentID) (uint64, error) {
 	if err := ctx.Err(); err != nil {

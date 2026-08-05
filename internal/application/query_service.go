@@ -11,12 +11,13 @@ import (
 )
 
 type IncidentSummary struct {
-	Incident     domain.Incident
-	Conclusion   *domain.InvestigationConclusion
-	Proposal     *domain.RollbackProposal
-	Approval     *domain.Approval
-	Execution    *domain.RollbackExecution
-	Verification *domain.RecoveryVerification
+	Incident      domain.Incident
+	Investigation *ports.InvestigationDispatch
+	Conclusion    *domain.InvestigationConclusion
+	Proposal      *domain.RollbackProposal
+	Approval      *domain.Approval
+	Execution     *domain.RollbackExecution
+	Verification  *domain.RecoveryVerification
 }
 
 func (s *QueryService) GetIncident(ctx context.Context, incidentID domain.IncidentID) (domain.Incident, error) {
@@ -42,6 +43,11 @@ func (s *QueryService) GetIncidentSummary(ctx context.Context, incidentID domain
 			return err
 		}
 		summary.Incident = incident
+		if investigation, err := repositories.InvestigationTasks().GetByIncident(incidentID); err == nil {
+			summary.Investigation = &investigation
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
 		if conclusion, err := repositories.Conclusions().Get(incidentID); err == nil {
 			summary.Conclusion = &conclusion
 		} else if !errors.Is(err, domain.ErrNotFound) {

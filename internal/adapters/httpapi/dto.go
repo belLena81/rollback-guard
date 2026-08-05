@@ -5,6 +5,7 @@ import (
 
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
 type targetDTO struct {
@@ -109,16 +110,34 @@ type verificationDTO struct {
 }
 
 type incidentSummaryDTO struct {
-	Incident     incidentDTO      `json:"incident"`
-	Conclusion   *conclusionDTO   `json:"conclusion,omitempty"`
-	Proposal     *proposalDTO     `json:"proposal,omitempty"`
-	Approval     *approvalDTO     `json:"approval,omitempty"`
-	Execution    *executionDTO    `json:"execution,omitempty"`
-	Verification *verificationDTO `json:"verification,omitempty"`
+	Incident      incidentDTO       `json:"incident"`
+	Investigation *investigationDTO `json:"investigation,omitempty"`
+	Conclusion    *conclusionDTO    `json:"conclusion,omitempty"`
+	Proposal      *proposalDTO      `json:"proposal,omitempty"`
+	Approval      *approvalDTO      `json:"approval,omitempty"`
+	Execution     *executionDTO     `json:"execution,omitempty"`
+	Verification  *verificationDTO  `json:"verification,omitempty"`
+}
+
+type investigationDTO struct {
+	OperationID string     `json:"operationId"`
+	TaskID      string     `json:"taskId,omitempty"`
+	ContextID   string     `json:"contextId,omitempty"`
+	State       string     `json:"state"`
+	Stage       string     `json:"stage"`
+	Attempts    int        `json:"attempts"`
+	FailureCode string     `json:"failureCode,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
 func summaryResponse(summary application.IncidentSummary) incidentSummaryDTO {
 	response := incidentSummaryDTO{Incident: incidentResponse(summary.Incident)}
+	if summary.Investigation != nil {
+		value := investigationResponse(*summary.Investigation)
+		response.Investigation = &value
+	}
 	if summary.Conclusion != nil {
 		value := conclusionResponse(*summary.Conclusion)
 		response.Conclusion = &value
@@ -138,6 +157,15 @@ func summaryResponse(summary application.IncidentSummary) incidentSummaryDTO {
 	if summary.Verification != nil {
 		value := verificationResponse(*summary.Verification)
 		response.Verification = &value
+	}
+	return response
+}
+
+func investigationResponse(dispatch ports.InvestigationDispatch) investigationDTO {
+	response := investigationDTO{OperationID: dispatch.OperationID, TaskID: dispatch.Ref.TaskID, ContextID: dispatch.Ref.ContextID, State: dispatch.State.String(), Stage: dispatch.Stage.String(), Attempts: dispatch.Attempts, FailureCode: dispatch.FailureCode, CreatedAt: dispatch.CreatedAt, UpdatedAt: dispatch.UpdatedAt}
+	if !dispatch.CompletedAt.IsZero() {
+		value := dispatch.CompletedAt
+		response.CompletedAt = &value
 	}
 	return response
 }

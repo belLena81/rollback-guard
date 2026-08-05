@@ -32,6 +32,28 @@ type Config struct {
 	MCPCallTimeout        time.Duration
 	MCPWatchTimeout       time.Duration
 	MetricsWindow         time.Duration
+	InvestigatorURL       string
+	A2ATaskTimeout        time.Duration
+	A2ACancelTimeout      time.Duration
+	A2APollInterval       time.Duration
+	A2ALeaseTTL           time.Duration
+	A2AWorkerID           string
+	A2AMaxAttempts        int
+}
+
+type InvestigatorConfig struct {
+	HTTPAddr              string
+	PublicURL             string
+	DatabaseURL           string
+	DBMaxConns            int32
+	DBPingTimeout         time.Duration
+	KubernetesReadMCPURL  string
+	ObservabilityMCPURL   string
+	MCPConnectTimeout     time.Duration
+	MCPCallTimeout        time.Duration
+	TaskTimeout           time.Duration
+	MetricsWindow         time.Duration
+	RuleCorrelationWindow time.Duration
 }
 
 type KubernetesMCPConfig struct {
@@ -106,6 +128,26 @@ func Load() (Config, error) {
 	if err != nil || metricsWindow < 30*time.Second || metricsWindow > time.Hour {
 		return Config{}, fmt.Errorf("METRICS_WINDOW must be between 30s and 1h")
 	}
+	a2aTaskTimeout, err := durationEnv("A2A_TASK_TIMEOUT", 45*time.Second)
+	if err != nil || a2aTaskTimeout > 2*time.Minute {
+		return Config{}, fmt.Errorf("A2A_TASK_TIMEOUT must be positive and no greater than 2m")
+	}
+	a2aCancelTimeout, err := durationEnv("A2A_CANCEL_TIMEOUT", 5*time.Second)
+	if err != nil || a2aCancelTimeout > 30*time.Second {
+		return Config{}, fmt.Errorf("A2A_CANCEL_TIMEOUT must be positive and no greater than 30s")
+	}
+	a2aPollInterval, err := durationEnv("A2A_POLL_INTERVAL", 250*time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
+	a2aLeaseTTL, err := durationEnv("A2A_LEASE_TTL", a2aTaskTimeout+a2aCancelTimeout)
+	if err != nil || a2aLeaseTTL < a2aTaskTimeout {
+		return Config{}, fmt.Errorf("A2A_LEASE_TTL must be at least A2A_TASK_TIMEOUT")
+	}
+	a2aMaxAttempts, err := intEnv("A2A_MAX_ATTEMPTS", 3)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		HTTPAddr:              stringEnv("HTTP_ADDR", ":8080"),
 		DatabaseURL:           os.Getenv("DATABASE_URL"),
@@ -126,11 +168,54 @@ func Load() (Config, error) {
 		MCPCallTimeout:        mcpCallTimeout,
 		MCPWatchTimeout:       mcpWatchTimeout,
 		MetricsWindow:         metricsWindow,
+		InvestigatorURL:       stringEnv("INVESTIGATOR_URL", "http://127.0.0.1:8094"),
+		A2ATaskTimeout:        a2aTaskTimeout,
+		A2ACancelTimeout:      a2aCancelTimeout,
+		A2APollInterval:       a2aPollInterval,
+		A2ALeaseTTL:           a2aLeaseTTL,
+		A2AWorkerID:           stringEnv("A2A_WORKER_ID", "orchestrator-1"),
+		A2AMaxAttempts:        a2aMaxAttempts,
 	}
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
 	return cfg, nil
+}
+
+func LoadInvestigator() (InvestigatorConfig, error) {
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		return InvestigatorConfig{}, fmt.Errorf("DATABASE_URL is required")
+	}
+	maxConns, err := intEnv("DB_MAX_CONNS", 4)
+	if err != nil {
+		return InvestigatorConfig{}, err
+	}
+	dbPingTimeout, err := durationEnv("DB_PING_TIMEOUT", 2*time.Second)
+	if err != nil {
+		return InvestigatorConfig{}, err
+	}
+	connectTimeout, err := durationEnv("MCP_CONNECT_TIMEOUT", 5*time.Second)
+	if err != nil || connectTimeout > 30*time.Second {
+		return InvestigatorConfig{}, fmt.Errorf("MCP_CONNECT_TIMEOUT must be positive and no greater than 30s")
+	}
+	callTimeout, err := durationEnv("MCP_CALL_TIMEOUT", 10*time.Second)
+	if err != nil || callTimeout > 30*time.Second {
+		return InvestigatorConfig{}, fmt.Errorf("MCP_CALL_TIMEOUT must be positive and no greater than 30s")
+	}
+	taskTimeout, err := durationEnv("A2A_TASK_TIMEOUT", 45*time.Second)
+	if err != nil || taskTimeout > 2*time.Minute {
+		return InvestigatorConfig{}, fmt.Errorf("A2A_TASK_TIMEOUT must be positive and no greater than 2m")
+	}
+	metricsWindow, err := durationEnv("METRICS_WINDOW", 5*time.Minute)
+	if err != nil || metricsWindow < 30*time.Second || metricsWindow > time.Hour {
+		return InvestigatorConfig{}, fmt.Errorf("METRICS_WINDOW must be between 30s and 1h")
+	}
+	ruleWindow, err := durationEnv("RULE_CORRELATION_WINDOW", 10*time.Minute)
+	if err != nil {
+		return InvestigatorConfig{}, err
+	}
+	return InvestigatorConfig{HTTPAddr: stringEnv("HTTP_ADDR", "127.0.0.1:8094"), PublicURL: stringEnv("INVESTIGATOR_PUBLIC_URL", "http://127.0.0.1:8094"), DatabaseURL: databaseURL, DBMaxConns: int32(maxConns), DBPingTimeout: dbPingTimeout, KubernetesReadMCPURL: stringEnv("KUBERNETES_READ_MCP_URL", "http://127.0.0.1:8091/mcp"), ObservabilityMCPURL: stringEnv("OBSERVABILITY_MCP_URL", "http://127.0.0.1:8093/mcp"), MCPConnectTimeout: connectTimeout, MCPCallTimeout: callTimeout, TaskTimeout: taskTimeout, MetricsWindow: metricsWindow, RuleCorrelationWindow: ruleWindow}, nil
 }
 
 func LoadKubernetesMCP() (KubernetesMCPConfig, error) {

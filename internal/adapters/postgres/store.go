@@ -82,6 +82,10 @@ func (r *repositories) Idempotency() ports.IdempotencyRepository {
 	return idempotencyRepo{r}
 }
 
+func (r *repositories) InvestigationTasks() ports.InvestigationTaskRepository {
+	return investigationTaskRepo{r}
+}
+
 func (r *repositories) Events() ports.EventRepository {
 	return eventRepo{r}
 }

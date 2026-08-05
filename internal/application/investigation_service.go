@@ -2,8 +2,11 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
@@ -34,6 +37,45 @@ func (s *IncidentService) CreateIncident(ctx context.Context, command CreateInci
 	return incident, nil
 }
 
+func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command CreateIncidentCommand) (domain.Incident, error) {
+	c := s.workflow
+	now := c.clock.Now()
+	incident, err := domain.NewIncident(domain.IncidentID(c.ids.NewID("incident")), command.Target, command.Symptom, now)
+	if err != nil {
+		return domain.Incident{}, err
+	}
+	if err := incident.StartInvestigation(now); err != nil {
+		return domain.Incident{}, err
+	}
+	dispatch := ports.InvestigationDispatch{
+		IncidentID: incident.ID(), OperationID: c.ids.NewID("operation"), MessageID: c.ids.NewID("message"), TraceID: c.ids.NewID("trace"),
+		IdempotencyKey: "investigation:" + string(incident.ID()), RequestHash: investigationRequestHash(incident),
+		State: ports.InvestigationTaskQueued, Stage: ports.InvestigationStageQueued, Version: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	err = c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+		if err := repositories.Incidents().Create(incident); err != nil {
+			return err
+		}
+		if err := repositories.InvestigationTasks().Create(dispatch); err != nil {
+			return err
+		}
+		if err := c.appendEvent(ctx, repositories, incident.ID(), domain.EventIncidentCreated, command.Actor, domain.IncidentCreatedDetail{Target: command.Target}, now); err != nil {
+			return err
+		}
+		return c.appendEvent(ctx, repositories, incident.ID(), domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusCreated, To: domain.StatusInvestigating}, now)
+	})
+	if err != nil {
+		return domain.Incident{}, fmt.Errorf("create asynchronous incident transaction: %w", err)
+	}
+	return incident, nil
+}
+
+func investigationRequestHash(incident domain.Incident) string {
+	s := incident.Snapshot()
+	canonical := string(s.ID) + "\x00" + strconv.FormatUint(s.Version, 10) + "\x00" + s.Target.Cluster() + "\x00" + s.Target.Namespace() + "\x00" + s.Target.Deployment() + "\x00" + s.Target.Service() + "\x00" + s.Symptom.Kind() + "\x00" + strconv.FormatFloat(s.Symptom.Observed(), 'g', -1, 64) + "\x00" + strconv.FormatFloat(s.Symptom.Threshold(), 'g', -1, 64) + "\x00" + s.Symptom.Unit() + "\x00" + s.Symptom.StartedAt().UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(canonical)))
+}
+
 func (s *InvestigationService) Investigate(ctx context.Context, incidentID domain.IncidentID) (domain.Incident, error) {
 	c := s.workflow
 	incident, err := c.beginOrResumeInvestigation(ctx, incidentID)
@@ -41,30 +83,30 @@ func (s *InvestigationService) Investigate(ctx context.Context, incidentID domai
 		return domain.Incident{}, err
 	}
 
-	deployment, err := c.inspector.InspectDeployment(ctx, incident.Target())
+	result, err := c.investigator.Investigate(ctx, ports.InvestigationRequest{Incident: incident})
 	if err != nil {
-		return domain.Incident{}, c.failAfterExternalError(ctx, incidentID, fmt.Errorf("inspect deployment: %w", err))
+		return domain.Incident{}, c.failAfterExternalError(ctx, incidentID, err)
 	}
-	if !deployment.Target.Equal(incident.Target()) {
-		return domain.Incident{}, c.failAfterExternalError(ctx, incidentID, fmt.Errorf("deployment inspection returned a different target"))
-	}
-	metric, err := c.metrics.Observe(ctx, incident.Target(), incident.Symptom())
+	return s.complete(ctx, incident, result)
+}
+
+func (s *InvestigationService) Complete(ctx context.Context, incidentID domain.IncidentID, result ports.InvestigationResult) (domain.Incident, error) {
+	incident, err := s.workflow.loadInvestigatingIncident(ctx, incidentID)
 	if err != nil {
-		return domain.Incident{}, c.failAfterExternalError(ctx, incidentID, fmt.Errorf("observe metric: %w", err))
+		return domain.Incident{}, err
 	}
+	return s.complete(ctx, incident, result)
+}
+
+func (s *InvestigationService) complete(ctx context.Context, incident domain.Incident, result ports.InvestigationResult) (domain.Incident, error) {
+	c := s.workflow
+	incidentID := incident.ID()
 	now := c.clock.Now()
-	deploymentEvidence, err := domain.NewDeploymentEvidence(domain.EvidenceID(c.ids.NewID("evidence")), incidentID, deployment, now)
-	if err != nil {
-		return domain.Incident{}, c.failAfterExternalError(ctx, incidentID, err)
-	}
-	metricEvidence, err := domain.NewMetricEvidence(domain.EvidenceID(c.ids.NewID("evidence")), incidentID, metric, now)
-	if err != nil {
-		return domain.Incident{}, c.failAfterExternalError(ctx, incidentID, err)
-	}
-	evidence := []domain.Evidence{deploymentEvidence, metricEvidence}
-	conclusion, err := c.diagnoser.Diagnose(ctx, ports.InvestigationInput{Incident: incident, Deployment: deployment, Metric: metric, Evidence: evidence, Now: now})
-	if err != nil {
-		return domain.Incident{}, c.failAfterExternalError(ctx, incidentID, fmt.Errorf("diagnose incident: %w", err))
+	deployment := result.Deployment
+	evidence := result.Evidence
+	conclusion := result.Conclusion
+	if !deployment.Target.Equal(incident.Target()) {
+		return domain.Incident{}, c.failAfterExternalError(ctx, incidentID, &domain.ValidationError{Field: "investigation.deployment.target", Reason: "must match incident target"})
 	}
 	if err := validateEvidenceReferences(incidentID, conclusion, evidence); err != nil {
 		return domain.Incident{}, c.failAfterExternalError(ctx, incidentID, err)
@@ -112,6 +154,9 @@ func (s *InvestigationService) Investigate(ctx context.Context, incidentID domai
 				return err
 			}
 			incident = fresh
+			if err := c.completeInvestigationDispatch(repositories, incidentID, now); err != nil {
+				return err
+			}
 			return c.appendEvent(ctx, repositories, incidentID, domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusInvestigating, To: domain.StatusDeclined}, now)
 		}
 
@@ -140,10 +185,91 @@ func (s *InvestigationService) Investigate(ctx context.Context, incidentID domai
 			return err
 		}
 		incident = fresh
+		if err := c.completeInvestigationDispatch(repositories, incidentID, now); err != nil {
+			return err
+		}
 		return c.appendEvent(ctx, repositories, incidentID, domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusInvestigating, To: domain.StatusAwaitingApproval}, now)
 	})
 	if err != nil {
 		return domain.Incident{}, fmt.Errorf("persist investigation: %w", err)
+	}
+	return incident, nil
+}
+
+func (c *workflow) completeInvestigationDispatch(repositories ports.Repositories, incidentID domain.IncidentID, now time.Time) error {
+	dispatch, err := repositories.InvestigationTasks().GetByIncident(incidentID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	expected := dispatch.Version
+	dispatch.State = ports.InvestigationTaskCompleted
+	dispatch.Stage = ports.InvestigationStageFinalizing
+	dispatch.CompletedAt = now
+	dispatch.LeaseOwner = ""
+	dispatch.LeaseExpiresAt = time.Time{}
+	dispatch.Version++
+	dispatch.UpdatedAt = now
+	return repositories.InvestigationTasks().Update(dispatch, expected)
+}
+
+func (s *InvestigationService) Fail(ctx context.Context, incidentID domain.IncidentID, code string) error {
+	c := s.workflow
+	now := c.clock.Now()
+	return c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+		incident, err := repositories.Incidents().Get(incidentID)
+		if err != nil {
+			return err
+		}
+		if incident.Status() == domain.StatusCanceled {
+			return nil
+		}
+		alreadyFailed := incident.Status() == domain.StatusFailed
+		if !alreadyFailed {
+			expectedIncidentVersion := incident.Version()
+			if err := incident.Fail(now); err != nil {
+				return err
+			}
+			if err := repositories.Incidents().Update(incident, expectedIncidentVersion); err != nil {
+				return err
+			}
+		}
+		dispatch, err := repositories.InvestigationTasks().GetByIncident(incidentID)
+		if err != nil {
+			return err
+		}
+		expectedDispatchVersion := dispatch.Version
+		dispatch.State = ports.InvestigationTaskFailed
+		dispatch.FailureCode = code
+		dispatch.CompletedAt = now
+		dispatch.LeaseOwner = ""
+		dispatch.LeaseExpiresAt = time.Time{}
+		dispatch.Version++
+		dispatch.UpdatedAt = now
+		if err := repositories.InvestigationTasks().Update(dispatch, expectedDispatchVersion); err != nil {
+			return err
+		}
+		if alreadyFailed {
+			return nil
+		}
+		return c.appendEvent(ctx, repositories, incidentID, domain.EventIncidentFailed, c.systemActor, domain.TerminalDetail{Reason: code}, now)
+	})
+}
+
+func (c *workflow) loadInvestigatingIncident(ctx context.Context, incidentID domain.IncidentID) (domain.Incident, error) {
+	var incident domain.Incident
+	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+		var err error
+		incident, err = repositories.Incidents().Get(incidentID)
+		return err
+	})
+	if err != nil {
+		return domain.Incident{}, fmt.Errorf("load investigating incident: %w", err)
+	}
+	if incident.Status() != domain.StatusInvestigating {
+		return domain.Incident{}, &domain.IllegalTransitionError{From: incident.Status(), To: domain.StatusAwaitingApproval}
 	}
 	return incident, nil
 }
@@ -191,6 +317,11 @@ func validateEvidenceReferences(incidentID domain.IncidentID, conclusion domain.
 		}
 		if !found {
 			return &domain.EvidenceReferenceError{EvidenceID: reference}
+		}
+	}
+	for _, item := range evidence {
+		if item.IncidentID() != incidentID {
+			return &domain.ValidationError{Field: "evidence.incident_id", Reason: "must match investigated incident"}
 		}
 	}
 	return nil

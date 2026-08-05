@@ -13,8 +13,12 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateIncidentRequest'
       responses:
-        '201':
-          description: Incident created and investigated
+        '202':
+          description: Incident accepted and queued for asynchronous investigation
+          headers:
+            Location:
+              description: Canonical incident summary URL
+              schema: { type: string }
           content:
             application/json:
               schema:
@@ -161,8 +165,29 @@ components:
         reason: { type: string }
     IncidentSummary:
       type: object
-      required: [incident]
+      required: [incident, investigation]
       additionalProperties: true
       properties:
         incident:
           type: object
+        investigation:
+          $ref: '#/components/schemas/Investigation'
+    Investigation:
+      type: object
+      required: [operationId, state, stage, attempts, createdAt, updatedAt]
+      additionalProperties: false
+      properties:
+        operationId: { type: string }
+        taskId: { type: string }
+        contextId: { type: string }
+        state:
+          type: string
+          enum: [queued, submitting, submitted, working, cancel_requested, completed, failed, canceled]
+        stage:
+          type: string
+          enum: [queued, deployment, metrics, diagnosis, finalizing]
+        attempts: { type: integer, minimum: 0 }
+        failureCode: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }

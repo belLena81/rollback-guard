@@ -26,6 +26,123 @@ type InvestigationInput struct {
 type Diagnoser interface {
 	Diagnose(context.Context, InvestigationInput) (domain.InvestigationConclusion, error)
 }
+type InvestigationRequest struct {
+	Incident       domain.Incident
+	OperationID    string
+	IdempotencyKey string
+	RequestHash    string
+	TaskID         string
+	TraceID        string
+	Progress       func(InvestigationStage) error
+}
+type InvestigationResult struct {
+	Deployment domain.DeploymentEvidence
+	Evidence   []domain.Evidence
+	Conclusion domain.InvestigationConclusion
+}
+type Investigator interface {
+	Investigate(context.Context, InvestigationRequest) (InvestigationResult, error)
+}
+
+type InvestigationTaskState uint8
+
+const (
+	InvestigationTaskQueued InvestigationTaskState = iota + 1
+	InvestigationTaskSubmitting
+	InvestigationTaskSubmitted
+	InvestigationTaskWorking
+	InvestigationTaskCancelRequested
+	InvestigationTaskCompleted
+	InvestigationTaskFailed
+	InvestigationTaskCanceled
+)
+
+func (s InvestigationTaskState) String() string {
+	names := [...]string{"unknown", "queued", "submitting", "submitted", "working", "cancel_requested", "completed", "failed", "canceled"}
+	if int(s) >= len(names) {
+		return names[0]
+	}
+	return names[s]
+}
+
+func (s InvestigationTaskState) Valid() bool {
+	return s >= InvestigationTaskQueued && s <= InvestigationTaskCanceled
+}
+
+func (s InvestigationTaskState) Terminal() bool {
+	return s == InvestigationTaskCompleted || s == InvestigationTaskFailed || s == InvestigationTaskCanceled
+}
+
+type InvestigationStage uint8
+
+const (
+	InvestigationStageQueued InvestigationStage = iota + 1
+	InvestigationStageDeployment
+	InvestigationStageMetrics
+	InvestigationStageDiagnosis
+	InvestigationStageFinalizing
+)
+
+func (s InvestigationStage) String() string {
+	names := [...]string{"unknown", "queued", "deployment", "metrics", "diagnosis", "finalizing"}
+	if int(s) >= len(names) {
+		return names[0]
+	}
+	return names[s]
+}
+
+func (s InvestigationStage) Valid() bool {
+	return s >= InvestigationStageQueued && s <= InvestigationStageFinalizing
+}
+
+type InvestigationTaskRef struct {
+	TaskID    string
+	ContextID string
+}
+
+type InvestigationDispatch struct {
+	IncidentID     domain.IncidentID
+	OperationID    string
+	IdempotencyKey string
+	MessageID      string
+	TraceID        string
+	RequestHash    string
+	Ref            InvestigationTaskRef
+	State          InvestigationTaskState
+	Stage          InvestigationStage
+	Attempts       int
+	LeaseOwner     string
+	LeaseExpiresAt time.Time
+	FailureCode    string
+	Version        uint64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	CompletedAt    time.Time
+}
+
+type InvestigationSubmission struct {
+	Incident       domain.Incident
+	OperationID    string
+	IdempotencyKey string
+	MessageID      string
+	TraceID        string
+	RequestHash    string
+}
+
+type InvestigationTaskSnapshot struct {
+	Ref         InvestigationTaskRef
+	State       InvestigationTaskState
+	Stage       InvestigationStage
+	Result      *InvestigationResult
+	FailureCode string
+}
+
+type InvestigationGateway interface {
+	Submit(context.Context, InvestigationSubmission) (InvestigationTaskRef, error)
+	Watch(context.Context, InvestigationTaskRef, func(InvestigationStage) error) (InvestigationResult, error)
+	Get(context.Context, InvestigationTaskRef) (InvestigationTaskSnapshot, error)
+	Cancel(context.Context, InvestigationTaskRef) error
+}
 type RollbackExecutor interface {
 	// ExecuteApprovedRollback must atomically validate the target identity and
 	// current revision immediately before applying the approved mutation.
@@ -89,6 +206,12 @@ type IdempotencyRepository interface {
 	Create(domain.IdempotencyRecord) error
 	Update(domain.IdempotencyRecord, domain.IdempotencyState) error
 }
+type InvestigationTaskRepository interface {
+	Create(InvestigationDispatch) error
+	GetByIncident(domain.IncidentID) (InvestigationDispatch, error)
+	ClaimNext(time.Time, string, time.Time) (InvestigationDispatch, error)
+	Update(InvestigationDispatch, uint64) error
+}
 type EventRepository interface {
 	NextSequence(context.Context, domain.IncidentID) (uint64, error)
 	Append(domain.OperationEvent) error
@@ -104,6 +227,7 @@ type Repositories interface {
 	Executions() ExecutionRepository
 	Verifications() VerificationRepository
 	Idempotency() IdempotencyRepository
+	InvestigationTasks() InvestigationTaskRepository
 	Events() EventRepository
 }
 type UnitOfWork interface {

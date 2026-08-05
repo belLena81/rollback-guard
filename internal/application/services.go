@@ -31,7 +31,7 @@ type workflow struct {
 	uow            ports.UnitOfWork
 	inspector      ports.DeploymentInspector
 	metrics        ports.MetricsPort
-	diagnoser      ports.Diagnoser
+	investigator   ports.Investigator
 	executor       ports.RollbackExecutor
 	rollbackPolicy ports.RollbackPolicy
 	approvalPolicy ports.ApprovalPolicy
@@ -74,9 +74,13 @@ func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, er
 	if err := config.validate(); err != nil {
 		return Services{}, fmt.Errorf("validate workflow config: %w", err)
 	}
+	investigator, err := NewInvestigationRunner(dependencies.Inspector, dependencies.Metrics, dependencies.Diagnoser, dependencies.Clock, dependencies.IDGenerator)
+	if err != nil {
+		return Services{}, err
+	}
 	w := &workflow{
 		uow: dependencies.UnitOfWork, inspector: dependencies.Inspector, metrics: dependencies.Metrics,
-		diagnoser: dependencies.Diagnoser, executor: dependencies.Executor, rollbackPolicy: dependencies.RollbackPolicy,
+		investigator: investigator, executor: dependencies.Executor, rollbackPolicy: dependencies.RollbackPolicy,
 		approvalPolicy: dependencies.ApprovalPolicy, clock: dependencies.Clock, ids: dependencies.IDGenerator,
 		config: config, systemActor: config.SystemActor,
 	}

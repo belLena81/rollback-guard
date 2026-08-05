@@ -138,7 +138,9 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 		return ports.RollbackMutationAttempt{}, fmt.Errorf("commit rollback mutation start: %w", err)
 	}
 	releaseOnReturn = false
-	g.retainRollbackMutationLock(key, lock)
+	if err := g.retainRollbackMutationLock(key, lock); err != nil {
+		return ports.RollbackMutationAttempt{}, err
+	}
 	return ports.RollbackMutationAttempt{Mutation: existing, Approved: approved}, nil
 }
 
@@ -216,14 +218,17 @@ func (g *RollbackMutationGuard) acquireRollbackMutationLock(ctx context.Context,
 	return &rollbackMutationLock{key: key, conn: conn}, nil
 }
 
-func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.IdempotencyKey, lock *rollbackMutationLock) {
+func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.IdempotencyKey, lock *rollbackMutationLock) error {
 	g.mu.Lock()
 	previous := g.locks[key]
 	g.locks[key] = lock
 	g.mu.Unlock()
 	if previous != nil {
-		_ = previous.release(context.Background())
+		if err := previous.release(context.Background()); err != nil {
+			return fmt.Errorf("release replaced rollback mutation lock: %w", err)
+		}
 	}
+	return nil
 }
 
 func (g *RollbackMutationGuard) takeRollbackMutationLock(ctx context.Context, key domain.IdempotencyKey) (*rollbackMutationLock, error) {

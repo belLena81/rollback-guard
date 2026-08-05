@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	a2aadapter "github.com/belLena81/rollback-guard/internal/adapters/a2a"
 	"github.com/belLena81/rollback-guard/internal/adapters/diagnosis"
 	"github.com/belLena81/rollback-guard/internal/adapters/httpapi"
 	mcpadapter "github.com/belLena81/rollback-guard/internal/adapters/mcp"
@@ -133,6 +134,22 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	a2aHTTPClient := &http.Client{Timeout: cfg.A2ATaskTimeout + cfg.A2ACancelTimeout}
+	a2aConnectCtx, cancelA2AConnect := context.WithTimeout(context.Background(), cfg.MCPConnectTimeout)
+	defer cancelA2AConnect()
+	a2aGateway, err := a2aadapter.NewGateway(a2aConnectCtx, cfg.InvestigatorURL, a2aHTTPClient)
+	if err != nil {
+		return fmt.Errorf("connect investigator A2A agent: %w", err)
+	}
+	defer func() {
+		if err := a2aGateway.Close(); err != nil {
+			logger.Warn("close investigator A2A client", "error", err)
+		}
+	}()
+	coordinator, err := application.NewInvestigationCoordinator(uow, a2aGateway, services.Investigations, clock, application.InvestigationCoordinatorConfig{WorkerID: cfg.A2AWorkerID, TaskTimeout: cfg.A2ATaskTimeout, CancelTimeout: cfg.A2ACancelTimeout, PollInterval: cfg.A2APollInterval, LeaseTTL: cfg.A2ALeaseTTL, MaxAttempts: cfg.A2AMaxAttempts, ReportError: func(err error) { logger.Error("investigation coordinator iteration failed", "error", err) }})
+	if err != nil {
+		return err
+	}
 	auth, err := httpserver.NewLocalAuthMiddleware(localActor)
 	if err != nil {
 		return err
@@ -158,7 +175,8 @@ func run(logger *slog.Logger) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	go func() { errCh <- coordinator.Run(ctx) }()
 	go func() {
 		logger.Info("orchestrator listening", "addr", cfg.HTTPAddr)
 		errCh <- server.ListenAndServe()

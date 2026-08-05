@@ -125,12 +125,8 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	incident, err := s.services.Incidents.CreateIncident(r.Context(), application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: actor})
+	incident, err := s.services.Incidents.CreateIncidentAsync(r.Context(), application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: actor})
 	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	if _, err := s.services.Investigations.Investigate(r.Context(), incident.ID()); err != nil {
 		writeError(w, r, err)
 		return
 	}
@@ -139,7 +135,8 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, summaryResponse(summary))
+	w.Header().Set("Location", "/v1/incidents/"+string(incident.ID()))
+	writeJSON(w, http.StatusAccepted, summaryResponse(summary))
 }
 
 func (s *Server) getIncident(w http.ResponseWriter, r *http.Request) {

@@ -87,6 +87,39 @@ func TestHTTPWorkflowCreatesApprovesExecutesAndVerifies(t *testing.T) {
 	}
 }
 
+func TestHTTPCreateReturnsAcceptedQueuedInvestigation(t *testing.T) {
+	server := newTestServer(t, nil)
+	actor, err := domain.NewActor("local-admin", domain.ActorHuman)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := httpserver.NewLocalAuthMiddleware(actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Routes(nil, 0, auth)
+	body := []byte(`{
+		"target":{"cluster":"local","namespace":"demo","deployment":"demo-api","service":"demo-api"},
+		"symptom":{"kind":"http_error_rate","observed":0.35,"threshold":0.10,"unit":"ratio","startedAt":"2026-08-03T10:00:00Z"}
+	}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/incidents", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d body = %s", response.Code, response.Body.String())
+	}
+	var created incidentSummaryDTO
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Incident.Status != "investigating" || created.Investigation == nil || created.Investigation.State != "queued" || created.Proposal != nil {
+		t.Fatalf("created summary = %+v", created)
+	}
+	if response.Header().Get("Location") != "/v1/incidents/"+created.Incident.ID {
+		t.Fatalf("Location = %q", response.Header().Get("Location"))
+	}
+}
+
 func TestHTTPApproveReturnsCommittedExecutionFailureSummary(t *testing.T) {
 	handler := newTestHandlerWithInfrastructure(t, func(infrastructure *fake.Infrastructure) {
 		infrastructure.ExecuteErr = errors.New("mcp rollback failed")
@@ -231,7 +264,56 @@ func newTestHandlerWithInfrastructure(t *testing.T, configure func(*fake.Infrast
 	if err != nil {
 		t.Fatal(err)
 	}
-	return server.Routes(nil, 0, auth)
+	return synchronousInvestigationHandler{next: server.Routes(nil, 0, auth), server: server}
+}
+
+type synchronousInvestigationHandler struct {
+	next   http.Handler
+	server *Server
+}
+
+func (h synchronousInvestigationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || r.URL.Path != "/v1/incidents" {
+		h.next.ServeHTTP(w, r)
+		return
+	}
+	recorder := httptest.NewRecorder()
+	h.next.ServeHTTP(recorder, r)
+	if recorder.Code != http.StatusAccepted {
+		copyRecordedResponse(w, recorder)
+		return
+	}
+	var accepted incidentSummaryDTO
+	if err := json.Unmarshal(recorder.Body.Bytes(), &accepted); err != nil {
+		copyRecordedResponse(w, recorder)
+		return
+	}
+	if _, err := h.server.services.Investigations.Investigate(r.Context(), domain.IncidentID(accepted.Incident.ID)); err != nil {
+		copyRecordedResponse(w, recorder)
+		return
+	}
+	summary, err := h.server.services.Queries.GetIncidentSummary(r.Context(), domain.IncidentID(accepted.Incident.ID))
+	if err != nil {
+		copyRecordedResponse(w, recorder)
+		return
+	}
+	for key, values := range recorder.Header() {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	writeJSON(w, http.StatusCreated, summaryResponse(summary))
+}
+func copyRecordedResponse(w http.ResponseWriter, recorder *httptest.ResponseRecorder) {
+	for key, values := range recorder.Header() {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.WriteHeader(recorder.Code)
+	if _, err := w.Write(recorder.Body.Bytes()); err != nil {
+		return
+	}
 }
 
 func newUnauthenticatedTestHandler(t *testing.T) http.Handler {

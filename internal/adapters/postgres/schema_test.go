@@ -116,6 +116,19 @@ func TestRollbackMutationMigrationPersistsTrustedIdempotencyBinding(t *testing.T
 	}
 }
 
+func TestA2AMigrationPersistsDispatchTasksAndIdempotency(t *testing.T) {
+	data, err := os.ReadFile("../../../migrations/000003_a2a_investigation.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(data)
+	for _, required := range []string{"CREATE TYPE investigation_task_state AS ENUM", "CREATE TABLE investigation_dispatches", "idempotency_key text NOT NULL UNIQUE", "CREATE TABLE a2a_tasks", "snapshot jsonb NOT NULL", "CREATE TABLE a2a_investigation_requests", "request_hash text NOT NULL", "task_id text NOT NULL UNIQUE"} {
+		if !strings.Contains(schema, required) {
+			t.Fatalf("A2A migration missing %q", required)
+		}
+	}
+}
+
 func readInitialSchema(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile("../../../migrations/000001_initial_schema.up.sql")

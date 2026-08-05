@@ -430,6 +430,25 @@ func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentComm
 		if err := repositories.Incidents().Update(incident, expected); err != nil {
 			return err
 		}
+		dispatch, dispatchErr := repositories.InvestigationTasks().GetByIncident(command.IncidentID)
+		if dispatchErr == nil && !dispatch.State.Terminal() {
+			expectedDispatchVersion := dispatch.Version
+			if dispatch.Ref.TaskID == "" {
+				dispatch.State = ports.InvestigationTaskCanceled
+				dispatch.CompletedAt = now
+				dispatch.LeaseOwner = ""
+				dispatch.LeaseExpiresAt = time.Time{}
+			} else {
+				dispatch.State = ports.InvestigationTaskCancelRequested
+			}
+			dispatch.Version++
+			dispatch.UpdatedAt = now
+			if err := repositories.InvestigationTasks().Update(dispatch, expectedDispatchVersion); err != nil {
+				return err
+			}
+		} else if dispatchErr != nil && !errors.Is(dispatchErr, domain.ErrNotFound) {
+			return dispatchErr
+		}
 		result = incident
 		return c.appendEvent(ctx, repositories, command.IncidentID, domain.EventIncidentCanceled, command.Actor, domain.TerminalDetail{Reason: command.Reason}, now)
 	})
