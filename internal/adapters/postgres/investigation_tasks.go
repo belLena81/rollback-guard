@@ -37,7 +37,7 @@ func (repo investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUn
 			SELECT incident_id
 			FROM investigation_dispatches
 			WHERE state = 'queued'
-			   OR state = 'cancel_requested'
+			   OR (state = 'cancel_requested' AND (lease_expires_at IS NULL OR lease_expires_at <= $1))
 			   OR (state IN ('submitting', 'submitted', 'working') AND lease_expires_at <= $1)
 			ORDER BY created_at, incident_id
 			FOR UPDATE SKIP LOCKED

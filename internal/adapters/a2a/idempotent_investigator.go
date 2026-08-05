@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const terminalPersistenceTimeout = 5 * time.Second
+
 type IdempotentInvestigator struct {
 	pool         *pgxpool.Pool
 	next         ports.Investigator
@@ -49,16 +51,21 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 		if errors.Is(err, context.Canceled) {
 			state, failure = "canceled", ""
 		}
-		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		recordCtx, cancel := terminalPersistenceContext(ctx)
 		defer cancel()
-		_, recordErr := i.pool.Exec(recordCtx, `UPDATE a2a_investigation_requests SET state=$2,failure_code=$3,updated_at=$4 WHERE idempotency_key=$1 AND task_id=$5`, request.IdempotencyKey, state, failure, time.Now().UTC(), request.TaskID)
+		completed, recordErr := i.pool.Exec(recordCtx, `UPDATE a2a_investigation_requests SET state=$2,failure_code=$3,updated_at=$4 WHERE idempotency_key=$1 AND request_hash=$5 AND task_id=$6 AND state='working'`, request.IdempotencyKey, state, failure, time.Now().UTC(), request.RequestHash, request.TaskID)
+		if recordErr == nil && completed.RowsAffected() != 1 {
+			recordErr = fmt.Errorf("investigation request ownership was lost before recording %s", state)
+		}
 		return ports.InvestigationResult{}, errors.Join(err, recordErr)
 	}
 	snapshot, err := json.Marshal(encodeResult(request.Incident.ID(), result))
 	if err != nil {
 		return ports.InvestigationResult{}, err
 	}
-	completed, err := i.pool.Exec(ctx, `UPDATE a2a_investigation_requests SET state='completed',result=$2,updated_at=$3 WHERE idempotency_key=$1 AND request_hash=$4 AND task_id=$5 AND state='working'`, request.IdempotencyKey, snapshot, time.Now().UTC(), request.RequestHash, request.TaskID)
+	recordCtx, cancel := terminalPersistenceContext(ctx)
+	defer cancel()
+	completed, err := i.pool.Exec(recordCtx, `UPDATE a2a_investigation_requests SET state='completed',result=$2,updated_at=$3 WHERE idempotency_key=$1 AND request_hash=$4 AND task_id=$5 AND state='working'`, request.IdempotencyKey, snapshot, time.Now().UTC(), request.RequestHash, request.TaskID)
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("complete investigation request: %w", err)
 	}
@@ -66,6 +73,10 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 		return ports.InvestigationResult{}, fmt.Errorf("investigation request ownership was lost before completion")
 	}
 	return result, nil
+}
+
+func terminalPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), terminalPersistenceTimeout)
 }
 
 func (i *IdempotentInvestigator) waitForResult(ctx context.Context, request ports.InvestigationRequest) (ports.InvestigationResult, error) {

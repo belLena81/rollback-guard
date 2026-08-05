@@ -451,7 +451,8 @@ func (r investigationTaskRepo) GetByIncident(id domain.IncidentID) (ports.Invest
 func (r investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUntil time.Time) (ports.InvestigationDispatch, error) {
 	for id, task := range r.d.investigations {
 		staleActive := (task.State == ports.InvestigationTaskSubmitting || task.State == ports.InvestigationTaskSubmitted || task.State == ports.InvestigationTaskWorking) && !task.LeaseExpiresAt.After(now)
-		if task.State != ports.InvestigationTaskQueued && task.State != ports.InvestigationTaskCancelRequested && !staleActive {
+		claimableCancellation := task.State == ports.InvestigationTaskCancelRequested && !task.LeaseExpiresAt.After(now)
+		if task.State != ports.InvestigationTaskQueued && !claimableCancellation && !staleActive {
 			continue
 		}
 		if task.State != ports.InvestigationTaskCancelRequested && task.Ref.TaskID == "" {

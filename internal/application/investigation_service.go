@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -49,7 +50,7 @@ func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command Creat
 	}
 	dispatch := ports.InvestigationDispatch{
 		IncidentID: incident.ID(), OperationID: c.ids.NewID("operation"), MessageID: c.ids.NewID("message"), TraceID: c.ids.NewID("trace"),
-		IdempotencyKey: "investigation:" + string(incident.ID()), RequestHash: investigationRequestHash(incident),
+		IdempotencyKey: "investigation:" + string(incident.ID()), RequestHash: InvestigationRequestHash(incident),
 		State: ports.InvestigationTaskQueued, Stage: ports.InvestigationStageQueued, Version: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	err = c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
@@ -70,10 +71,29 @@ func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command Creat
 	return incident, nil
 }
 
-func investigationRequestHash(incident domain.Incident) string {
+func InvestigationRequestHash(incident domain.Incident) string {
 	s := incident.Snapshot()
-	canonical := string(s.ID) + "\x00" + strconv.FormatUint(s.Version, 10) + "\x00" + s.Target.Cluster() + "\x00" + s.Target.Namespace() + "\x00" + s.Target.Deployment() + "\x00" + s.Target.Service() + "\x00" + s.Symptom.Kind() + "\x00" + strconv.FormatFloat(s.Symptom.Observed(), 'g', -1, 64) + "\x00" + strconv.FormatFloat(s.Symptom.Threshold(), 'g', -1, 64) + "\x00" + s.Symptom.Unit() + "\x00" + s.Symptom.StartedAt().UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+	canonical := strings.Join([]string{
+		string(s.ID),
+		strconv.FormatUint(s.Version, 10),
+		s.Status.String(),
+		s.Target.Cluster(),
+		s.Target.Namespace(),
+		s.Target.Deployment(),
+		s.Target.Service(),
+		s.Symptom.Kind(),
+		strconv.FormatFloat(s.Symptom.Observed(), 'g', -1, 64),
+		strconv.FormatFloat(s.Symptom.Threshold(), 'g', -1, 64),
+		s.Symptom.Unit(),
+		canonicalInvestigationTime(s.Symptom.StartedAt()),
+		canonicalInvestigationTime(s.CreatedAt),
+		canonicalInvestigationTime(s.UpdatedAt),
+	}, "\x00")
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(canonical)))
+}
+
+func canonicalInvestigationTime(value time.Time) string {
+	return value.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 }
 
 func (s *InvestigationService) Investigate(ctx context.Context, incidentID domain.IncidentID) (domain.Incident, error) {

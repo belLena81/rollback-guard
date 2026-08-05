@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
+	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
@@ -106,6 +107,11 @@ func (e *investigationExecutor) Execute(ctx context.Context, execCtx *a2asrv.Exe
 		if err := strictDecode(execCtx.Metadata[ExtensionURI], &correlation); err != nil || correlation.SchemaVersion != SchemaVersion || correlation.IdempotencyKey == "" || correlation.RequestHash == "" {
 			e.logger.WarnContext(ctx, "rejected investigation correlation metadata", "error", err)
 			yield(failedEvent(execCtx, "invalid_correlation"), nil)
+			return
+		}
+		if correlation.RequestHash != application.InvestigationRequestHash(request.Incident) {
+			e.logger.WarnContext(ctx, "rejected investigation request hash mismatch")
+			yield(failedEvent(execCtx, "request_hash_mismatch"), nil)
 			return
 		}
 		request.IdempotencyKey = correlation.IdempotencyKey

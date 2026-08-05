@@ -114,6 +114,50 @@ func TestConcurrentTransactionsAreRaceSafe(t *testing.T) {
 	group.Wait()
 }
 
+func TestClaimNextRespectsActiveCancellationLease(t *testing.T) {
+	uow := memory.NewUnitOfWork()
+	incident := repositoryIncident(t)
+	now := time.Now().UTC()
+	dispatch := ports.InvestigationDispatch{
+		IncidentID:     incident.ID(),
+		State:          ports.InvestigationTaskCancelRequested,
+		Stage:          ports.InvestigationStageQueued,
+		LeaseOwner:     "worker-1",
+		LeaseExpiresAt: now.Add(time.Minute),
+		Version:        1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+		if err := repositories.Incidents().Create(incident); err != nil {
+			return err
+		}
+		return repositories.InvestigationTasks().Create(dispatch)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+		_, claimErr := repositories.InvestigationTasks().ClaimNext(now, "worker-2", now.Add(time.Minute))
+		return claimErr
+	})
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("active cancellation lease claim error = %v, want not found", err)
+	}
+	err = uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+		claimed, claimErr := repositories.InvestigationTasks().ClaimNext(now.Add(2*time.Minute), "worker-2", now.Add(3*time.Minute))
+		if claimErr != nil {
+			return claimErr
+		}
+		if claimed.State != ports.InvestigationTaskCancelRequested || claimed.LeaseOwner != "worker-2" {
+			t.Fatalf("claimed dispatch = %#v", claimed)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestConcurrentStaleUpdatesYieldOneVersionConflict(t *testing.T) {
 	uow := memory.NewUnitOfWork()
 	incident := repositoryIncident(t)

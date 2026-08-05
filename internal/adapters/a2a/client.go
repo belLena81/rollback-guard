@@ -93,6 +93,10 @@ func (g *Gateway) Watch(ctx context.Context, ref ports.InvestigationTaskRef, pro
 	var result *ports.InvestigationResult
 	for event, eventErr := range g.client.SubscribeToTask(extensionContext(ctx), &a2a.SubscribeToTaskRequest{ID: a2a.TaskID(ref.TaskID)}) {
 		if eventErr != nil {
+			latest, latestErr := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
+			if latestErr == nil && latest.Status.State.Terminal() {
+				return resultFromTask(latest)
+			}
 			return ports.InvestigationResult{}, fmt.Errorf("watch investigation task: %w", eventErr)
 		}
 		switch value := event.(type) {

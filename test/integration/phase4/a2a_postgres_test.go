@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/adapters/a2a"
+	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -85,8 +86,9 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer gateway.Close()
+	requestHash := application.InvestigationRequestHash(incident)
 	for _, messageID := range []string{"message-1", "message-2"} {
-		ref, submitErr := gateway.Submit(ctx, ports.InvestigationSubmission{Incident: incident, OperationID: "operation-1", IdempotencyKey: "investigation:incident-1", MessageID: messageID, TraceID: "trace-1", RequestHash: "hash-1"})
+		ref, submitErr := gateway.Submit(ctx, ports.InvestigationSubmission{Incident: incident, OperationID: "operation-1", IdempotencyKey: "investigation:incident-1", MessageID: messageID, TraceID: "trace-1", RequestHash: requestHash})
 		if submitErr != nil {
 			t.Fatal(submitErr)
 		}
@@ -110,6 +112,36 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 	}
 	if taskCount != 2 || requestCount != 1 {
 		t.Fatalf("task/request rows = %d/%d", taskCount, requestCount)
+	}
+
+	requestCtx, cancelRequest := context.WithCancel(ctx)
+	var canceledCalls atomic.Int32
+	cancelingRunner := investigatorFunc(func(context.Context, ports.InvestigationRequest) (ports.InvestigationResult, error) {
+		canceledCalls.Add(1)
+		cancelRequest()
+		return ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}, nil
+	})
+	cancelingInvestigator, err := a2aadapter.NewIdempotentInvestigator(pool, cancelingRunner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directRequest := ports.InvestigationRequest{Incident: incident, IdempotencyKey: "investigation:incident-canceled-context", RequestHash: requestHash, TaskID: "task-canceled-context-1"}
+	if _, err := cancelingInvestigator.Investigate(requestCtx, directRequest); err != nil {
+		t.Fatalf("complete after caller cancellation: %v", err)
+	}
+	var state string
+	if err := pool.QueryRow(ctx, `SELECT state::text FROM a2a_investigation_requests WHERE idempotency_key=$1`, directRequest.IdempotencyKey).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "completed" {
+		t.Fatalf("idempotency state = %q, want completed", state)
+	}
+	directRequest.TaskID = "task-canceled-context-2"
+	if _, err := cancelingInvestigator.Investigate(ctx, directRequest); err != nil {
+		t.Fatalf("read cached result: %v", err)
+	}
+	if canceledCalls.Load() != 1 {
+		t.Fatalf("investigator calls after cached retry = %d, want 1", canceledCalls.Load())
 	}
 }
 

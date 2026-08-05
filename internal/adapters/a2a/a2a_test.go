@@ -2,12 +2,16 @@ package a2aadapter
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
@@ -73,7 +77,19 @@ func TestRESTGatewayRunsTypedInvestigationTask(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	ref, err := gateway.Submit(context.Background(), ports.InvestigationSubmission{Incident: incident, OperationID: "operation-1", IdempotencyKey: "investigation:incident-1", MessageID: "message-1", TraceID: "trace-1", RequestHash: "hash"})
+	requestHash := application.InvestigationRequestHash(incident)
+	encoded, err := dataMap(encodeRequest(incident))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeRequest(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodedHash := application.InvestigationRequestHash(decoded.Incident); decodedHash != requestHash {
+		t.Fatalf("wire request hash = %q, want %q", decodedHash, requestHash)
+	}
+	ref, err := gateway.Submit(context.Background(), ports.InvestigationSubmission{Incident: incident, OperationID: "operation-1", IdempotencyKey: "investigation:incident-1", MessageID: "message-1", TraceID: "trace-1", RequestHash: requestHash})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +106,62 @@ func TestRESTGatewayRunsTypedInvestigationTask(t *testing.T) {
 	}
 	if len(stages) > 0 && stages[len(stages)-1] != ports.InvestigationStageFinalizing {
 		t.Fatalf("last progress stage = %v", stages)
+	}
+	changedSymptom, err := domain.NewSymptom("error_rate", 0.3, 0.05, "ratio", now.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedIncident, err := domain.NewIncident("incident-1", target, changedSymptom, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := changedIncident.StartInvestigation(now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	assertRequestHashMismatchCode(t, investigator, changedIncident, requestHash)
+	ref, err = gateway.Submit(context.Background(), ports.InvestigationSubmission{Incident: changedIncident, OperationID: "operation-1", IdempotencyKey: "investigation:incident-1", MessageID: "message-2", TraceID: "trace-1", RequestHash: requestHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateway.Watch(context.Background(), ref, nil); err == nil {
+		t.Fatal("expected mismatched request hash to fail")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("investigator calls after mismatch = %d, want 1", calls.Load())
+	}
+}
+
+func assertRequestHashMismatchCode(t *testing.T, investigator ports.Investigator, incident domain.Incident, requestHash string) {
+	t.Helper()
+	part := a2a.NewDataPart(encodeRequest(incident))
+	part.MediaType = JSONMediaType
+	message := a2a.NewMessage(a2a.MessageRoleUser, part)
+	correlation, err := dataMap(correlationDTO{SchemaVersion: SchemaVersion, OperationID: "operation-1", IdempotencyKey: "investigation:incident-1", TraceID: "trace-1", RequestHash: requestHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execCtx := &a2asrv.ExecutorContext{Message: message, TaskID: "task-mismatch", ContextID: "context-mismatch", Metadata: map[string]any{ExtensionURI: correlation}}
+	executor := &investigationExecutor{investigator: investigator, timeout: time.Second, logger: slog.Default()}
+	failureCode := ""
+	for event, eventErr := range executor.Execute(context.Background(), execCtx) {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		status, ok := event.(*a2a.TaskStatusUpdateEvent)
+		if !ok || status.Status.State != a2a.TaskStateFailed || status.Status.Message == nil {
+			continue
+		}
+		var failure struct {
+			SchemaVersion string `json:"schemaVersion"`
+			Code          string `json:"code"`
+		}
+		if err := strictDecode(status.Status.Message.Parts[0].Data(), &failure); err != nil {
+			t.Fatal(err)
+		}
+		failureCode = failure.Code
+	}
+	if failureCode != "request_hash_mismatch" {
+		t.Fatalf("failure code = %q, want request_hash_mismatch", failureCode)
 	}
 }
 
