@@ -473,10 +473,12 @@ func (s *Service) loadDeployment(ctx context.Context, target domain.DeploymentTa
 
 func stableReplicaSet(replicaSets []appsv1.ReplicaSet, wanted domain.Revision) (*appsv1.ReplicaSet, error) {
 	var result *appsv1.ReplicaSet
+	stableCount := 0
 	for index := range replicaSets {
 		if replicaSets[index].Annotations[StableRevisionAnnotation] != "true" {
 			continue
 		}
+		stableCount++
 		revision, err := TemplateRevision(replicaSets[index].Spec.Template)
 		if err != nil {
 			return nil, err
@@ -489,7 +491,7 @@ func stableReplicaSet(replicaSets []appsv1.ReplicaSet, wanted domain.Revision) (
 		}
 		result = &replicaSets[index]
 	}
-	if result == nil {
+	if stableCount != 1 || result == nil {
 		return nil, ErrStableRevision
 	}
 	return result, nil

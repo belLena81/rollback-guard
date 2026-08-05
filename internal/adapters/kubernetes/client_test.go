@@ -393,6 +393,28 @@ func TestExecuteApprovedRollbackRevalidatesAtMutationStartTime(t *testing.T) {
 	}
 }
 
+func TestExecuteApprovedRollbackRejectsAmbiguousStableReplicaSetsBeforePatch(t *testing.T) {
+	target := mustTarget(t)
+	deployment := testDeployment("broken:v2")
+	current := testReplicaSet(deployment, "current", "broken:v2", false, time.Now())
+	stable := testReplicaSet(deployment, "stable", "healthy:v1", true, time.Now().Add(-time.Minute))
+	otherStable := testReplicaSet(deployment, "other-stable", "healthy:v0", true, time.Now().Add(-2*time.Minute))
+	client := fake.NewClientset(deployment, current, stable, otherStable)
+	approved := testApprovedRollback(t, target, mustRevision(t, deployment.Spec.Template), mustRevision(t, stable.Spec.Template))
+	service, err := NewService(client, Config{ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, MutationGuard: newSharedMutationGuard(approved)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.ExecuteApprovedRollback(context.Background(), approved.Proposal().Hash(), "ambiguous-stable-key")
+	if !errors.Is(err, ErrStableRevision) {
+		t.Fatalf("ExecuteApprovedRollback() error = %v, want %v", err, ErrStableRevision)
+	}
+	if got := patchActionCount(client.Actions()); got != 0 {
+		t.Fatalf("patch actions = %d, want 0", got)
+	}
+}
+
 func TestRollbackRejectsUntrustedCommandBeforeKubernetesAccess(t *testing.T) {
 	target := mustTarget(t)
 	deployment := testDeployment("broken:v2")
