@@ -154,10 +154,17 @@ type conclusionRepo struct {
 
 func (repo conclusionRepo) Save(conclusion domain.InvestigationConclusion) error {
 	s := conclusion.Snapshot()
+	var fallbackReason any
+	if s.Provenance.FallbackReason.Valid() {
+		fallbackReason = s.Provenance.FallbackReason.String()
+	}
 	_, err := repo.r.tx.Exec(repo.r.ctx, `
-		INSERT INTO investigation_results (id, incident_id, strategy, hypothesis, confidence, recommendation, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
-	`, s.ID, s.IncidentID, strategyText(s.Strategy), s.Hypothesis, s.Confidence, recommendationText(s.Recommendation), s.CreatedAt)
+		INSERT INTO investigation_results (
+			id, incident_id, strategy, hypothesis, confidence, recommendation,
+			requested_strategy, model, prompt_version, input_tokens, output_tokens, fallback_reason, created_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+	`, s.ID, s.IncidentID, strategyText(s.Strategy), s.Hypothesis, s.Confidence, recommendationText(s.Recommendation), strategyText(s.Provenance.RequestedStrategy), s.Provenance.Model, s.Provenance.PromptVersion, s.Provenance.InputTokens, s.Provenance.OutputTokens, fallbackReason, s.CreatedAt)
 	if err != nil {
 		return mapError(err, "conclusion", string(s.ID))
 	}
@@ -175,13 +182,17 @@ func (repo conclusionRepo) Save(conclusion domain.InvestigationConclusion) error
 
 func (repo conclusionRepo) Get(id domain.IncidentID) (domain.InvestigationConclusion, error) {
 	row := repo.r.tx.QueryRow(repo.r.ctx, `
-		SELECT id, incident_id, strategy, hypothesis, confidence, recommendation, created_at
+		SELECT id, incident_id, strategy, hypothesis, confidence, recommendation,
+		       requested_strategy, model, prompt_version, input_tokens, output_tokens, fallback_reason, created_at
 		FROM investigation_results WHERE incident_id = $1
 	`, id)
 	var conclusionID, incidentID, strategyValue, hypothesis, recommendationValue string
+	var requestedStrategyValue, model, promptVersion string
+	var inputTokens, outputTokens int64
+	var fallbackReasonValue *string
 	var confidence float64
 	var createdAt time.Time
-	if err := row.Scan(&conclusionID, &incidentID, &strategyValue, &hypothesis, &confidence, &recommendationValue, &createdAt); err != nil {
+	if err := row.Scan(&conclusionID, &incidentID, &strategyValue, &hypothesis, &confidence, &recommendationValue, &requestedStrategyValue, &model, &promptVersion, &inputTokens, &outputTokens, &fallbackReasonValue, &createdAt); err != nil {
 		return domain.InvestigationConclusion{}, mapError(err, "conclusion", string(id))
 	}
 	rows, err := repo.r.tx.Query(repo.r.ctx, `
@@ -212,6 +223,17 @@ func (repo conclusionRepo) Get(id domain.IncidentID) (domain.InvestigationConclu
 	if err != nil {
 		return domain.InvestigationConclusion{}, err
 	}
+	requestedStrategy, err := parseStrategy(requestedStrategyValue)
+	if err != nil {
+		return domain.InvestigationConclusion{}, err
+	}
+	fallbackReason := domain.DiagnosisFallbackReason(0)
+	if fallbackReasonValue != nil {
+		fallbackReason, err = parseDiagnosisFallbackReason(*fallbackReasonValue)
+		if err != nil {
+			return domain.InvestigationConclusion{}, err
+		}
+	}
 	return domain.RehydrateInvestigationConclusion(domain.InvestigationConclusionSnapshot{
 		ID:             domain.ConclusionID(conclusionID),
 		IncidentID:     domain.IncidentID(incidentID),
@@ -220,7 +242,15 @@ func (repo conclusionRepo) Get(id domain.IncidentID) (domain.InvestigationConclu
 		Confidence:     confidence,
 		EvidenceIDs:    evidenceIDs,
 		Recommendation: recommendation,
-		CreatedAt:      createdAt,
+		Provenance: domain.DiagnosisProvenance{
+			RequestedStrategy: requestedStrategy,
+			Model:             model,
+			PromptVersion:     promptVersion,
+			InputTokens:       inputTokens,
+			OutputTokens:      outputTokens,
+			FallbackReason:    fallbackReason,
+		},
+		CreatedAt: createdAt,
 	})
 }
 

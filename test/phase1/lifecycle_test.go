@@ -10,10 +10,33 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/belLena81/rollback-guard/internal/testkit"
 )
 
 func TestCompleteRollbackLifecycle(t *testing.T) {
+	tests := []struct {
+		name      string
+		factory   diagnosisFactory
+		effective domain.DiagnosisStrategy
+		requested domain.DiagnosisStrategy
+		fallback  domain.DiagnosisFallbackReason
+	}{
+		{name: "rules", factory: ruleDiagnosisFactory, effective: domain.StrategyRules, requested: domain.StrategyRules},
+		{name: "llm", factory: modelDiagnosisFactory(domain.StrategyLLM, nil, false), effective: domain.StrategyLLM, requested: domain.StrategyLLM},
+		{name: "hybrid", factory: modelDiagnosisFactory(domain.StrategyHybrid, nil, false), effective: domain.StrategyHybrid, requested: domain.StrategyHybrid},
+		{name: "llm invalid output fallback", factory: modelDiagnosisFactory(domain.StrategyLLM, nil, true), effective: domain.StrategyRules, requested: domain.StrategyLLM, fallback: domain.FallbackInvalidOutput},
+		{name: "hybrid provider fallback", factory: modelDiagnosisFactory(domain.StrategyHybrid, ports.ErrReasonerUnavailable, false), effective: domain.StrategyRules, requested: domain.StrategyHybrid, fallback: domain.FallbackProviderError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runCompleteRollbackLifecycle(t, test.factory, test.effective, test.requested, test.fallback)
+		})
+	}
+}
+
+func runCompleteRollbackLifecycle(t *testing.T, factory diagnosisFactory, effective domain.DiagnosisStrategy, requested domain.DiagnosisStrategy, fallback domain.DiagnosisFallbackReason) {
+	t.Helper()
 	ctx := context.Background()
 	now := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
 	clock := testkit.NewClock(now)
@@ -46,10 +69,7 @@ func TestCompleteRollbackLifecycle(t *testing.T) {
 		},
 		Now: clock.Now,
 	}
-	diagnoser, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: 10 * time.Minute})
-	if err != nil {
-		t.Fatal(err)
-	}
+	diagnoser := factory(t, ids)
 	policy, err := domain.NewEligibilityPolicy(domain.EligibilityPolicyConfig{MinimumConfidence: .8, CorrelationWindow: 10 * time.Minute, AllowedTargets: []domain.DeploymentTarget{target}})
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +101,13 @@ func TestCompleteRollbackLifecycle(t *testing.T) {
 	}
 	if incident.Status() != domain.StatusAwaitingApproval {
 		t.Fatalf("Investigate() status = %s", incident.Status())
+	}
+	summary, err := services.Queries.GetIncidentSummary(ctx, incident.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Conclusion == nil || summary.Conclusion.Strategy() != effective || summary.Conclusion.Provenance().RequestedStrategy != requested || summary.Conclusion.Provenance().FallbackReason != fallback {
+		t.Fatalf("diagnosis path = %#v, want effective/requested/fallback %s/%s/%s", summary.Conclusion, effective, requested, fallback)
 	}
 	proposal, err := services.Queries.GetProposal(ctx, incident.ID())
 	if err != nil {
@@ -146,4 +173,59 @@ func TestCompleteRollbackLifecycle(t *testing.T) {
 			t.Fatalf("event[%d] = sequence %d kind %s, want %d/%s", index, event.Sequence(), event.Kind(), index+1, wantKinds[index])
 		}
 	}
+}
+
+type diagnosisFactory func(*testing.T, ports.IDGenerator) ports.Diagnoser
+
+func ruleDiagnosisFactory(t *testing.T, ids ports.IDGenerator) ports.Diagnoser {
+	t.Helper()
+	diagnoser, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: 10 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return diagnoser
+}
+
+func modelDiagnosisFactory(strategy domain.DiagnosisStrategy, reasonerErr error, invalid bool) diagnosisFactory {
+	return func(t *testing.T, ids ports.IDGenerator) ports.Diagnoser {
+		t.Helper()
+		rules := ruleDiagnosisFactory(t, ids)
+		reasoner := reasonerFunc(func(_ context.Context, request ports.ReasoningRequest) (ports.ReasoningResult, error) {
+			if reasonerErr != nil {
+				return ports.ReasoningResult{}, reasonerErr
+			}
+			candidate := ports.ReasoningCandidate{
+				Hypothesis: "the rollout is correlated with the service regression", Confidence: .95,
+				Recommendation: domain.RecommendRollback.String(),
+			}
+			for _, evidence := range request.Evidence {
+				candidate.EvidenceIDs = append(candidate.EvidenceIDs, evidence.ID)
+			}
+			if invalid {
+				candidate.Recommendation = "unsafe_action"
+			}
+			return ports.ReasoningResult{Candidate: candidate, Model: "test-model", Usage: ports.TokenUsage{InputTokens: 30, OutputTokens: 10}}, nil
+		})
+		config := application.ModelDiagnoserConfig{Model: "test-model", PromptVersion: application.DiagnosisPromptVersion, Timeout: time.Second}
+		var diagnoser ports.Diagnoser
+		var err error
+		switch strategy {
+		case domain.StrategyLLM:
+			diagnoser, err = application.NewLLMDiagnoser(reasoner, rules, ids, config)
+		case domain.StrategyHybrid:
+			diagnoser, err = application.NewHybridDiagnoser(reasoner, rules, ids, config)
+		default:
+			t.Fatalf("unsupported test strategy %s", strategy)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return diagnoser
+	}
+}
+
+type reasonerFunc func(context.Context, ports.ReasoningRequest) (ports.ReasoningResult, error)
+
+func (f reasonerFunc) Reason(ctx context.Context, request ports.ReasoningRequest) (ports.ReasoningResult, error) {
+	return f(ctx, request)
 }

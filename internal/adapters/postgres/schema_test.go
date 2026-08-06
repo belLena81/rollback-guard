@@ -129,6 +129,32 @@ func TestA2AMigrationPersistsDispatchTasksAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestAIDiagnosisMigrationPersistsValidatedProvenance(t *testing.T) {
+	data, err := os.ReadFile("../../../migrations/000004_ai_diagnosis.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(data)
+	for _, required := range []string{
+		"'llm'",
+		"'hybrid'",
+		"CREATE TYPE diagnosis_fallback_reason AS ENUM",
+		"requested_strategy diagnosis_strategy NOT NULL",
+		"input_tokens bigint NOT NULL",
+		"output_tokens bigint NOT NULL",
+		"investigation_results_provenance_check",
+		"requested_strategy IN ('llm', 'hybrid')",
+		"requested_strategy = strategy",
+	} {
+		if !strings.Contains(schema, required) {
+			t.Fatalf("AI diagnosis migration missing %q", required)
+		}
+	}
+	if strings.Count(schema, "btrim(model) <> ''") != 2 || strings.Count(schema, "btrim(prompt_version) <> ''") != 2 {
+		t.Fatal("Phase 5 provenance constraints must reject whitespace-only model metadata")
+	}
+}
+
 func readInitialSchema(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile("../../../migrations/000001_initial_schema.up.sql")

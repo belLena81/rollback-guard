@@ -132,6 +132,7 @@ type InvestigationConclusionSnapshot struct {
 	Confidence     float64
 	EvidenceIDs    []EvidenceID
 	Recommendation Recommendation
+	Provenance     DiagnosisProvenance
 	CreatedAt      time.Time
 }
 
@@ -144,12 +145,13 @@ func (c InvestigationConclusion) Snapshot() InvestigationConclusionSnapshot {
 		Confidence:     c.confidence,
 		EvidenceIDs:    c.EvidenceIDs(),
 		Recommendation: c.recommendation,
+		Provenance:     c.provenance,
 		CreatedAt:      c.createdAt,
 	}
 }
 
 func RehydrateInvestigationConclusion(snapshot InvestigationConclusionSnapshot) (InvestigationConclusion, error) {
-	return NewInvestigationConclusion(
+	return NewInvestigationConclusionWithProvenance(
 		snapshot.ID,
 		snapshot.IncidentID,
 		snapshot.Strategy,
@@ -157,6 +159,7 @@ func RehydrateInvestigationConclusion(snapshot InvestigationConclusionSnapshot) 
 		snapshot.Confidence,
 		snapshot.EvidenceIDs,
 		snapshot.Recommendation,
+		snapshot.Provenance,
 		snapshot.CreatedAt,
 	)
 }

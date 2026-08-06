@@ -94,14 +94,24 @@ type evidenceDTO struct {
 }
 
 type conclusionDTO struct {
-	ID             string    `json:"id"`
-	IncidentID     string    `json:"incidentId"`
-	Strategy       string    `json:"strategy"`
-	Hypothesis     string    `json:"hypothesis"`
-	Confidence     float64   `json:"confidence"`
-	EvidenceIDs    []string  `json:"evidenceIds"`
-	Recommendation string    `json:"recommendation"`
-	CreatedAt      time.Time `json:"createdAt"`
+	ID             string         `json:"id"`
+	IncidentID     string         `json:"incidentId"`
+	Strategy       string         `json:"strategy"`
+	Hypothesis     string         `json:"hypothesis"`
+	Confidence     float64        `json:"confidence"`
+	EvidenceIDs    []string       `json:"evidenceIds"`
+	Recommendation string         `json:"recommendation"`
+	Provenance     *provenanceDTO `json:"provenance,omitempty"`
+	CreatedAt      time.Time      `json:"createdAt"`
+}
+
+type provenanceDTO struct {
+	RequestedStrategy string `json:"requestedStrategy"`
+	Model             string `json:"model"`
+	PromptVersion     string `json:"promptVersion"`
+	InputTokens       int64  `json:"inputTokens"`
+	OutputTokens      int64  `json:"outputTokens"`
+	FallbackReason    string `json:"fallbackReason,omitempty"`
 }
 
 type resultDTO struct {
@@ -166,8 +176,19 @@ func encodeResult(incidentID domain.IncidentID, result ports.InvestigationResult
 	for _, id := range c.EvidenceIDs {
 		ids = append(ids, string(id))
 	}
+	var provenance *provenanceDTO
+	if c.Strategy != domain.StrategyRules || c.Provenance.RequestedStrategy != domain.StrategyRules {
+		provenance = &provenanceDTO{
+			RequestedStrategy: c.Provenance.RequestedStrategy.String(), Model: c.Provenance.Model,
+			PromptVersion: c.Provenance.PromptVersion, InputTokens: c.Provenance.InputTokens,
+			OutputTokens: c.Provenance.OutputTokens,
+		}
+		if c.Provenance.FallbackReason.Valid() {
+			provenance.FallbackReason = c.Provenance.FallbackReason.String()
+		}
+	}
 	return resultDTO{SchemaVersion: SchemaVersion, IncidentID: string(incidentID), Deployment: encodeDeployment(result.Deployment), Evidence: evidence,
-		Conclusion: conclusionDTO{ID: string(c.ID), IncidentID: string(c.IncidentID), Strategy: c.Strategy.String(), Hypothesis: c.Hypothesis, Confidence: c.Confidence, EvidenceIDs: ids, Recommendation: c.Recommendation.String(), CreatedAt: c.CreatedAt}}
+		Conclusion: conclusionDTO{ID: string(c.ID), IncidentID: string(c.IncidentID), Strategy: c.Strategy.String(), Hypothesis: c.Hypothesis, Confidence: c.Confidence, EvidenceIDs: ids, Recommendation: c.Recommendation.String(), Provenance: provenance, CreatedAt: c.CreatedAt}}
 }
 
 func decodeResult(value any) (ports.InvestigationResult, error) {
@@ -193,9 +214,9 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 		}
 		evidence = append(evidence, value)
 	}
-	strategy := domain.DiagnosisStrategy(0)
-	if wire.Conclusion.Strategy == domain.StrategyRules.String() {
-		strategy = domain.StrategyRules
+	strategy, err := decodeDiagnosisStrategy(wire.Conclusion.Strategy)
+	if err != nil {
+		return ports.InvestigationResult{}, err
 	}
 	recommendation := domain.Recommendation(0)
 	if wire.Conclusion.Recommendation == domain.RecommendRollback.String() {
@@ -207,7 +228,31 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 	for _, id := range wire.Conclusion.EvidenceIDs {
 		ids = append(ids, domain.EvidenceID(id))
 	}
-	conclusion, err := domain.NewInvestigationConclusion(domain.ConclusionID(wire.Conclusion.ID), domain.IncidentID(wire.Conclusion.IncidentID), strategy, wire.Conclusion.Hypothesis, wire.Conclusion.Confidence, ids, recommendation, wire.Conclusion.CreatedAt)
+	var conclusion domain.InvestigationConclusion
+	if wire.Conclusion.Provenance == nil {
+		if strategy != domain.StrategyRules {
+			return ports.InvestigationResult{}, fmt.Errorf("model diagnosis provenance is required")
+		}
+		conclusion, err = domain.NewInvestigationConclusion(domain.ConclusionID(wire.Conclusion.ID), domain.IncidentID(wire.Conclusion.IncidentID), strategy, wire.Conclusion.Hypothesis, wire.Conclusion.Confidence, ids, recommendation, wire.Conclusion.CreatedAt)
+	} else {
+		requestedStrategy, strategyErr := decodeDiagnosisStrategy(wire.Conclusion.Provenance.RequestedStrategy)
+		if strategyErr != nil {
+			return ports.InvestigationResult{}, strategyErr
+		}
+		fallbackReason, fallbackErr := decodeFallbackReason(wire.Conclusion.Provenance.FallbackReason)
+		if fallbackErr != nil {
+			return ports.InvestigationResult{}, fallbackErr
+		}
+		conclusion, err = domain.NewInvestigationConclusionWithProvenance(
+			domain.ConclusionID(wire.Conclusion.ID), domain.IncidentID(wire.Conclusion.IncidentID), strategy,
+			wire.Conclusion.Hypothesis, wire.Conclusion.Confidence, ids, recommendation,
+			domain.DiagnosisProvenance{
+				RequestedStrategy: requestedStrategy, Model: wire.Conclusion.Provenance.Model,
+				PromptVersion: wire.Conclusion.Provenance.PromptVersion, InputTokens: wire.Conclusion.Provenance.InputTokens,
+				OutputTokens: wire.Conclusion.Provenance.OutputTokens, FallbackReason: fallbackReason,
+			}, wire.Conclusion.CreatedAt,
+		)
+	}
 	if err != nil {
 		return ports.InvestigationResult{}, err
 	}
@@ -215,6 +260,36 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 		return ports.InvestigationResult{}, fmt.Errorf("result incident id does not match conclusion")
 	}
 	return ports.InvestigationResult{Deployment: deployment, Evidence: evidence, Conclusion: conclusion}, nil
+}
+
+func decodeDiagnosisStrategy(value string) (domain.DiagnosisStrategy, error) {
+	switch value {
+	case domain.StrategyRules.String():
+		return domain.StrategyRules, nil
+	case domain.StrategyLLM.String():
+		return domain.StrategyLLM, nil
+	case domain.StrategyHybrid.String():
+		return domain.StrategyHybrid, nil
+	default:
+		return 0, fmt.Errorf("unknown diagnosis strategy %q", value)
+	}
+}
+
+func decodeFallbackReason(value string) (domain.DiagnosisFallbackReason, error) {
+	switch value {
+	case "":
+		return 0, nil
+	case domain.FallbackProviderError.String():
+		return domain.FallbackProviderError, nil
+	case domain.FallbackProviderTimeout.String():
+		return domain.FallbackProviderTimeout, nil
+	case domain.FallbackProviderRefusal.String():
+		return domain.FallbackProviderRefusal, nil
+	case domain.FallbackInvalidOutput.String():
+		return domain.FallbackInvalidOutput, nil
+	default:
+		return 0, fmt.Errorf("unknown diagnosis fallback reason %q", value)
+	}
 }
 
 func encodeTarget(v domain.DeploymentTarget) targetDTO {

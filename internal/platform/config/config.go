@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -11,6 +13,10 @@ import (
 )
 
 const defaultAllowedTargets = "local/rollback-demo/demo-api/demo-api"
+
+type LLMProvider string
+
+const LLMProviderOpenAICompatible LLMProvider = "openai_compatible"
 
 type Config struct {
 	HTTPAddr              string
@@ -54,6 +60,13 @@ type InvestigatorConfig struct {
 	TaskTimeout           time.Duration
 	MetricsWindow         time.Duration
 	RuleCorrelationWindow time.Duration
+	DiagnosisStrategy     domain.DiagnosisStrategy
+	LLMProvider           LLMProvider
+	LLMBaseURL            string
+	LLMModel              string
+	LLMAPIKey             string
+	LLMTimeout            time.Duration
+	LLMMaxOutputTokens    int
 }
 
 type KubernetesMCPConfig struct {
@@ -215,7 +228,95 @@ func LoadInvestigator() (InvestigatorConfig, error) {
 	if err != nil {
 		return InvestigatorConfig{}, err
 	}
-	return InvestigatorConfig{HTTPAddr: stringEnv("HTTP_ADDR", "127.0.0.1:8094"), PublicURL: stringEnv("INVESTIGATOR_PUBLIC_URL", "http://127.0.0.1:8094"), DatabaseURL: databaseURL, DBMaxConns: int32(maxConns), DBPingTimeout: dbPingTimeout, KubernetesReadMCPURL: stringEnv("KUBERNETES_READ_MCP_URL", "http://127.0.0.1:8091/mcp"), ObservabilityMCPURL: stringEnv("OBSERVABILITY_MCP_URL", "http://127.0.0.1:8093/mcp"), MCPConnectTimeout: connectTimeout, MCPCallTimeout: callTimeout, TaskTimeout: taskTimeout, MetricsWindow: metricsWindow, RuleCorrelationWindow: ruleWindow}, nil
+	strategy, err := diagnosisStrategyEnv()
+	if err != nil {
+		return InvestigatorConfig{}, err
+	}
+	provider := LLMProvider(stringEnv("LLM_PROVIDER", string(LLMProviderOpenAICompatible)))
+	baseURL := strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
+	model := strings.TrimSpace(os.Getenv("LLM_MODEL"))
+	apiKey := strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+	llmTimeout := 15 * time.Second
+	maxOutputTokens := 512
+	if strategy != domain.StrategyRules {
+		if provider != LLMProviderOpenAICompatible {
+			return InvestigatorConfig{}, fmt.Errorf("LLM_PROVIDER must be %q", LLMProviderOpenAICompatible)
+		}
+		loopback, urlErr := validateLLMBaseURL(baseURL)
+		if urlErr != nil {
+			return InvestigatorConfig{}, urlErr
+		}
+		if model == "" {
+			return InvestigatorConfig{}, fmt.Errorf("LLM_MODEL is required for model diagnosis")
+		}
+		if !loopback && apiKey == "" {
+			return InvestigatorConfig{}, fmt.Errorf("LLM_API_KEY is required for non-loopback providers")
+		}
+		llmTimeout, err = durationEnv("LLM_TIMEOUT", llmTimeout)
+		if err != nil || llmTimeout > 30*time.Second {
+			return InvestigatorConfig{}, fmt.Errorf("LLM_TIMEOUT must be positive and no greater than 30s")
+		}
+		if llmTimeout >= taskTimeout {
+			return InvestigatorConfig{}, fmt.Errorf("LLM_TIMEOUT must be below A2A_TASK_TIMEOUT")
+		}
+		maxOutputTokens, err = intEnv("LLM_MAX_OUTPUT_TOKENS", maxOutputTokens)
+		if err != nil || maxOutputTokens < 64 || maxOutputTokens > 2048 {
+			return InvestigatorConfig{}, fmt.Errorf("LLM_MAX_OUTPUT_TOKENS must be between 64 and 2048")
+		}
+	}
+	return InvestigatorConfig{
+		HTTPAddr:              stringEnv("HTTP_ADDR", "127.0.0.1:8094"),
+		PublicURL:             stringEnv("INVESTIGATOR_PUBLIC_URL", "http://127.0.0.1:8094"),
+		DatabaseURL:           databaseURL,
+		DBMaxConns:            int32(maxConns),
+		DBPingTimeout:         dbPingTimeout,
+		KubernetesReadMCPURL:  stringEnv("KUBERNETES_READ_MCP_URL", "http://127.0.0.1:8091/mcp"),
+		ObservabilityMCPURL:   stringEnv("OBSERVABILITY_MCP_URL", "http://127.0.0.1:8093/mcp"),
+		MCPConnectTimeout:     connectTimeout,
+		MCPCallTimeout:        callTimeout,
+		TaskTimeout:           taskTimeout,
+		MetricsWindow:         metricsWindow,
+		RuleCorrelationWindow: ruleWindow,
+		DiagnosisStrategy:     strategy,
+		LLMProvider:           provider,
+		LLMBaseURL:            baseURL,
+		LLMModel:              model,
+		LLMAPIKey:             apiKey,
+		LLMTimeout:            llmTimeout,
+		LLMMaxOutputTokens:    maxOutputTokens,
+	}, nil
+}
+
+func diagnosisStrategyEnv() (domain.DiagnosisStrategy, error) {
+	switch stringEnv("DIAGNOSIS_STRATEGY", "rule_based") {
+	case "rule_based":
+		return domain.StrategyRules, nil
+	case "llm_based":
+		return domain.StrategyLLM, nil
+	case "hybrid":
+		return domain.StrategyHybrid, nil
+	default:
+		return 0, fmt.Errorf("DIAGNOSIS_STRATEGY must be rule_based, llm_based, or hybrid")
+	}
+}
+
+func validateLLMBaseURL(value string) (bool, error) {
+	if value == "" {
+		return false, fmt.Errorf("LLM_BASE_URL is required for model diagnosis")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false, fmt.Errorf("LLM_BASE_URL must be an absolute URL without credentials, query, or fragment")
+	}
+	host := parsed.Hostname()
+	loopback := strings.EqualFold(host, "localhost")
+	if ip := net.ParseIP(host); ip != nil {
+		loopback = ip.IsLoopback()
+	}
+	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !loopback) {
+		return false, fmt.Errorf("LLM_BASE_URL must use HTTPS unless it targets loopback")
+	}
+	return loopback, nil
 }
 
 func LoadKubernetesMCP() (KubernetesMCPConfig, error) {

@@ -167,9 +167,64 @@ func TestLoadObservabilityMCPRejectsUnboundedDependencyTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadInvestigatorDefaultsToRuleDiagnosisWithoutLLMConfiguration(t *testing.T) {
+	clearConfigEnvironment(t)
+	t.Setenv("DATABASE_URL", "postgres://rollback@database/rollback_guard")
+	cfg, err := LoadInvestigator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DiagnosisStrategy != domain.StrategyRules {
+		t.Fatalf("DiagnosisStrategy = %s, want rules", cfg.DiagnosisStrategy)
+	}
+}
+
+func TestLoadInvestigatorValidatesModelDiagnosisConfiguration(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    domain.DiagnosisStrategy
+		wantErr string
+	}{
+		{name: "llm loopback", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://127.0.0.1:11434/v1", "LLM_MODEL": "local-model"}, want: domain.StrategyLLM},
+		{name: "hybrid hosted", env: map[string]string{"DIAGNOSIS_STRATEGY": "hybrid", "LLM_BASE_URL": "https://provider.example/v1", "LLM_MODEL": "hosted-model", "LLM_API_KEY": "test-key"}, want: domain.StrategyHybrid},
+		{name: "unknown strategy", env: map[string]string{"DIAGNOSIS_STRATEGY": "automatic"}, wantErr: "DIAGNOSIS_STRATEGY"},
+		{name: "unknown provider", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_PROVIDER": "native", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model"}, wantErr: "LLM_PROVIDER"},
+		{name: "missing base URL", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_MODEL": "model"}, wantErr: "LLM_BASE_URL"},
+		{name: "missing model", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1"}, wantErr: "LLM_MODEL"},
+		{name: "hosted key required", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "https://provider.example/v1", "LLM_MODEL": "model"}, wantErr: "LLM_API_KEY"},
+		{name: "insecure remote URL", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://provider.example/v1", "LLM_MODEL": "model", "LLM_API_KEY": "key"}, wantErr: "HTTPS"},
+		{name: "timeout exceeds limit", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "LLM_TIMEOUT": "31s"}, wantErr: "LLM_TIMEOUT"},
+		{name: "timeout reaches task budget", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "LLM_TIMEOUT": "20s", "A2A_TASK_TIMEOUT": "20s"}, wantErr: "below A2A_TASK_TIMEOUT"},
+		{name: "output tokens too small", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "LLM_MAX_OUTPUT_TOKENS": "63"}, wantErr: "LLM_MAX_OUTPUT_TOKENS"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnvironment(t)
+			t.Setenv("DATABASE_URL", "postgres://rollback@database/rollback_guard")
+			for key, value := range test.env {
+				t.Setenv(key, value)
+			}
+			cfg, err := LoadInvestigator()
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("LoadInvestigator() error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.DiagnosisStrategy != test.want {
+				t.Fatalf("DiagnosisStrategy = %s, want %s", cfg.DiagnosisStrategy, test.want)
+			}
+		})
+	}
+}
+
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"ALLOWED_TARGETS", "CLUSTER_ID", "KUBERNETES_MCP_MODE", "MCP_REQUEST_TIMEOUT", "MCP_SESSION_TIMEOUT", "METRICS_WINDOW", "METRICS_MAX_SAMPLE_AGE", "PROMETHEUS_TIMEOUT", "DATABASE_URL", "DB_MAX_CONNS", "DB_PING_TIMEOUT", "MCP_CONNECT_TIMEOUT", "MCP_CALL_TIMEOUT", "MCP_WATCH_TIMEOUT", "A2A_TASK_TIMEOUT", "A2A_CANCEL_TIMEOUT", "A2A_POLL_INTERVAL", "A2A_LEASE_TTL", "A2A_MAX_ATTEMPTS", "INVESTIGATOR_URL", "A2A_WORKER_ID"} {
+	for _, key := range []string{"ALLOWED_TARGETS", "CLUSTER_ID", "KUBERNETES_MCP_MODE", "MCP_REQUEST_TIMEOUT", "MCP_SESSION_TIMEOUT", "METRICS_WINDOW", "METRICS_MAX_SAMPLE_AGE", "PROMETHEUS_TIMEOUT", "DATABASE_URL", "DB_MAX_CONNS", "DB_PING_TIMEOUT", "MCP_CONNECT_TIMEOUT", "MCP_CALL_TIMEOUT", "MCP_WATCH_TIMEOUT", "A2A_TASK_TIMEOUT", "A2A_CANCEL_TIMEOUT", "A2A_POLL_INTERVAL", "A2A_LEASE_TTL", "A2A_MAX_ATTEMPTS", "INVESTIGATOR_URL", "A2A_WORKER_ID", "DIAGNOSIS_STRATEGY", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "LLM_TIMEOUT", "LLM_MAX_OUTPUT_TOKENS"} {
 		t.Setenv(key, "")
 	}
 }

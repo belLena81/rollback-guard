@@ -172,6 +172,8 @@ components:
           type: object
         investigation:
           $ref: '#/components/schemas/Investigation'
+        conclusion:
+          $ref: '#/components/schemas/InvestigationConclusion'
     Investigation:
       type: object
       required: [operationId, state, stage, attempts, createdAt, updatedAt]
@@ -191,3 +193,38 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         completedAt: { type: string, format: date-time }
+    InvestigationConclusion:
+      type: object
+      additionalProperties: false
+      required: [id, strategy, hypothesis, confidence, evidenceIds, recommendation, provenance, createdAt]
+      properties:
+        id: { type: string }
+        strategy:
+          type: string
+          enum: [rules, llm, hybrid]
+        hypothesis: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        evidenceIds:
+          type: array
+          items: { type: string }
+        recommendation:
+          type: string
+          enum: [rollback, no_action]
+        provenance:
+          $ref: '#/components/schemas/DiagnosisProvenance'
+        createdAt: { type: string, format: date-time }
+    DiagnosisProvenance:
+      type: object
+      additionalProperties: false
+      required: [requestedStrategy, model, promptVersion, inputTokens, outputTokens]
+      properties:
+        requestedStrategy:
+          type: string
+          enum: [rules, llm, hybrid]
+        model: { type: string }
+        promptVersion: { type: string }
+        inputTokens: { type: integer, format: int64, minimum: 0 }
+        outputTokens: { type: integer, format: int64, minimum: 0 }
+        fallbackReason:
+          type: string
+          enum: [provider_error, provider_timeout, provider_refusal, invalid_output]

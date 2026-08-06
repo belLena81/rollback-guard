@@ -172,6 +172,41 @@ func TestDecodeRequestRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestResultWirePreservesModelProvenance(t *testing.T) {
+	result := modelWireResult(t)
+	wire := encodeResult(result.Conclusion.IncidentID(), result)
+	decoded, err := decodeResult(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Conclusion.Strategy() != domain.StrategyHybrid || decoded.Conclusion.Provenance() != result.Conclusion.Provenance() {
+		t.Fatalf("decoded conclusion = %#v", decoded.Conclusion.Snapshot())
+	}
+}
+
+func TestResultWireAcceptsLegacyRuleConclusionWithoutProvenance(t *testing.T) {
+	result := modelWireResult(t)
+	rules, err := domain.NewInvestigationConclusion(
+		"legacy-conclusion", result.Conclusion.IncidentID(), domain.StrategyRules, "legacy rules", .9,
+		result.Conclusion.EvidenceIDs(), domain.RecommendRollback, result.Conclusion.CreatedAt(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.Conclusion = rules
+	wire := encodeResult(rules.IncidentID(), result)
+	if wire.Conclusion.Provenance != nil {
+		t.Fatalf("legacy-compatible rule result contains provenance: %#v", wire.Conclusion.Provenance)
+	}
+	decoded, err := decodeResult(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Conclusion.Provenance().RequestedStrategy != domain.StrategyRules {
+		t.Fatalf("legacy provenance = %#v", decoded.Conclusion.Provenance())
+	}
+}
+
 func TestResultFromArtifactsRequiresExactlyOneResultArtifact(t *testing.T) {
 	valid := validResultArtifact(t)
 	unexpected := &a2a.Artifact{Name: "debug-log", Parts: a2a.ContentParts{a2a.NewTextPart("ignored")}}
@@ -239,4 +274,30 @@ func validResultArtifact(t *testing.T) *a2a.Artifact {
 	part := a2a.NewDataPart(encodeResult("incident-1", ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}))
 	part.MediaType = JSONMediaType
 	return &a2a.Artifact{Name: ResultArtifactName, Parts: a2a.ContentParts{part}}
+}
+
+func modelWireResult(t *testing.T) ports.InvestigationResult {
+	t.Helper()
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	target, err := domain.NewDeploymentTarget("local", "rollback-demo", "demo-api", "demo-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := domain.DeploymentEvidence{Target: target, CurrentRevision: "revision-2", PreviousStableRevision: "revision-1", DesiredReplicas: 3, ReadyReplicas: 1, AvailableReplicas: 1, RolloutAt: now.Add(-time.Minute)}
+	evidence, err := domain.NewDeploymentEvidence("evidence", "incident", deployment, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance := domain.DiagnosisProvenance{
+		RequestedStrategy: domain.StrategyHybrid, Model: "test-model", PromptVersion: "rollback-diagnosis-v1",
+		InputTokens: 30, OutputTokens: 10,
+	}
+	conclusion, err := domain.NewInvestigationConclusionWithProvenance(
+		"conclusion", "incident", domain.StrategyHybrid, "rollout regression", .92,
+		[]domain.EvidenceID{evidence.ID()}, domain.RecommendRollback, provenance, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}
 }

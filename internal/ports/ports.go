@@ -10,6 +10,12 @@ import (
 
 var ErrRollbackOutcomeUnknown = errors.New("rollback outcome is unknown")
 
+var (
+	ErrReasonerUnavailable     = errors.New("reasoner is unavailable")
+	ErrReasonerRefused         = errors.New("reasoner refused the request")
+	ErrReasonerInvalidResponse = errors.New("reasoner returned an invalid response")
+)
+
 type DeploymentInspector interface {
 	InspectDeployment(context.Context, domain.DeploymentTarget) (domain.DeploymentEvidence, error)
 }
@@ -25,6 +31,52 @@ type InvestigationInput struct {
 }
 type Diagnoser interface {
 	Diagnose(context.Context, InvestigationInput) (domain.InvestigationConclusion, error)
+}
+
+type ReasoningEvidence struct {
+	ID              domain.EvidenceID
+	Kind            domain.EvidenceKind
+	CollectedAt     time.Time
+	Deployment      *domain.DeploymentEvidence
+	Metric          *domain.MetricEvidence
+	Pod             *domain.PodEvidence
+	KubernetesEvent *ReasoningKubernetesEvent
+}
+
+type ReasoningKubernetesEvent struct {
+	Reason     string
+	ObservedAt time.Time
+}
+
+type ReasoningCandidate struct {
+	Hypothesis     string
+	Confidence     float64
+	EvidenceIDs    []domain.EvidenceID
+	Recommendation string
+}
+
+type ReasoningRequest struct {
+	PromptVersion string
+	IncidentID    domain.IncidentID
+	Target        domain.DeploymentTarget
+	Symptom       domain.Symptom
+	Evidence      []ReasoningEvidence
+	RuleCandidate *ReasoningCandidate
+}
+
+type TokenUsage struct {
+	InputTokens  int64
+	OutputTokens int64
+}
+
+type ReasoningResult struct {
+	Candidate ReasoningCandidate
+	Model     string
+	Usage     TokenUsage
+}
+
+type Reasoner interface {
+	Reason(context.Context, ReasoningRequest) (ReasoningResult, error)
 }
 type InvestigationRequest struct {
 	Incident       domain.Incident

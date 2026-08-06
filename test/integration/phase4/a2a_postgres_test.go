@@ -99,6 +99,9 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 		if result.Conclusion.ID() != conclusion.ID() {
 			t.Fatalf("conclusion = %q", result.Conclusion.ID())
 		}
+		if result.Conclusion.Provenance() != conclusion.Provenance() {
+			t.Fatalf("provenance = %#v, want %#v", result.Conclusion.Provenance(), conclusion.Provenance())
+		}
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("investigator calls = %d, want 1", calls.Load())

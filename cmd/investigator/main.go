@@ -13,10 +13,13 @@ import (
 
 	a2aadapter "github.com/belLena81/rollback-guard/internal/adapters/a2a"
 	"github.com/belLena81/rollback-guard/internal/adapters/diagnosis"
+	llmadapter "github.com/belLena81/rollback-guard/internal/adapters/llm"
 	mcpadapter "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/runtime"
+	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -45,8 +48,8 @@ func run(logger *slog.Logger) error {
 	defer pool.Close()
 	connectCtx, cancelConnect := context.WithTimeout(context.Background(), cfg.MCPConnectTimeout)
 	defer cancelConnect()
-	httpClient := &http.Client{Timeout: cfg.MCPCallTimeout}
-	readClient, err := connectMCP(connectCtx, cfg.KubernetesReadMCPURL, httpClient, []string{mcpadapter.ToolGetDeployment})
+	mcpHTTPClient := &http.Client{Timeout: cfg.MCPCallTimeout}
+	readClient, err := connectMCP(connectCtx, cfg.KubernetesReadMCPURL, mcpHTTPClient, []string{mcpadapter.ToolGetDeployment})
 	if err != nil {
 		return fmt.Errorf("connect readonly kubernetes MCP: %w", err)
 	}
@@ -55,7 +58,7 @@ func run(logger *slog.Logger) error {
 			logger.Warn("close readonly Kubernetes MCP client", "error", err)
 		}
 	}()
-	observabilityClient, err := connectMCP(connectCtx, cfg.ObservabilityMCPURL, httpClient, []string{mcpadapter.ToolGetHTTPErrorRate})
+	observabilityClient, err := connectMCP(connectCtx, cfg.ObservabilityMCPURL, mcpHTTPClient, []string{mcpadapter.ToolGetHTTPErrorRate})
 	if err != nil {
 		return fmt.Errorf("connect observability MCP: %w", err)
 	}
@@ -81,7 +84,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	ids := &runtime.IDGenerator{}
-	diagnoser, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: cfg.RuleCorrelationWindow})
+	diagnoser, err := newDiagnoser(cfg, ids, &http.Client{Timeout: cfg.LLMTimeout})
 	if err != nil {
 		return err
 	}
@@ -127,6 +130,34 @@ func run(logger *slog.Logger) error {
 			return nil
 		}
 		return err
+	}
+}
+
+func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, providerHTTPClient *http.Client) (ports.Diagnoser, error) {
+	rules, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: cfg.RuleCorrelationWindow})
+	if err != nil {
+		return nil, err
+	}
+	if cfg.DiagnosisStrategy == domain.StrategyRules {
+		return rules, nil
+	}
+	reasoner, err := llmadapter.NewOpenAICompatibleReasoner(llmadapter.OpenAICompatibleConfig{
+		BaseURL: cfg.LLMBaseURL, APIKey: cfg.LLMAPIKey, Model: cfg.LLMModel,
+		MaxOutputTokens: cfg.LLMMaxOutputTokens, HTTPClient: providerHTTPClient,
+	})
+	if err != nil {
+		return nil, err
+	}
+	modelConfig := application.ModelDiagnoserConfig{
+		Model: cfg.LLMModel, PromptVersion: application.DiagnosisPromptVersion, Timeout: cfg.LLMTimeout,
+	}
+	switch cfg.DiagnosisStrategy {
+	case domain.StrategyLLM:
+		return application.NewLLMDiagnoser(reasoner, rules, ids, modelConfig)
+	case domain.StrategyHybrid:
+		return application.NewHybridDiagnoser(reasoner, rules, ids, modelConfig)
+	default:
+		return nil, fmt.Errorf("unsupported diagnosis strategy %q", cfg.DiagnosisStrategy)
 	}
 }
 

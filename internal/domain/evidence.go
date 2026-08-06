@@ -2,6 +2,7 @@ package domain
 
 import (
 	"math"
+	"strings"
 	"time"
 )
 
@@ -179,13 +180,52 @@ func (r Recommendation) String() string {
 
 type DiagnosisStrategy uint8
 
-const StrategyRules DiagnosisStrategy = 1
+const (
+	StrategyRules DiagnosisStrategy = iota + 1
+	StrategyLLM
+	StrategyHybrid
+)
 
 func (s DiagnosisStrategy) String() string {
-	if s == StrategyRules {
-		return "rules"
+	names := [...]string{"unknown", "rules", "llm", "hybrid"}
+	if int(s) >= len(names) {
+		return names[0]
 	}
-	return "unknown"
+	return names[s]
+}
+
+func (s DiagnosisStrategy) Valid() bool {
+	return s >= StrategyRules && s <= StrategyHybrid
+}
+
+type DiagnosisFallbackReason uint8
+
+const (
+	FallbackProviderError DiagnosisFallbackReason = iota + 1
+	FallbackProviderTimeout
+	FallbackProviderRefusal
+	FallbackInvalidOutput
+)
+
+func (r DiagnosisFallbackReason) String() string {
+	names := [...]string{"", "provider_error", "provider_timeout", "provider_refusal", "invalid_output"}
+	if int(r) >= len(names) {
+		return "unknown"
+	}
+	return names[r]
+}
+
+func (r DiagnosisFallbackReason) Valid() bool {
+	return r >= FallbackProviderError && r <= FallbackInvalidOutput
+}
+
+type DiagnosisProvenance struct {
+	RequestedStrategy DiagnosisStrategy
+	Model             string
+	PromptVersion     string
+	InputTokens       int64
+	OutputTokens      int64
+	FallbackReason    DiagnosisFallbackReason
 }
 
 type InvestigationConclusion struct {
@@ -196,11 +236,26 @@ type InvestigationConclusion struct {
 	confidence     float64
 	evidenceIDs    []EvidenceID
 	recommendation Recommendation
+	provenance     DiagnosisProvenance
 	createdAt      time.Time
 }
 
 func NewInvestigationConclusion(id ConclusionID, incidentID IncidentID, strategy DiagnosisStrategy, hypothesis string, confidence float64, evidenceIDs []EvidenceID, recommendation Recommendation, now time.Time) (InvestigationConclusion, error) {
-	if id == "" || incidentID == "" || strategy != StrategyRules || hypothesis == "" || now.IsZero() {
+	return NewInvestigationConclusionWithProvenance(
+		id,
+		incidentID,
+		strategy,
+		hypothesis,
+		confidence,
+		evidenceIDs,
+		recommendation,
+		DiagnosisProvenance{RequestedStrategy: strategy},
+		now,
+	)
+}
+
+func NewInvestigationConclusionWithProvenance(id ConclusionID, incidentID IncidentID, strategy DiagnosisStrategy, hypothesis string, confidence float64, evidenceIDs []EvidenceID, recommendation Recommendation, provenance DiagnosisProvenance, now time.Time) (InvestigationConclusion, error) {
+	if id == "" || incidentID == "" || !strategy.Valid() || hypothesis == "" || now.IsZero() {
 		return InvestigationConclusion{}, invalid("conclusion", "required value is empty")
 	}
 	if math.IsNaN(confidence) || math.IsInf(confidence, 0) || confidence < 0 || confidence > 1 {
@@ -220,7 +275,37 @@ func NewInvestigationConclusion(id ConclusionID, incidentID IncidentID, strategy
 	if recommendation != RecommendRollback && recommendation != RecommendNoAction {
 		return InvestigationConclusion{}, invalid("conclusion.recommendation", "unknown recommendation")
 	}
-	return InvestigationConclusion{id: id, incidentID: incidentID, strategy: strategy, hypothesis: hypothesis, confidence: confidence, evidenceIDs: ids, recommendation: recommendation, createdAt: now.UTC()}, nil
+	if err := validateDiagnosisProvenance(strategy, provenance); err != nil {
+		return InvestigationConclusion{}, err
+	}
+	return InvestigationConclusion{id: id, incidentID: incidentID, strategy: strategy, hypothesis: hypothesis, confidence: confidence, evidenceIDs: ids, recommendation: recommendation, provenance: provenance, createdAt: now.UTC()}, nil
+}
+
+func validateDiagnosisProvenance(effective DiagnosisStrategy, provenance DiagnosisProvenance) error {
+	if !provenance.RequestedStrategy.Valid() {
+		return invalid("conclusion.provenance.requested_strategy", "must be valid")
+	}
+	if provenance.InputTokens < 0 || provenance.OutputTokens < 0 {
+		return invalid("conclusion.provenance.tokens", "must not be negative")
+	}
+	model := strings.TrimSpace(provenance.Model)
+	promptVersion := strings.TrimSpace(provenance.PromptVersion)
+	if effective == StrategyRules && provenance.RequestedStrategy == StrategyRules {
+		if provenance.Model != "" || provenance.PromptVersion != "" || provenance.InputTokens != 0 || provenance.OutputTokens != 0 || provenance.FallbackReason != 0 {
+			return invalid("conclusion.provenance", "rule diagnosis must not contain model metadata")
+		}
+		return nil
+	}
+	if effective == StrategyRules {
+		if provenance.RequestedStrategy == StrategyRules || model == "" || promptVersion == "" || !provenance.FallbackReason.Valid() {
+			return invalid("conclusion.provenance", "model fallback metadata is incomplete")
+		}
+		return nil
+	}
+	if provenance.RequestedStrategy != effective || model == "" || promptVersion == "" || provenance.FallbackReason != 0 {
+		return invalid("conclusion.provenance", "successful model metadata is inconsistent")
+	}
+	return nil
 }
 func (c InvestigationConclusion) ID() ConclusionID {
 	return c.id
@@ -242,6 +327,9 @@ func (c InvestigationConclusion) EvidenceIDs() []EvidenceID {
 }
 func (c InvestigationConclusion) Recommendation() Recommendation {
 	return c.recommendation
+}
+func (c InvestigationConclusion) Provenance() DiagnosisProvenance {
+	return c.provenance
 }
 func (c InvestigationConclusion) CreatedAt() time.Time {
 	return c.createdAt

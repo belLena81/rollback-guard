@@ -60,7 +60,7 @@ docs/
 .agents/
 ```
 
-Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. See [docs/phase3-mcp.md](./docs/phase3-mcp.md) and [docs/phase4-a2a.md](./docs/phase4-a2a.md) for runtime configuration and verification.
+Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. See [docs/phase3-mcp.md](./docs/phase3-mcp.md), [docs/phase4-a2a.md](./docs/phase4-a2a.md), and [docs/phase5-ai-diagnosis.md](./docs/phase5-ai-diagnosis.md) for runtime configuration and verification.
 
 ## Canonical Choices
 

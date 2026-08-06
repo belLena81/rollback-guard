@@ -59,13 +59,23 @@ type incidentDTO struct {
 }
 
 type conclusionDTO struct {
-	ID             string    `json:"id"`
-	Strategy       string    `json:"strategy"`
-	Hypothesis     string    `json:"hypothesis"`
-	Confidence     float64   `json:"confidence"`
-	EvidenceIDs    []string  `json:"evidenceIds"`
-	Recommendation string    `json:"recommendation"`
-	CreatedAt      time.Time `json:"createdAt"`
+	ID             string                 `json:"id"`
+	Strategy       string                 `json:"strategy"`
+	Hypothesis     string                 `json:"hypothesis"`
+	Confidence     float64                `json:"confidence"`
+	EvidenceIDs    []string               `json:"evidenceIds"`
+	Recommendation string                 `json:"recommendation"`
+	Provenance     diagnosisProvenanceDTO `json:"provenance"`
+	CreatedAt      time.Time              `json:"createdAt"`
+}
+
+type diagnosisProvenanceDTO struct {
+	RequestedStrategy string `json:"requestedStrategy"`
+	Model             string `json:"model"`
+	PromptVersion     string `json:"promptVersion"`
+	InputTokens       int64  `json:"inputTokens"`
+	OutputTokens      int64  `json:"outputTokens"`
+	FallbackReason    string `json:"fallbackReason,omitempty"`
 }
 
 type proposalDTO struct {
@@ -188,6 +198,7 @@ func conclusionResponse(conclusion domain.InvestigationConclusion) conclusionDTO
 	for _, id := range evidenceIDs {
 		ids = append(ids, string(id))
 	}
+	provenance := conclusion.Provenance()
 	return conclusionDTO{
 		ID:             string(conclusion.ID()),
 		Strategy:       conclusion.Strategy().String(),
@@ -195,7 +206,15 @@ func conclusionResponse(conclusion domain.InvestigationConclusion) conclusionDTO
 		Confidence:     conclusion.Confidence(),
 		EvidenceIDs:    ids,
 		Recommendation: conclusion.Recommendation().String(),
-		CreatedAt:      conclusion.CreatedAt(),
+		Provenance: diagnosisProvenanceDTO{
+			RequestedStrategy: provenance.RequestedStrategy.String(),
+			Model:             provenance.Model,
+			PromptVersion:     provenance.PromptVersion,
+			InputTokens:       provenance.InputTokens,
+			OutputTokens:      provenance.OutputTokens,
+			FallbackReason:    provenance.FallbackReason.String(),
+		},
+		CreatedAt: conclusion.CreatedAt(),
 	}
 }
 

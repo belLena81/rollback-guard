@@ -1,4 +1,4 @@
-.PHONY: fmt-check test test-race vet lint contract-test phase3-integration phase4-integration
+.PHONY: fmt-check test test-race vet lint contract-test phase3-integration phase4-integration phase5-integration
 
 fmt-check:
 	@test -z "$$(gofmt -l $$(find . -name '*.go'))"
@@ -23,3 +23,6 @@ phase3-integration:
 
 phase4-integration:
 	go test -tags=integration -timeout=3m ./test/integration/phase4/...
+
+phase5-integration:
+	go test -tags=integration -timeout=3m ./test/integration/phase5/...

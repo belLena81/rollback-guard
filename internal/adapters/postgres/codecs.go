@@ -79,10 +79,31 @@ func strategyText(value domain.DiagnosisStrategy) string {
 }
 
 func parseStrategy(value string) (domain.DiagnosisStrategy, error) {
-	if value == "rules" {
+	switch value {
+	case "rules":
 		return domain.StrategyRules, nil
+	case "llm":
+		return domain.StrategyLLM, nil
+	case "hybrid":
+		return domain.StrategyHybrid, nil
+	default:
+		return 0, fmt.Errorf("unknown diagnosis strategy %q", value)
 	}
-	return 0, fmt.Errorf("unknown diagnosis strategy %q", value)
+}
+
+func parseDiagnosisFallbackReason(value string) (domain.DiagnosisFallbackReason, error) {
+	switch value {
+	case "provider_error":
+		return domain.FallbackProviderError, nil
+	case "provider_timeout":
+		return domain.FallbackProviderTimeout, nil
+	case "provider_refusal":
+		return domain.FallbackProviderRefusal, nil
+	case "invalid_output":
+		return domain.FallbackInvalidOutput, nil
+	default:
+		return 0, fmt.Errorf("unknown diagnosis fallback reason %q", value)
+	}
 }
 
 func approvalDecisionText(value domain.ApprovalDecision) string {
