@@ -42,6 +42,10 @@ func TestLLMDiagnoserFallsBackForInvalidOutput(t *testing.T) {
 		{name: "blank hypothesis", mutate: func(result *ports.ReasoningResult) { result.Candidate.Hypothesis = " " }},
 		{name: "non finite confidence", mutate: func(result *ports.ReasoningResult) { result.Candidate.Confidence = math.NaN() }},
 		{name: "unknown recommendation", mutate: func(result *ports.ReasoningResult) { result.Candidate.Recommendation = "delete" }},
+		{name: "no action without evidence", mutate: func(result *ports.ReasoningResult) {
+			result.Candidate.Recommendation = domain.RecommendNoAction.String()
+			result.Candidate.EvidenceIDs = nil
+		}},
 		{name: "duplicate evidence", mutate: func(result *ports.ReasoningResult) {
 			result.Candidate.EvidenceIDs = []domain.EvidenceID{input.Evidence[0].ID(), input.Evidence[0].ID()}
 		}},

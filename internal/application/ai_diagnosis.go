@@ -239,8 +239,8 @@ func validateReasoningResult(input ports.InvestigationInput, result ports.Reason
 	default:
 		return 0, fmt.Errorf("model recommendation is invalid")
 	}
-	if recommendation == domain.RecommendRollback && len(result.Candidate.EvidenceIDs) == 0 {
-		return 0, fmt.Errorf("rollback recommendation requires evidence")
+	if len(result.Candidate.EvidenceIDs) == 0 {
+		return 0, fmt.Errorf("model diagnosis requires evidence")
 	}
 	available := make(map[domain.EvidenceID]struct{}, len(input.Evidence))
 	for _, item := range input.Evidence {

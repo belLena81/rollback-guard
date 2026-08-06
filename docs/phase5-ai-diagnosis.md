@@ -25,6 +25,8 @@ The initial transport uses the official OpenAI Go SDK against an OpenAI-compatib
 
 Only allow-listed normalized fields are sent. Raw logs and free-form Kubernetes event messages are excluded. Prompts, authorization headers, API keys, raw provider bodies, and provider error text are never persisted, returned, or logged.
 
+Provider response bodies are capped at 1 MiB before SDK decoding. Oversized responses are invalid output and use deterministic rule fallback. Every accepted model conclusion, including `no_action`, must reference at least one supplied evidence record.
+
 ## Runtime Configuration
 
 | Variable | Default | Purpose |
@@ -34,10 +36,12 @@ Only allow-listed normalized fields are sent. Raw logs and free-form Kubernetes 
 | `LLM_BASE_URL` | none | Required API base URL for model strategies, including `/v1` |
 | `LLM_MODEL` | none | Required model identifier for model strategies |
 | `LLM_API_KEY` | none | Required for non-loopback providers; optional for local compatible APIs |
-| `LLM_TIMEOUT` | `15s` | One model attempt; must be at most `30s` and below `A2A_TASK_TIMEOUT` |
+| `LLM_TIMEOUT` | `15s` | One model attempt; must be at most `30s` and fit the total task budget described below |
 | `LLM_MAX_OUTPUT_TOKENS` | `512` | Output limit in the range `64..2048` |
 
 Remote providers require HTTPS. HTTP is accepted only for `localhost` or another loopback address. Provider health is deliberately excluded from Investigator readiness because runtime failure uses the deterministic rule fallback.
+
+For `llm_based` and `hybrid`, `A2A_TASK_TIMEOUT` must be at least `2 * MCP_CALL_TIMEOUT + LLM_TIMEOUT + 1s`. The two MCP allowances cover sequential deployment and metric collection; the final second is reserved for deterministic rule fallback.
 
 ## Provenance And Compatibility
 

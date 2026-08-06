@@ -57,8 +57,37 @@ func TestOpenAICompatibleReasonerUsesStrictToolFreeSchema(t *testing.T) {
 	if schema["strict"] != true || schema["name"] != "rollback_diagnosis" {
 		t.Fatalf("response format = %#v", format)
 	}
+	outputSchema, ok := schema["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("output schema = %#v", schema["schema"])
+	}
+	properties, ok := outputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema properties = %#v", outputSchema["properties"])
+	}
+	evidenceIDs, ok := properties["evidence_ids"].(map[string]any)
+	if !ok || evidenceIDs["minItems"] != float64(1) {
+		t.Fatalf("evidence_ids schema = %#v", properties["evidence_ids"])
+	}
 	if strings.Contains(string(transport.body), "sensitive event payload") {
 		t.Fatal("omitted evidence text reached provider request")
+	}
+}
+
+func TestOpenAICompatibleReasonerRejectsOversizedProviderResponse(t *testing.T) {
+	valid := `{"id":"completion","object":"chat.completion","created":1,"model":"model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"{\"hypothesis\":\"regression\",\"confidence\":0.9,\"evidence_ids\":[\"deployment\"],\"recommendation\":\"rollback\"}","refusal":null}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`
+	transport := &recordingTransport{response: valid + strings.Repeat(" ", (1<<20)+1)}
+	reasoner := newTestReasoner(t, transport)
+
+	_, err := reasoner.Reason(context.Background(), reasoningRequest(t))
+	if !errors.Is(err, ports.ErrReasonerInvalidResponse) {
+		t.Fatalf("error = %v, want invalid response", err)
+	}
+	if transport.calls != 1 {
+		t.Fatalf("calls = %d, want 1", transport.calls)
+	}
+	if strings.Contains(err.Error(), valid) {
+		t.Fatalf("provider response leaked in error: %v", err)
 	}
 }
 

@@ -170,6 +170,10 @@ func TestLoadObservabilityMCPRejectsUnboundedDependencyTimeout(t *testing.T) {
 func TestLoadInvestigatorDefaultsToRuleDiagnosisWithoutLLMConfiguration(t *testing.T) {
 	clearConfigEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://rollback@database/rollback_guard")
+	t.Setenv("LLM_PROVIDER", "dormant-invalid-provider")
+	t.Setenv("LLM_BASE_URL", "://invalid")
+	t.Setenv("LLM_TIMEOUT", "not-a-duration")
+	t.Setenv("LLM_MAX_OUTPUT_TOKENS", "invalid")
 	cfg, err := LoadInvestigator()
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +199,10 @@ func TestLoadInvestigatorValidatesModelDiagnosisConfiguration(t *testing.T) {
 		{name: "hosted key required", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "https://provider.example/v1", "LLM_MODEL": "model"}, wantErr: "LLM_API_KEY"},
 		{name: "insecure remote URL", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://provider.example/v1", "LLM_MODEL": "model", "LLM_API_KEY": "key"}, wantErr: "HTTPS"},
 		{name: "timeout exceeds limit", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "LLM_TIMEOUT": "31s"}, wantErr: "LLM_TIMEOUT"},
-		{name: "timeout reaches task budget", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "LLM_TIMEOUT": "20s", "A2A_TASK_TIMEOUT": "20s"}, wantErr: "below A2A_TASK_TIMEOUT"},
+		{name: "reported timeout budget exhaustion", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "MCP_CALL_TIMEOUT": "10s", "LLM_TIMEOUT": "15s", "A2A_TASK_TIMEOUT": "20s"}, wantErr: "rule fallback"},
+		{name: "exact timeout budget", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "MCP_CALL_TIMEOUT": "10s", "LLM_TIMEOUT": "15s", "A2A_TASK_TIMEOUT": "36s"}, want: domain.StrategyLLM},
+		{name: "below timeout budget by one nanosecond", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "MCP_CALL_TIMEOUT": "10s", "LLM_TIMEOUT": "15s", "A2A_TASK_TIMEOUT": "35999999999ns"}, wantErr: "rule fallback"},
+		{name: "hybrid timeout budget exhaustion", env: map[string]string{"DIAGNOSIS_STRATEGY": "hybrid", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "MCP_CALL_TIMEOUT": "10s", "LLM_TIMEOUT": "15s", "A2A_TASK_TIMEOUT": "35s"}, wantErr: "rule fallback"},
 		{name: "output tokens too small", env: map[string]string{"DIAGNOSIS_STRATEGY": "llm_based", "LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "model", "LLM_MAX_OUTPUT_TOKENS": "63"}, wantErr: "LLM_MAX_OUTPUT_TOKENS"},
 	}
 	for _, test := range tests {

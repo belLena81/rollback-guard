@@ -12,7 +12,11 @@ import (
 	"github.com/belLena81/rollback-guard/internal/domain"
 )
 
-const defaultAllowedTargets = "local/rollback-demo/demo-api/demo-api"
+const (
+	defaultAllowedTargets          = "local/rollback-demo/demo-api/demo-api"
+	investigationEvidenceCallCount = 2
+	minimumRuleFallbackBudget      = time.Second
+)
 
 type LLMProvider string
 
@@ -256,8 +260,9 @@ func LoadInvestigator() (InvestigatorConfig, error) {
 		if err != nil || llmTimeout > 30*time.Second {
 			return InvestigatorConfig{}, fmt.Errorf("LLM_TIMEOUT must be positive and no greater than 30s")
 		}
-		if llmTimeout >= taskTimeout {
-			return InvestigatorConfig{}, fmt.Errorf("LLM_TIMEOUT must be below A2A_TASK_TIMEOUT")
+		requiredTaskBudget := investigationEvidenceCallCount*callTimeout + llmTimeout + minimumRuleFallbackBudget
+		if taskTimeout < requiredTaskBudget {
+			return InvestigatorConfig{}, fmt.Errorf("A2A_TASK_TIMEOUT must be at least %s to cover two MCP calls, LLM reasoning, and rule fallback", requiredTaskBudget)
 		}
 		maxOutputTokens, err = intEnv("LLM_MAX_OUTPUT_TOKENS", maxOutputTokens)
 		if err != nil || maxOutputTokens < 64 || maxOutputTokens > 2048 {
