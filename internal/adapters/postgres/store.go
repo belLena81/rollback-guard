@@ -18,7 +18,7 @@ type UnitOfWork struct {
 
 func NewUnitOfWork(pool *pgxpool.Pool) (*UnitOfWork, error) {
 	if pool == nil {
-		return nil, fmt.Errorf("postgres pool is required")
+		return nil, errors.New("postgres pool is required")
 	}
 	return &UnitOfWork{pool: pool}, nil
 }

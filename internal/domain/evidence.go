@@ -2,6 +2,7 @@ package domain
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"time"
 )
@@ -283,7 +284,7 @@ func NewInvestigationConclusionWithProvenance(id ConclusionID, incidentID Incide
 		return InvestigationConclusion{}, invalid("conclusion.evidence_ids", "must not be empty")
 	}
 	seen := map[EvidenceID]bool{}
-	ids := append([]EvidenceID(nil), evidenceIDs...)
+	ids := slices.Clone(evidenceIDs)
 	for _, evidenceID := range ids {
 		if evidenceID == "" || seen[evidenceID] {
 			return InvestigationConclusion{}, invalid("conclusion.evidence_ids", "must be non-empty and unique")
@@ -341,7 +342,7 @@ func (c InvestigationConclusion) Confidence() float64 {
 	return c.confidence
 }
 func (c InvestigationConclusion) EvidenceIDs() []EvidenceID {
-	return append([]EvidenceID(nil), c.evidenceIDs...)
+	return slices.Clone(c.evidenceIDs)
 }
 func (c InvestigationConclusion) Recommendation() Recommendation {
 	return c.recommendation

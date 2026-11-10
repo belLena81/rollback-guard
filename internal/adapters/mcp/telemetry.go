@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
@@ -67,7 +66,7 @@ type observedCaller struct {
 // under server. Wrap it outside BoundCalls so timeouts are observed.
 func ObserveCalls(caller Caller, server string, observer CallObserver) (Caller, error) {
 	if caller == nil || observer == nil || server == "" {
-		return nil, fmt.Errorf("caller, server name, and observer are required")
+		return nil, errors.New("caller, server name, and observer are required")
 	}
 	return observedCaller{next: caller, server: server, observer: observer}, nil
 }

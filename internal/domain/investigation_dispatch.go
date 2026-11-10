@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -127,10 +128,8 @@ func (d InvestigationDispatch) requireState(allowed ...InvestigationTaskState) e
 	if d.CancellationRequested() {
 		return ErrInvestigationCancellationRequested
 	}
-	for _, state := range allowed {
-		if d.State == state {
-			return nil
-		}
+	if slices.Contains(allowed, d.State) {
+		return nil
 	}
 	return fmt.Errorf("cannot update investigation task in %s state", d.State)
 }

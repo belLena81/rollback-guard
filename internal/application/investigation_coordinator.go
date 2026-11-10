@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -40,7 +39,7 @@ type investigationWatchResult struct {
 
 func NewInvestigationCoordinator(uow ports.UnitOfWork, gateway ports.InvestigationGateway, investigations *InvestigationService, clock ports.Clock, config InvestigationCoordinatorConfig) (*InvestigationCoordinator, error) {
 	if uow == nil || gateway == nil || investigations == nil || clock == nil {
-		return nil, fmt.Errorf("all investigation coordinator dependencies are required")
+		return nil, errors.New("all investigation coordinator dependencies are required")
 	}
 	if config.WorkerID == "" || config.TaskTimeout <= 0 || config.CancelTimeout <= 0 {
 		return nil, &domain.ValidationError{Field: "investigation_coordinator", Reason: "worker and timeouts are required"}

@@ -1,5 +1,7 @@
 package domain
 
+import "slices"
+
 import "time"
 
 type EligibilityCandidate struct {
@@ -26,7 +28,7 @@ func NewEligibilityPolicy(config EligibilityPolicyConfig) (EligibilityPolicy, er
 	policy := EligibilityPolicy{
 		minimumConfidence: config.MinimumConfidence,
 		correlationWindow: config.CorrelationWindow,
-		allowedTargets:    append([]DeploymentTarget(nil), config.AllowedTargets...),
+		allowedTargets:    slices.Clone(config.AllowedTargets),
 	}
 	if err := policy.Validate(); err != nil {
 		return EligibilityPolicy{}, err
@@ -90,21 +92,13 @@ func resolveReferencedEvidence(candidate EligibilityCandidate) referencedEvidenc
 }
 
 func evidenceBelongs(candidate EligibilityCandidate, id EvidenceID) bool {
-	for _, e := range candidate.Evidence {
-		if e.ID() == id && e.IncidentID() == candidate.Incident.ID() {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(candidate.Evidence, func(e Evidence) bool {
+		return e.ID() == id && e.IncidentID() == candidate.Incident.ID()
+	})
 }
 
 func (p EligibilityPolicy) allowsTarget(target DeploymentTarget) bool {
-	for _, allowed := range p.allowedTargets {
-		if target.Equal(allowed) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(p.allowedTargets, target.Equal)
 }
 
 func (p EligibilityPolicy) Evaluate(candidate EligibilityCandidate) (PolicyDecision, error) {

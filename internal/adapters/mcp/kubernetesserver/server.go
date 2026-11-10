@@ -53,7 +53,7 @@ func NewHTTPHandler(backend Backend, mode Mode, ready func(context.Context) erro
 }
 
 func registerReadonly(server *mcp.Server, backend Backend) {
-	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPointer(false), IdempotentHint: true, OpenWorldHint: boolPointer(false)}
+	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: new(false), IdempotentHint: true, OpenWorldHint: new(false)}
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetDeployment, Description: "Read one allowed Deployment summary", Annotations: readOnly}, getDeployment(backend))
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetReplicaSets, Description: "Read owned ReplicaSet summaries", Annotations: readOnly}, getReplicaSets(backend))
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolListPods, Description: "List bounded pod health summaries for one allowed Deployment", Annotations: readOnly}, listPods(backend))
@@ -63,8 +63,8 @@ func registerReadonly(server *mcp.Server, backend Backend) {
 }
 
 func registerRollback(server *mcp.Server, backend Backend) {
-	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPointer(false), IdempotentHint: true, OpenWorldHint: boolPointer(false)}
-	mutating := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPointer(true), IdempotentHint: true, OpenWorldHint: boolPointer(false)}
+	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: new(false), IdempotentHint: true, OpenWorldHint: new(false)}
+	mutating := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: new(true), IdempotentHint: true, OpenWorldHint: new(false)}
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolPrepareRollback, Description: "Validate an immutable rollback proposal without mutation", Annotations: readOnly}, prepareRollback(backend))
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolExecuteApprovedRollback, Description: "Execute one exactly approved rollback against an allowed Deployment", Annotations: mutating}, executeRollback(backend))
 }

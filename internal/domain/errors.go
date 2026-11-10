@@ -1,19 +1,22 @@
 package domain
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
-	ErrValidation               = fmt.Errorf("validation failed")
-	ErrIllegalTransition        = fmt.Errorf("illegal transition")
-	ErrNotFound                 = fmt.Errorf("not found")
-	ErrAlreadyExists            = fmt.Errorf("already exists")
-	ErrVersionConflict          = fmt.Errorf("version conflict")
-	ErrInvalidEvidenceReference = fmt.Errorf("invalid evidence reference")
-	ErrPolicyDenied             = fmt.Errorf("policy denied")
-	ErrApprovalMismatch         = fmt.Errorf("approval mismatch")
-	ErrNonHumanApproval         = fmt.Errorf("non-human approval")
-	ErrExpired                  = fmt.Errorf("expired")
-	ErrIdempotencyConflict      = fmt.Errorf("idempotency conflict")
+	ErrValidation               = errors.New("validation failed")
+	ErrIllegalTransition        = errors.New("illegal transition")
+	ErrNotFound                 = errors.New("not found")
+	ErrAlreadyExists            = errors.New("already exists")
+	ErrVersionConflict          = errors.New("version conflict")
+	ErrInvalidEvidenceReference = errors.New("invalid evidence reference")
+	ErrPolicyDenied             = errors.New("policy denied")
+	ErrApprovalMismatch         = errors.New("approval mismatch")
+	ErrNonHumanApproval         = errors.New("non-human approval")
+	ErrExpired                  = errors.New("expired")
+	ErrIdempotencyConflict      = errors.New("idempotency conflict")
 )
 
 type ValidationError struct{ Field, Reason string }

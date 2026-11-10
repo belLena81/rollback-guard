@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -13,7 +14,7 @@ type DeploymentInspector struct {
 
 func NewDeploymentInspector(caller Caller) (*DeploymentInspector, error) {
 	if caller == nil {
-		return nil, fmt.Errorf("deployment MCP caller is required")
+		return nil, errors.New("deployment MCP caller is required")
 	}
 	return &DeploymentInspector{caller: caller}, nil
 }
@@ -25,7 +26,7 @@ func (a *DeploymentInspector) InspectDeployment(ctx context.Context, target doma
 	}
 	returnedTarget, err := output.Target.Domain()
 	if err != nil || !returnedTarget.Equal(target) || output.CurrentRevision == "" || output.RolloutAt.IsZero() {
-		return domain.DeploymentEvidence{}, fmt.Errorf("deployment MCP returned inconsistent evidence")
+		return domain.DeploymentEvidence{}, errors.New("deployment MCP returned inconsistent evidence")
 	}
 	return domain.DeploymentEvidence{Target: returnedTarget, CurrentRevision: domain.Revision(output.CurrentRevision), PreviousStableRevision: domain.Revision(output.PreviousStableRevision), DesiredReplicas: output.DesiredReplicas, ReadyReplicas: output.ReadyReplicas, AvailableReplicas: output.AvailableReplicas, Healthy: output.Healthy, RolloutAt: output.RolloutAt.UTC()}, nil
 }

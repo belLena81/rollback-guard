@@ -1,5 +1,7 @@
 package domain
 
+import "slices"
+
 import "time"
 
 type Status uint8
@@ -91,12 +93,10 @@ func (i Incident) UpdatedAt() time.Time {
 }
 
 func (i *Incident) transition(to Status, now time.Time, allowed ...Status) error {
-	for _, from := range allowed {
-		if i.status == from {
-			i.status, i.updatedAt = to, now.UTC()
-			i.version++
-			return nil
-		}
+	if slices.Contains(allowed, i.status) {
+		i.status, i.updatedAt = to, now.UTC()
+		i.version++
+		return nil
 	}
 	return &IllegalTransitionError{From: i.status, To: to}
 }

@@ -152,7 +152,7 @@ func decodeRequest(value any) (ports.InvestigationRequest, error) {
 		return ports.InvestigationRequest{}, fmt.Errorf("unsupported investigation schema version %q", wire.SchemaVersion)
 	}
 	if wire.Incident.Status != domain.StatusInvestigating.String() {
-		return ports.InvestigationRequest{}, fmt.Errorf("incident must be investigating")
+		return ports.InvestigationRequest{}, errors.New("incident must be investigating")
 	}
 	target, err := domain.NewDeploymentTarget(wire.Incident.Target.Cluster, wire.Incident.Target.Namespace, wire.Incident.Target.Deployment, wire.Incident.Target.Service)
 	if err != nil {
@@ -210,7 +210,7 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 			return ports.InvestigationResult{}, err
 		}
 		if value.IncidentID() != domain.IncidentID(wire.IncidentID) {
-			return ports.InvestigationResult{}, fmt.Errorf("evidence incident id does not match result")
+			return ports.InvestigationResult{}, errors.New("evidence incident id does not match result")
 		}
 		evidence = append(evidence, value)
 	}
@@ -231,7 +231,7 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 	var conclusion domain.InvestigationConclusion
 	if wire.Conclusion.Provenance == nil {
 		if strategy != domain.StrategyRules {
-			return ports.InvestigationResult{}, fmt.Errorf("model diagnosis provenance is required")
+			return ports.InvestigationResult{}, errors.New("model diagnosis provenance is required")
 		}
 		conclusion, err = domain.NewInvestigationConclusion(domain.ConclusionID(wire.Conclusion.ID), domain.IncidentID(wire.Conclusion.IncidentID), strategy, wire.Conclusion.Hypothesis, wire.Conclusion.Confidence, ids, recommendation, wire.Conclusion.CreatedAt)
 	} else {
@@ -257,7 +257,7 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 		return ports.InvestigationResult{}, err
 	}
 	if wire.IncidentID != string(conclusion.IncidentID()) {
-		return ports.InvestigationResult{}, fmt.Errorf("result incident id does not match conclusion")
+		return ports.InvestigationResult{}, errors.New("result incident id does not match conclusion")
 	}
 	return ports.InvestigationResult{Deployment: deployment, Evidence: evidence, Conclusion: conclusion}, nil
 }
@@ -315,7 +315,7 @@ func decodeEvidence(v evidenceDTO) (domain.Evidence, error) {
 	switch v.Kind {
 	case domain.EvidenceDeployment.String():
 		if v.Deployment == nil {
-			return domain.Evidence{}, fmt.Errorf("deployment evidence payload is required")
+			return domain.Evidence{}, errors.New("deployment evidence payload is required")
 		}
 		x, err := decodeDeployment(*v.Deployment)
 		if err != nil {
@@ -324,17 +324,17 @@ func decodeEvidence(v evidenceDTO) (domain.Evidence, error) {
 		return domain.NewDeploymentEvidence(id, incidentID, x, v.CollectedAt)
 	case domain.EvidenceMetric.String():
 		if v.Metric == nil {
-			return domain.Evidence{}, fmt.Errorf("metric evidence payload is required")
+			return domain.Evidence{}, errors.New("metric evidence payload is required")
 		}
 		return domain.NewMetricEvidence(id, incidentID, domain.MetricEvidence{Name: v.Metric.Name, Value: v.Metric.Value, Threshold: v.Metric.Threshold, Unit: v.Metric.Unit, ObservedAt: v.Metric.ObservedAt}, v.CollectedAt)
 	case domain.EvidencePod.String():
 		if v.Pod == nil {
-			return domain.Evidence{}, fmt.Errorf("pod evidence payload is required")
+			return domain.Evidence{}, errors.New("pod evidence payload is required")
 		}
 		return domain.NewPodEvidence(id, incidentID, domain.PodEvidence{Pod: v.Pod.Pod, CrashLoop: v.Pod.CrashLoop, Restarts: v.Pod.Restarts, ObservedAt: v.Pod.ObservedAt}, v.CollectedAt)
 	case domain.EvidenceKubernetesEvent.String():
 		if v.KubernetesEvent == nil {
-			return domain.Evidence{}, fmt.Errorf("kubernetes event evidence payload is required")
+			return domain.Evidence{}, errors.New("kubernetes event evidence payload is required")
 		}
 		return domain.NewKubernetesEventEvidence(id, incidentID, domain.KubernetesEventEvidence{Reason: v.KubernetesEvent.Reason, Message: v.KubernetesEvent.Message, ObservedAt: v.KubernetesEvent.ObservedAt}, v.CollectedAt)
 	default:
@@ -357,7 +357,7 @@ func strictDecode(value any, target any) error {
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("DataPart contains trailing data")
+		return errors.New("DataPart contains trailing data")
 	}
 	return nil
 }

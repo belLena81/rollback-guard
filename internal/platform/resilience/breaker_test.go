@@ -232,15 +232,13 @@ func TestBreakerAdmitsExactlyOneConcurrentProbe(t *testing.T) {
 	release := make(chan struct{})
 	var wg sync.WaitGroup
 	for range 50 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			discard(resilience.Guard(context.Background(), b, func(context.Context) (int, error) {
 				admitted.Add(1)
 				<-release
 				return 1, nil
 			}))
-		}()
+		})
 	}
 	// Rejected callers return immediately; wait until only the probe is left.
 	deadline := time.Now().Add(5 * time.Second)

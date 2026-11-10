@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -57,19 +58,19 @@ func parseTarget(value deploymentTargetJSON) (domain.DeploymentTarget, error) {
 }
 
 type evidencePayload struct {
-	Target                 deploymentTargetJSON `json:"target,omitempty"`
+	Target                 deploymentTargetJSON `json:"target,omitempty"` //nolint:modernize // R7: stored JSON keeps omitempty bytes (out of scope)
 	CurrentRevision        string               `json:"current_revision,omitempty"`
 	PreviousStableRevision string               `json:"previous_stable_revision,omitempty"`
 	DesiredReplicas        int                  `json:"desired_replicas,omitempty"`
 	ReadyReplicas          int                  `json:"ready_replicas,omitempty"`
 	AvailableReplicas      int                  `json:"available_replicas,omitempty"`
 	Healthy                bool                 `json:"healthy,omitempty"`
-	RolloutAt              time.Time            `json:"rollout_at,omitempty"`
+	RolloutAt              time.Time            `json:"rollout_at,omitempty"` //nolint:modernize // R7: stored JSON keeps omitempty bytes (out of scope)
 	Name                   string               `json:"name,omitempty"`
 	Value                  float64              `json:"value,omitempty"`
 	Threshold              float64              `json:"threshold,omitempty"`
 	Unit                   string               `json:"unit,omitempty"`
-	ObservedAt             time.Time            `json:"observed_at,omitempty"`
+	ObservedAt             time.Time            `json:"observed_at,omitempty"` //nolint:modernize // R7: stored JSON keeps omitempty bytes (out of scope)
 	Pod                    string               `json:"pod,omitempty"`
 	CrashLoop              bool                 `json:"crash_loop,omitempty"`
 	Restarts               int                  `json:"restarts,omitempty"`
@@ -114,7 +115,7 @@ func marshalEvidencePayload(evidence domain.Evidence) ([]byte, error) {
 			ObservedAt: value.ObservedAt,
 		})
 	}
-	return nil, fmt.Errorf("evidence has no payload")
+	return nil, errors.New("evidence has no payload")
 }
 
 func unmarshalEvidencePayload(id domain.EvidenceID, incidentID domain.IncidentID, kind domain.EvidenceKind, collectedAt time.Time, data []byte) (domain.Evidence, error) {
@@ -149,12 +150,12 @@ func unmarshalEvidencePayload(id domain.EvidenceID, incidentID domain.IncidentID
 		value := domain.KubernetesEventEvidence{Reason: payload.Reason, Message: payload.Message, ObservedAt: payload.ObservedAt}
 		return domain.RehydrateEvidence(domain.EvidenceSnapshot{ID: id, IncidentID: incidentID, Kind: kind, CollectedAt: collectedAt, KubernetesEvent: &value})
 	default:
-		return domain.Evidence{}, fmt.Errorf("unknown evidence kind")
+		return domain.Evidence{}, errors.New("unknown evidence kind")
 	}
 }
 
 type eventDetailPayload struct {
-	Target         deploymentTargetJSON `json:"target,omitempty"`
+	Target         deploymentTargetJSON `json:"target,omitempty"` //nolint:modernize // R7: stored JSON keeps omitempty bytes (out of scope)
 	From           string               `json:"from,omitempty"`
 	To             string               `json:"to,omitempty"`
 	EvidenceID     string               `json:"evidence_id,omitempty"`
@@ -249,7 +250,7 @@ func unmarshalEventDetail(kind domain.EventKind, data []byte) (domain.EventDetai
 	case domain.EventIncidentFailed, domain.EventIncidentExpired, domain.EventIncidentCanceled:
 		return domain.TerminalDetail{Reason: payload.Reason}, nil
 	default:
-		return nil, fmt.Errorf("unknown event kind")
+		return nil, errors.New("unknown event kind")
 	}
 }
 

@@ -2,8 +2,10 @@ package a2aadapter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -34,25 +36,19 @@ func NewGateway(ctx context.Context, discoveryURL string, httpClient *http.Clien
 
 func validateAgentCard(card *a2a.AgentCard) error {
 	if card == nil {
-		return fmt.Errorf("investigator agent card is empty")
+		return errors.New("investigator agent card is empty")
 	}
-	foundExtension := false
-	for _, extension := range card.Capabilities.Extensions {
-		if extension.URI == ExtensionURI {
-			foundExtension = true
-		}
-	}
+	foundExtension := slices.ContainsFunc(card.Capabilities.Extensions, func(extension a2a.AgentExtension) bool {
+		return extension.URI == ExtensionURI
+	})
 	if !foundExtension {
 		return fmt.Errorf("investigator agent card does not support required extension %q", ExtensionURI)
 	}
-	foundSkill := false
-	for _, skill := range card.Skills {
-		if skill.ID == "investigate_rollout" {
-			foundSkill = true
-		}
-	}
+	foundSkill := slices.ContainsFunc(card.Skills, func(skill a2a.AgentSkill) bool {
+		return skill.ID == "investigate_rollout"
+	})
 	if !foundSkill {
-		return fmt.Errorf("investigator agent card does not expose investigate_rollout")
+		return errors.New("investigator agent card does not expose investigate_rollout")
 	}
 	return nil
 }
@@ -75,10 +71,10 @@ func (g *Gateway) Submit(ctx context.Context, submission ports.InvestigationSubm
 	}
 	task, ok := response.(*a2a.Task)
 	if !ok {
-		return domain.InvestigationTaskRef{}, fmt.Errorf("investigator returned a message instead of a task")
+		return domain.InvestigationTaskRef{}, errors.New("investigator returned a message instead of a task")
 	}
 	if task.ID == "" || task.ContextID == "" {
-		return domain.InvestigationTaskRef{}, fmt.Errorf("investigator returned an incomplete task reference")
+		return domain.InvestigationTaskRef{}, errors.New("investigator returned an incomplete task reference")
 	}
 	return domain.InvestigationTaskRef{TaskID: string(task.ID), ContextID: task.ContextID}, nil
 }
@@ -142,7 +138,7 @@ func (w *taskWatch) observe(event a2a.Event) (*ports.InvestigationResult, error)
 		return w.observeStatus(value)
 	case *a2a.TaskArtifactUpdateEvent:
 		if value.Artifact == nil || value.Artifact.Name != ResultArtifactName {
-			return nil, fmt.Errorf("unexpected investigation artifact")
+			return nil, errors.New("unexpected investigation artifact")
 		}
 		parsed, err := resultFromParts(value.Artifact.Parts)
 		if err != nil {
@@ -151,9 +147,9 @@ func (w *taskWatch) observe(event a2a.Event) (*ports.InvestigationResult, error)
 		w.result = &parsed
 		return nil, nil
 	case *a2a.Message:
-		return nil, fmt.Errorf("investigator returned a message instead of task events")
+		return nil, errors.New("investigator returned a message instead of task events")
 	default:
-		return nil, fmt.Errorf("investigator returned an unknown event")
+		return nil, errors.New("investigator returned an unknown event")
 	}
 }
 
@@ -200,7 +196,7 @@ func (w *taskWatch) reportProgress(parts a2a.ContentParts) error {
 func failureOfState(state a2a.TaskState) error {
 	switch state {
 	case a2a.TaskStateFailed, a2a.TaskStateRejected:
-		return fmt.Errorf("investigation task failed")
+		return errors.New("investigation task failed")
 	case a2a.TaskStateCanceled:
 		return context.Canceled
 	case a2a.TaskStateUnspecified, a2a.TaskStateSubmitted, a2a.TaskStateWorking, a2a.TaskStateCompleted,
@@ -223,43 +219,43 @@ func (g *Gateway) Close() error { return g.client.Destroy() }
 
 func stageFromParts(parts a2a.ContentParts) (domain.InvestigationStage, error) {
 	if len(parts) != 1 || parts[0].Data() == nil || parts[0].MediaType != JSONMediaType {
-		return 0, fmt.Errorf("invalid investigation progress")
+		return 0, errors.New("invalid investigation progress")
 	}
 	var wire progressDTO
 	if err := strictDecode(parts[0].Data(), &wire); err != nil {
 		return 0, err
 	}
 	if wire.SchemaVersion != SchemaVersion {
-		return 0, fmt.Errorf("unsupported progress schema")
+		return 0, errors.New("unsupported progress schema")
 	}
 	return domain.ParseInvestigationStage(wire.Stage)
 }
 
 func resultFromTask(task *a2a.Task) (ports.InvestigationResult, error) {
 	if task.Status.State == a2a.TaskStateFailed || task.Status.State == a2a.TaskStateRejected {
-		return ports.InvestigationResult{}, fmt.Errorf("investigation task failed")
+		return ports.InvestigationResult{}, errors.New("investigation task failed")
 	}
 	if task.Status.State == a2a.TaskStateCanceled {
 		return ports.InvestigationResult{}, context.Canceled
 	}
 	if task.Status.State != a2a.TaskStateCompleted {
-		return ports.InvestigationResult{}, fmt.Errorf("investigation task is not complete")
+		return ports.InvestigationResult{}, errors.New("investigation task is not complete")
 	}
 	return resultFromArtifacts(task.Artifacts)
 }
 func resultFromArtifacts(artifacts []*a2a.Artifact) (ports.InvestigationResult, error) {
 	if len(artifacts) != 1 {
-		return ports.InvestigationResult{}, fmt.Errorf("result artifact count must be exactly one")
+		return ports.InvestigationResult{}, errors.New("result artifact count must be exactly one")
 	}
 	artifact := artifacts[0]
 	if artifact == nil || artifact.Name != ResultArtifactName {
-		return ports.InvestigationResult{}, fmt.Errorf("unexpected result artifact")
+		return ports.InvestigationResult{}, errors.New("unexpected result artifact")
 	}
 	return resultFromParts(artifact.Parts)
 }
 func resultFromParts(parts a2a.ContentParts) (ports.InvestigationResult, error) {
 	if len(parts) != 1 || parts[0].Data() == nil || parts[0].MediaType != JSONMediaType {
-		return ports.InvestigationResult{}, fmt.Errorf("invalid result artifact")
+		return ports.InvestigationResult{}, errors.New("invalid result artifact")
 	}
 	return decodeResult(parts[0].Data())
 }

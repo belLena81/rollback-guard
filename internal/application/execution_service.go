@@ -338,7 +338,7 @@ func validateExecutionResult(execution domain.RollbackExecution, proposal domain
 		execution.FromRevision() != proposal.CurrentRevision() ||
 		execution.ToRevision() != proposal.TargetRevision() ||
 		(execution.Outcome() != domain.ExecutionSucceeded && execution.Outcome() != domain.ExecutionFailed) {
-		return fmt.Errorf("rollback executor returned a result that does not match the approved rollback")
+		return errors.New("rollback executor returned a result that does not match the approved rollback")
 	}
 	return nil
 }

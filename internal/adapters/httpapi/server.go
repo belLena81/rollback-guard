@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,7 +45,7 @@ func WithMetricsHandler(handler http.Handler) Option {
 
 func NewServer(services application.Services, logger *slog.Logger, opts ...Option) (*Server, error) {
 	if services.Incidents == nil || services.Investigations == nil || services.Approvals == nil || services.Executions == nil || services.Verifications == nil || services.Queries == nil || services.ApproveAndExecute == nil {
-		return nil, fmt.Errorf("all application services are required")
+		return nil, errors.New("all application services are required")
 	}
 	if logger == nil {
 		logger = slog.Default()

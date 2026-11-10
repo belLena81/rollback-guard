@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -254,7 +255,7 @@ func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
 	}
 	mode := stringEnv("KUBERNETES_MCP_MODE", KubernetesMCPModeReadonly)
 	if mode != KubernetesMCPModeReadonly && mode != KubernetesMCPModeRollback {
-		return KubernetesMCPConfig{}, fmt.Errorf("KUBERNETES_MCP_MODE must be readonly or rollback")
+		return KubernetesMCPConfig{}, errors.New("KUBERNETES_MCP_MODE must be readonly or rollback")
 	}
 	clusterID := stringEnv("CLUSTER_ID", defaultClusterID)
 	for _, target := range targets {
@@ -529,10 +530,10 @@ func loadLLM(strategy domain.DiagnosisStrategy, mcpCallTimeout, taskTimeout time
 		return llmSettings{}, err
 	}
 	if settings.model == "" {
-		return llmSettings{}, fmt.Errorf("LLM_MODEL is required for model diagnosis")
+		return llmSettings{}, errors.New("LLM_MODEL is required for model diagnosis")
 	}
 	if !loopback && settings.apiKey == "" {
-		return llmSettings{}, fmt.Errorf("LLM_API_KEY is required for non-loopback providers")
+		return llmSettings{}, errors.New("LLM_API_KEY is required for non-loopback providers")
 	}
 	settings.timeout, err = boundedDurationEnv("LLM_TIMEOUT", defaultLLMTimeout, 0, maxLLMTimeout)
 	if err != nil {
@@ -560,20 +561,20 @@ func diagnosisStrategyEnv() (domain.DiagnosisStrategy, error) {
 	}
 	name, ok := canonical[stringEnv("DIAGNOSIS_STRATEGY", "rule_based")]
 	if !ok {
-		return 0, fmt.Errorf("DIAGNOSIS_STRATEGY must be rule_based, llm_based, or hybrid")
+		return 0, errors.New("DIAGNOSIS_STRATEGY must be rule_based, llm_based, or hybrid")
 	}
 	return domain.ParseDiagnosisStrategy(name)
 }
 
 func validateLLMBaseURL(value string) (bool, error) {
 	if value == "" {
-		return false, fmt.Errorf("LLM_BASE_URL is required for model diagnosis")
+		return false, errors.New("LLM_BASE_URL is required for model diagnosis")
 	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		// The value may carry credentials, so neither it nor the parse
 		// error is reported.
-		return false, fmt.Errorf("LLM_BASE_URL must be an absolute URL without credentials, query, or fragment")
+		return false, errors.New("LLM_BASE_URL must be an absolute URL without credentials, query, or fragment")
 	}
 	host := parsed.Hostname()
 	loopback := strings.EqualFold(host, "localhost")
@@ -581,7 +582,7 @@ func validateLLMBaseURL(value string) (bool, error) {
 		loopback = ip.IsLoopback()
 	}
 	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !loopback) {
-		return false, fmt.Errorf("LLM_BASE_URL must use HTTPS unless it targets loopback")
+		return false, errors.New("LLM_BASE_URL must use HTTPS unless it targets loopback")
 	}
 	return loopback, nil
 }

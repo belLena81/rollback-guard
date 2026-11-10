@@ -59,10 +59,10 @@ func NewHybridDiagnoser(reasoner ports.Reasoner, rules ports.Diagnoser, ids port
 
 func newModelDiagnoser(reasoner ports.Reasoner, rules ports.Diagnoser, ids ports.IDGenerator, config ModelDiagnoserConfig, strategy domain.DiagnosisStrategy, includeRules bool) (modelDiagnoser, error) {
 	if reasoner == nil || rules == nil || ids == nil {
-		return modelDiagnoser{}, fmt.Errorf("reasoner, rule diagnoser, and id generator are required")
+		return modelDiagnoser{}, errors.New("reasoner, rule diagnoser, and id generator are required")
 	}
 	if strings.TrimSpace(config.Model) == "" || strings.TrimSpace(config.PromptVersion) == "" || config.Timeout <= 0 {
-		return modelDiagnoser{}, fmt.Errorf("model, prompt version, and positive timeout are required")
+		return modelDiagnoser{}, errors.New("model, prompt version, and positive timeout are required")
 	}
 	return modelDiagnoser{reasoner: reasoner, rules: rules, ids: ids, config: config, strategy: strategy, includeRules: includeRules}, nil
 }
@@ -186,7 +186,7 @@ func newReasoningRequest(input ports.InvestigationInput, promptVersion string, r
 	evidence := make([]ports.ReasoningEvidence, 0, len(input.Evidence))
 	for _, item := range input.Evidence {
 		if item.IncidentID() != input.Incident.ID() {
-			return ports.ReasoningRequest{}, fmt.Errorf("reasoning evidence belongs to another incident")
+			return ports.ReasoningRequest{}, errors.New("reasoning evidence belongs to another incident")
 		}
 		normalized := ports.ReasoningEvidence{ID: item.ID(), Kind: item.Kind(), CollectedAt: item.CollectedAt()}
 		if value, ok := item.Deployment(); ok {
@@ -224,13 +224,13 @@ func newReasoningRequest(input ports.InvestigationInput, promptVersion string, r
 func validateReasoningResult(input ports.InvestigationInput, result ports.ReasoningResult) (domain.Recommendation, error) {
 	hypothesis := strings.TrimSpace(result.Candidate.Hypothesis)
 	if hypothesis == "" || len(hypothesis) > maximumHypothesisBytes {
-		return 0, fmt.Errorf("model hypothesis is invalid")
+		return 0, errors.New("model hypothesis is invalid")
 	}
 	if math.IsNaN(result.Candidate.Confidence) || math.IsInf(result.Candidate.Confidence, 0) || result.Candidate.Confidence < 0 || result.Candidate.Confidence > 1 {
-		return 0, fmt.Errorf("model confidence is invalid")
+		return 0, errors.New("model confidence is invalid")
 	}
 	if strings.TrimSpace(result.Model) == "" || result.Usage.InputTokens < 0 || result.Usage.OutputTokens < 0 {
-		return 0, fmt.Errorf("model metadata is invalid")
+		return 0, errors.New("model metadata is invalid")
 	}
 	recommendation := domain.Recommendation(0)
 	switch result.Candidate.Recommendation {
@@ -239,28 +239,28 @@ func validateReasoningResult(input ports.InvestigationInput, result ports.Reason
 	case domain.RecommendNoAction.String():
 		recommendation = domain.RecommendNoAction
 	default:
-		return 0, fmt.Errorf("model recommendation is invalid")
+		return 0, errors.New("model recommendation is invalid")
 	}
 	if len(result.Candidate.EvidenceIDs) == 0 {
-		return 0, fmt.Errorf("model diagnosis requires evidence")
+		return 0, errors.New("model diagnosis requires evidence")
 	}
 	available := make(map[domain.EvidenceID]struct{}, len(input.Evidence))
 	for _, item := range input.Evidence {
 		if item.IncidentID() != input.Incident.ID() {
-			return 0, fmt.Errorf("input evidence belongs to another incident")
+			return 0, errors.New("input evidence belongs to another incident")
 		}
 		available[item.ID()] = struct{}{}
 	}
 	seen := make(map[domain.EvidenceID]struct{}, len(result.Candidate.EvidenceIDs))
 	for _, id := range result.Candidate.EvidenceIDs {
 		if id == "" {
-			return 0, fmt.Errorf("model evidence reference is empty")
+			return 0, errors.New("model evidence reference is empty")
 		}
 		if _, duplicate := seen[id]; duplicate {
-			return 0, fmt.Errorf("model evidence reference is duplicated")
+			return 0, errors.New("model evidence reference is duplicated")
 		}
 		if _, exists := available[id]; !exists {
-			return 0, fmt.Errorf("model evidence reference is unknown")
+			return 0, errors.New("model evidence reference is unknown")
 		}
 		seen[id] = struct{}{}
 	}

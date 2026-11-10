@@ -88,10 +88,10 @@ var _ ports.Tracer = (*Provider)(nil)
 
 func New(settings Settings, opts ...Option) (*Provider, error) {
 	if strings.TrimSpace(settings.ServiceName) == "" {
-		return nil, fmt.Errorf("telemetry service name is required")
+		return nil, errors.New("telemetry service name is required")
 	}
 	if settings.SampleRatio < 0 || settings.SampleRatio > 1 {
-		return nil, fmt.Errorf("telemetry sample ratio must be between 0 and 1")
+		return nil, errors.New("telemetry sample ratio must be between 0 and 1")
 	}
 	if settings.ShutdownTimeout <= 0 {
 		settings.ShutdownTimeout = defaultShutdownTimeout
@@ -148,7 +148,7 @@ func New(settings Settings, opts ...Option) (*Provider, error) {
 func newOTLPExporter(endpoint string) (sdktrace.SpanExporter, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return nil, fmt.Errorf("invalid OTLP endpoint")
+		return nil, errors.New("invalid OTLP endpoint")
 	}
 	path := strings.TrimRight(parsed.Path, "/") + "/v1/traces"
 	exporterOptions := []otlptracehttp.Option{otlptracehttp.WithEndpoint(parsed.Host), otlptracehttp.WithURLPath(path)}

@@ -2,7 +2,7 @@ package a2aadapter
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"iter"
 	"log/slog"
 	"net/http"
@@ -46,10 +46,10 @@ func AgentCard(publicURL string) *a2a.AgentCard {
 
 func NewServerHandler(investigator ports.Investigator, store taskstore.Store, logger *slog.Logger, config ServerConfig) (http.Handler, error) {
 	if investigator == nil {
-		return nil, fmt.Errorf("investigator is required")
+		return nil, errors.New("investigator is required")
 	}
 	if strings.TrimSpace(config.PublicURL) == "" || config.TaskTimeout <= 0 {
-		return nil, fmt.Errorf("public URL and task timeout are required")
+		return nil, errors.New("public URL and task timeout are required")
 	}
 	if store == nil {
 		store = taskstore.NewInMemory(nil)

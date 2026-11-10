@@ -3,7 +3,6 @@ package telemetry
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -17,7 +16,7 @@ import (
 // that rolls back are discarded, so counters agree with the audit timeline.
 func (p *Provider) ObserveUnitOfWork(next ports.UnitOfWork) (ports.UnitOfWork, error) {
 	if next == nil {
-		return nil, fmt.Errorf("unit of work is required")
+		return nil, errors.New("unit of work is required")
 	}
 	return &observedUnitOfWork{next: next, metrics: p.metrics}, nil
 }

@@ -20,7 +20,7 @@ type RollbackExecutor struct {
 
 func NewRollbackExecutor(rollback, readonly Caller, timeout time.Duration, clock ports.Clock) (*RollbackExecutor, error) {
 	if rollback == nil || readonly == nil || clock == nil || !domain.ValidRolloutWatch(timeout) {
-		return nil, fmt.Errorf("invalid rollback MCP adapter configuration")
+		return nil, errors.New("invalid rollback MCP adapter configuration")
 	}
 	return &RollbackExecutor{rollback: rollback, readonly: readonly, timeout: timeout, clock: clock}, nil
 }
@@ -82,7 +82,7 @@ func (a *RollbackExecutor) prepare(ctx context.Context, proposal domain.Rollback
 		return err
 	}
 	if prepared.ProposalHash != string(proposal.Hash()) || prepared.TargetRevision != string(proposal.TargetRevision()) {
-		return fmt.Errorf("rollback MCP preparation mismatch")
+		return errors.New("rollback MCP preparation mismatch")
 	}
 	return nil
 }
@@ -135,7 +135,7 @@ func (a *RollbackExecutor) executeMutation(ctx context.Context, input ExecuteRol
 		return ExecuteRollbackOutput{}, err
 	}
 	if mutation.FromRevision != string(proposal.CurrentRevision()) || mutation.ToRevision != string(proposal.TargetRevision()) || mutation.ExecutionID == "" {
-		return ExecuteRollbackOutput{}, fmt.Errorf("rollback MCP returned inconsistent mutation result")
+		return ExecuteRollbackOutput{}, errors.New("rollback MCP returned inconsistent mutation result")
 	}
 	return mutation, nil
 }

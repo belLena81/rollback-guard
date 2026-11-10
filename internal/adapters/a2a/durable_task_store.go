@@ -3,6 +3,7 @@ package a2aadapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -33,7 +34,7 @@ type DurableTaskStore struct {
 
 func NewDurableTaskStore(records TaskRecords, clock ports.Clock) (*DurableTaskStore, error) {
 	if records == nil || clock == nil {
-		return nil, fmt.Errorf("task records and clock are required")
+		return nil, errors.New("task records and clock are required")
 	}
 	return &DurableTaskStore{records: records, clock: clock}, nil
 }

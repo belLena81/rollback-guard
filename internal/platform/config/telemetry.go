@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -28,7 +29,7 @@ func telemetryEnv(defaultServiceName string) (TelemetryConfig, error) {
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 			// The value may carry credentials, so neither it nor the parse
 			// error is reported.
-			return TelemetryConfig{}, fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT must be an http(s) URL without credentials, query, or fragment")
+			return TelemetryConfig{}, errors.New("OTEL_EXPORTER_OTLP_ENDPOINT must be an http(s) URL without credentials, query, or fragment")
 		}
 	}
 	ratio := defaultTraceSampleRatio
@@ -49,7 +50,7 @@ func telemetryEnv(defaultServiceName string) (TelemetryConfig, error) {
 	levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
 	level, ok := levels[strings.ToLower(stringEnv("LOG_LEVEL", defaultLogLevel))]
 	if !ok {
-		return TelemetryConfig{}, fmt.Errorf("LOG_LEVEL must be debug, info, warn, or error")
+		return TelemetryConfig{}, errors.New("LOG_LEVEL must be debug, info, warn, or error")
 	}
 	return TelemetryConfig{
 		ServiceName:     stringEnv("OTEL_SERVICE_NAME", defaultServiceName),

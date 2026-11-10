@@ -20,8 +20,6 @@ type IDGenerator struct {
 
 func (g *IDGenerator) NewID(prefix string) string {
 	var random [4]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return fmt.Sprintf("%s-%d", prefix, g.counter.Add(1))
-	}
+	_, _ = rand.Read(random[:]) //nolint:errcheck // documented never to fail
 	return fmt.Sprintf("%s-%d-%s", prefix, g.counter.Add(1), hex.EncodeToString(random[:]))
 }

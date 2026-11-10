@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,7 +16,7 @@ type MetricsAdapter struct {
 
 func NewMetricsAdapter(caller Caller, window time.Duration) (*MetricsAdapter, error) {
 	if caller == nil || !domain.ValidMetricsWindow(window) {
-		return nil, fmt.Errorf("invalid metrics MCP adapter configuration")
+		return nil, errors.New("invalid metrics MCP adapter configuration")
 	}
 	return &MetricsAdapter{caller: caller, window: window}, nil
 }
@@ -40,7 +41,7 @@ func (a *MetricsAdapter) Observe(ctx context.Context, target domain.DeploymentTa
 		return domain.MetricEvidence{}, fmt.Errorf("observe metric through MCP: %w", err)
 	}
 	if output.Name != symptom.Kind().String() || output.Unit != symptom.Unit() || output.ObservedAt.IsZero() {
-		return domain.MetricEvidence{}, fmt.Errorf("metrics MCP returned inconsistent evidence")
+		return domain.MetricEvidence{}, errors.New("metrics MCP returned inconsistent evidence")
 	}
 	return domain.MetricEvidence{Name: output.Name, Value: output.Value, Threshold: symptom.Threshold(), Unit: output.Unit, ObservedAt: output.ObservedAt.UTC()}, nil
 }

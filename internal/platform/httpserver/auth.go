@@ -2,7 +2,7 @@ package httpserver
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/http"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -20,7 +20,7 @@ type LocalAuthMiddleware struct {
 
 func NewLocalAuthMiddleware(actor domain.Actor) (LocalAuthMiddleware, error) {
 	if !actor.IsHuman() {
-		return LocalAuthMiddleware{}, fmt.Errorf("local auth actor must be human")
+		return LocalAuthMiddleware{}, errors.New("local auth actor must be human")
 	}
 	return LocalAuthMiddleware{actor: actor}, nil
 }

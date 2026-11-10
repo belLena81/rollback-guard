@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
+	"slices"
 	"strings"
 	"time"
 )
@@ -27,7 +28,7 @@ func NewPolicyDecision(id PolicyDecisionID, incidentID IncidentID, rules []RuleR
 		return PolicyDecision{}, invalid("policy_decision", "invalid decision")
 	}
 	allowed := true
-	copied := append([]RuleResult(nil), rules...)
+	copied := slices.Clone(rules)
 	seen := make(map[string]struct{}, len(copied))
 	for _, rule := range copied {
 		if strings.TrimSpace(rule.Name) == "" {
@@ -51,7 +52,7 @@ func (d PolicyDecision) Allowed() bool {
 	return d.allowed
 }
 func (d PolicyDecision) Rules() []RuleResult {
-	return append([]RuleResult(nil), d.rules...)
+	return slices.Clone(d.rules)
 }
 func (d PolicyDecision) DecidedAt() time.Time {
 	return d.decidedAt

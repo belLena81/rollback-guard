@@ -100,10 +100,6 @@ func metricOutput(sample metricsprom.MetricSample) protocol.MetricOutput {
 	return protocol.MetricOutput{Name: sample.Name, Value: sample.Value, Unit: sample.Unit, ObservedAt: sample.ObservedAt}
 }
 
-func boolPointer(value bool) *bool {
-	return &value
-}
-
 func validWindow(seconds int) bool {
 	return protocol.ValidWindowSeconds(seconds)
 }

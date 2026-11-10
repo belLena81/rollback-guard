@@ -5,6 +5,7 @@ package mcptest
 import (
 	"context"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ type Server struct {
 func (s *Server) Clients() []ClientInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]ClientInfo(nil), s.clients...)
+	return slices.Clone(s.clients)
 }
 
 type input struct{}

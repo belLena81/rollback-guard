@@ -144,8 +144,7 @@ func TestServeReportsListenFailure(t *testing.T) {
 			t.Errorf("close listener: %v", err)
 		}
 	}()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err = awaitServe(t, runServe(ctx, occupied.Addr().String(), coordinatorFunc(blockUntilCancelled)))
 

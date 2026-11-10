@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -18,7 +19,7 @@ type InvestigationRunner struct {
 
 func NewInvestigationRunner(inspector ports.DeploymentInspector, metrics ports.MetricsPort, diagnoser ports.Diagnoser, clock ports.Clock, ids ports.IDGenerator) (*InvestigationRunner, error) {
 	if inspector == nil || metrics == nil || diagnoser == nil || clock == nil || ids == nil {
-		return nil, fmt.Errorf("all investigation runner dependencies are required")
+		return nil, errors.New("all investigation runner dependencies are required")
 	}
 	return &InvestigationRunner{inspector: inspector, metrics: metrics, diagnoser: diagnoser, clock: clock, ids: ids}, nil
 }
@@ -33,7 +34,7 @@ func (r *InvestigationRunner) Investigate(ctx context.Context, request ports.Inv
 		return ports.InvestigationResult{}, fmt.Errorf("inspect deployment: %w", err)
 	}
 	if !deployment.Target.Equal(incident.Target()) {
-		return ports.InvestigationResult{}, fmt.Errorf("deployment inspection returned a different target")
+		return ports.InvestigationResult{}, errors.New("deployment inspection returned a different target")
 	}
 	if err := reportInvestigationProgress(request.Progress, domain.InvestigationStageMetrics); err != nil {
 		return ports.InvestigationResult{}, err

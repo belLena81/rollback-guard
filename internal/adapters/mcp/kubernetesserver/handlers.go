@@ -140,7 +140,3 @@ func executeRollback(backend Backend) mcp.ToolHandlerFor[protocol.ExecuteRollbac
 func rolloutOutput(status kubernetes.RolloutStatus) protocol.RolloutOutput {
 	return protocol.RolloutOutput{Revision: string(status.Revision), DesiredReplicas: status.DesiredReplicas, UpdatedReplicas: status.UpdatedReplicas, ReadyReplicas: status.ReadyReplicas, AvailableReplicas: status.AvailableReplicas, ObservedGeneration: status.ObservedGeneration, Generation: status.Generation, Complete: status.Complete}
 }
-
-func boolPointer(value bool) *bool {
-	return &value
-}

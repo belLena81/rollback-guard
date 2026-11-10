@@ -41,10 +41,10 @@ type OpenAICompatibleReasoner struct {
 
 func NewOpenAICompatibleReasoner(config OpenAICompatibleConfig) (*OpenAICompatibleReasoner, error) {
 	if strings.TrimSpace(config.BaseURL) == "" || strings.TrimSpace(config.Model) == "" {
-		return nil, fmt.Errorf("base URL and model are required")
+		return nil, errors.New("base URL and model are required")
 	}
 	if config.MaxOutputTokens <= 0 {
-		return nil, fmt.Errorf("max output tokens must be positive")
+		return nil, errors.New("max output tokens must be positive")
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
@@ -84,7 +84,7 @@ func (r *OpenAICompatibleReasoner) Reason(ctx context.Context, request ports.Rea
 			openai.SystemMessage(diagnosisInstructions),
 			openai.UserMessage(string(prompt)),
 		},
-		Model:               shared.ChatModel(r.model),
+		Model:               r.model,
 		MaxCompletionTokens: openai.Int(r.maxOutputTokens),
 		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
 			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
@@ -254,7 +254,7 @@ func strictDecodeCandidate(content string, target *reasoningCandidateDTO) error 
 		return err
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("response contains trailing JSON")
+		return errors.New("response contains trailing JSON")
 	}
 	return nil
 }

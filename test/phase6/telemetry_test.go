@@ -411,7 +411,7 @@ func hasAncestor(spans *tracetest.InMemoryExporter, span tracetest.SpanStub, ser
 
 func requireLog(t *testing.T, p *process, message string, fields map[string]string, present ...string) {
 	t.Helper()
-	for _, line := range strings.Split(p.logs.String(), "\n") {
+	for line := range strings.SplitSeq(p.logs.String(), "\n") {
 		if line == "" {
 			continue
 		}

@@ -1,11 +1,12 @@
 package kubernetes
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -110,12 +111,12 @@ type RolloutStatus struct {
 
 func NewService(client kubernetes.Interface, config Config) (*Service, error) {
 	if client == nil || strings.TrimSpace(config.ClusterID) == "" || len(config.AllowedTargets) == 0 {
-		return nil, fmt.Errorf("invalid kubernetes service configuration")
+		return nil, errors.New("invalid kubernetes service configuration")
 	}
 	allowed := make(map[domain.DeploymentTarget]struct{}, len(config.AllowedTargets))
 	for _, target := range config.AllowedTargets {
 		if !target.Valid() || target.Cluster() != config.ClusterID {
-			return nil, fmt.Errorf("invalid allowed deployment target")
+			return nil, errors.New("invalid allowed deployment target")
 		}
 		allowed[target] = struct{}{}
 	}
@@ -184,11 +185,11 @@ func (s *Service) ReplicaSets(ctx context.Context, target domain.DeploymentTarge
 		}
 		result = append(result, ReplicaSetSummary{Name: replicaSet.Name, UID: string(replicaSet.UID), Revision: revision, Stable: replicaSet.Annotations[StableRevisionAnnotation] == stableAnnotationValue, DesiredReplicas: int(replicaSet.Status.Replicas), ReadyReplicas: int(replicaSet.Status.ReadyReplicas), AvailableReplicas: int(replicaSet.Status.AvailableReplicas), CreatedAt: replicaSet.CreationTimestamp.UTC()})
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
-			return result[i].Name < result[j].Name
+	slices.SortFunc(result, func(a, b ReplicaSetSummary) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
 		}
-		return result[i].CreatedAt.Before(result[j].CreatedAt)
+		return cmp.Compare(a.Name, b.Name)
 	})
 	return result, nil
 }
@@ -234,7 +235,7 @@ func (s *Service) ListPods(ctx context.Context, target domain.DeploymentTarget, 
 		}
 		result = append(result, PodSummary{Name: pod.Name, UID: string(pod.UID), Phase: string(pod.Status.Phase), Ready: ready, Restarts: restarts, CreatedAt: pod.CreationTimestamp.UTC()})
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	slices.SortFunc(result, func(a, b PodSummary) int { return cmp.Compare(a.Name, b.Name) })
 	truncated := len(result) > limit
 	if truncated {
 		result = result[:limit]
@@ -287,7 +288,7 @@ func (s *Service) PodEvents(ctx context.Context, target domain.DeploymentTarget,
 		}
 		result = append(result, EventSummary{Reason: event.Reason, Type: event.Type, Message: event.Message, Count: event.Count, ObservedAt: observedAt.UTC()})
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ObservedAt.Before(result[j].ObservedAt) })
+	slices.SortFunc(result, func(a, b EventSummary) int { return a.ObservedAt.Compare(b.ObservedAt) })
 	truncated := len(result) > limit
 	if truncated {
 		result = result[len(result)-limit:]

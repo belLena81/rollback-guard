@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -50,53 +52,25 @@ func newData() *data {
 }
 func (d *data) clone() *data {
 	c := newData()
-	for k, v := range d.incidents {
-		c.incidents[k] = v
-	}
+	maps.Copy(c.incidents, d.incidents)
 	for k, v := range d.evidence {
-		c.evidence[k] = append([]domain.Evidence(nil), v...)
+		c.evidence[k] = slices.Clone(v)
 	}
-	for k, v := range d.evidenceIDs {
-		c.evidenceIDs[k] = v
-	}
-	for k, v := range d.conclusions {
-		c.conclusions[k] = v
-	}
-	for k, v := range d.conclusionIDs {
-		c.conclusionIDs[k] = v
-	}
-	for k, v := range d.decisions {
-		c.decisions[k] = v
-	}
-	for k, v := range d.proposals {
-		c.proposals[k] = v
-	}
-	for k, v := range d.actions {
-		c.actions[k] = v
-	}
-	for k, v := range d.approvals {
-		c.approvals[k] = v
-	}
-	for k, v := range d.approvalIDs {
-		c.approvalIDs[k] = v
-	}
-	for k, v := range d.executions {
-		c.executions[k] = v
-	}
-	for k, v := range d.executionIDs {
-		c.executionIDs[k] = v
-	}
-	for k, v := range d.verifications {
-		c.verifications[k] = v
-	}
-	for k, v := range d.idempotency {
-		c.idempotency[k] = v
-	}
-	for k, v := range d.investigations {
-		c.investigations[k] = v
-	}
+	maps.Copy(c.evidenceIDs, d.evidenceIDs)
+	maps.Copy(c.conclusions, d.conclusions)
+	maps.Copy(c.conclusionIDs, d.conclusionIDs)
+	maps.Copy(c.decisions, d.decisions)
+	maps.Copy(c.proposals, d.proposals)
+	maps.Copy(c.actions, d.actions)
+	maps.Copy(c.approvals, d.approvals)
+	maps.Copy(c.approvalIDs, d.approvalIDs)
+	maps.Copy(c.executions, d.executions)
+	maps.Copy(c.executionIDs, d.executionIDs)
+	maps.Copy(c.verifications, d.verifications)
+	maps.Copy(c.idempotency, d.idempotency)
+	maps.Copy(c.investigations, d.investigations)
 	for k, v := range d.events {
-		c.events[k] = append([]domain.OperationEvent(nil), v...)
+		c.events[k] = slices.Clone(v)
 	}
 	return c
 }
@@ -211,7 +185,7 @@ func (r evidenceRepo) Add(v domain.Evidence) error {
 }
 func (r evidenceRepo) List(id domain.IncidentID) ([]domain.Evidence, error) {
 	v := r.d.evidence[id]
-	return append([]domain.Evidence(nil), v...), nil
+	return slices.Clone(v), nil
 }
 
 type conclusionRepo struct{ d *data }
@@ -500,7 +474,7 @@ func (r eventRepo) Append(v domain.OperationEvent) error {
 }
 func (r eventRepo) List(id domain.IncidentID) ([]domain.OperationEvent, error) {
 	v := r.d.events[id]
-	return append([]domain.OperationEvent(nil), v...), nil
+	return slices.Clone(v), nil
 }
 
 var _ ports.UnitOfWork = (*UnitOfWork)(nil)

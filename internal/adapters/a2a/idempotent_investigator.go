@@ -50,10 +50,10 @@ type IdempotentInvestigator struct {
 // (A2A_TASK_TIMEOUT); the reclaim and polling intervals follow from it.
 func NewIdempotentInvestigator(ledger RequestLedger, next ports.Investigator, taskTimeout time.Duration, clock ports.Clock) (*IdempotentInvestigator, error) {
 	if ledger == nil || next == nil || clock == nil {
-		return nil, fmt.Errorf("request ledger, investigator, and clock are required")
+		return nil, errors.New("request ledger, investigator, and clock are required")
 	}
 	if taskTimeout <= 0 {
-		return nil, fmt.Errorf("investigation task timeout must be positive")
+		return nil, errors.New("investigation task timeout must be positive")
 	}
 	pollInterval, staleAfter := idempotencyTimings(taskTimeout)
 	return &IdempotentInvestigator{ledger: ledger, next: next, pollInterval: pollInterval, staleAfter: staleAfter, clock: clock}, nil
@@ -77,7 +77,7 @@ func idempotencyTimings(taskTimeout time.Duration) (pollInterval, staleAfter tim
 
 func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.InvestigationRequest) (ports.InvestigationResult, error) {
 	if request.IdempotencyKey == "" || request.RequestHash == "" {
-		return ports.InvestigationResult{}, fmt.Errorf("idempotency key and request hash are required")
+		return ports.InvestigationResult{}, errors.New("idempotency key and request hash are required")
 	}
 	claimed, err := i.ledger.Claim(ctx, request.IdempotencyKey, request.RequestHash, request.TaskID, i.clock.Now().UTC())
 	if err != nil {
@@ -117,7 +117,7 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 		return ports.InvestigationResult{}, fmt.Errorf("complete investigation request: %w", err)
 	}
 	if !owned {
-		return ports.InvestigationResult{}, fmt.Errorf("investigation request ownership was lost before completion")
+		return ports.InvestigationResult{}, errors.New("investigation request ownership was lost before completion")
 	}
 	return result, nil
 }
@@ -135,10 +135,10 @@ func (i *IdempotentInvestigator) waitForResult(ctx context.Context, request port
 			return ports.InvestigationResult{}, err
 		}
 		if !found {
-			return ports.InvestigationResult{}, fmt.Errorf("investigation idempotency record disappeared")
+			return ports.InvestigationResult{}, errors.New("investigation idempotency record disappeared")
 		}
 		if hash != request.RequestHash {
-			return ports.InvestigationResult{}, fmt.Errorf("idempotency key reused with a different request")
+			return ports.InvestigationResult{}, errors.New("idempotency key reused with a different request")
 		}
 		switch state {
 		case "completed":

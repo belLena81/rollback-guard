@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,7 +19,7 @@ type InvestigationRequestLedger struct {
 
 func NewInvestigationRequestLedger(pool *pgxpool.Pool) (*InvestigationRequestLedger, error) {
 	if pool == nil {
-		return nil, fmt.Errorf("PostgreSQL pool is required")
+		return nil, errors.New("PostgreSQL pool is required")
 	}
 	return &InvestigationRequestLedger{pool: pool}, nil
 }
@@ -84,7 +83,7 @@ type A2ATaskRecords struct {
 
 func NewA2ATaskRecords(pool *pgxpool.Pool) (*A2ATaskRecords, error) {
 	if pool == nil {
-		return nil, fmt.Errorf("PostgreSQL pool is required")
+		return nil, errors.New("PostgreSQL pool is required")
 	}
 	return &A2ATaskRecords{pool: pool}, nil
 }

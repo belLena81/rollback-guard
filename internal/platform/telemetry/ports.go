@@ -2,7 +2,7 @@ package telemetry
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -17,7 +17,7 @@ import (
 // the HTTP transport (see Transport); this decorator adds the logical span.
 func (p *Provider) ObserveGateway(next ports.InvestigationGateway) (ports.InvestigationGateway, error) {
 	if next == nil {
-		return nil, fmt.Errorf("investigation gateway is required")
+		return nil, errors.New("investigation gateway is required")
 	}
 	return observedGateway{next: next, provider: p}, nil
 }
@@ -69,7 +69,7 @@ func (p *Provider) observeA2A(ctx context.Context, operation string) (context.Co
 // and a span. requested is the configured DIAGNOSIS_STRATEGY.
 func (p *Provider) ObserveDiagnoser(next ports.Diagnoser, requested domain.DiagnosisStrategy) (ports.Diagnoser, error) {
 	if next == nil || !requested.Valid() {
-		return nil, fmt.Errorf("diagnoser and a valid requested strategy are required")
+		return nil, errors.New("diagnoser and a valid requested strategy are required")
 	}
 	return observedDiagnoser{next: next, requested: requested, provider: p}, nil
 }

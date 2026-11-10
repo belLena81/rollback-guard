@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -65,7 +64,7 @@ type MetricSample struct {
 
 func NewClient(api QueryAPI, config Config) (*Client, error) {
 	if api == nil || len(config.AllowedTargets) == 0 || config.MaxSampleAge <= 0 {
-		return nil, fmt.Errorf("invalid prometheus client configuration")
+		return nil, errors.New("invalid prometheus client configuration")
 	}
 	window := config.ObservationWindow
 	if window <= 0 {
@@ -78,7 +77,7 @@ func NewClient(api QueryAPI, config Config) (*Client, error) {
 	allowed := make(map[domain.DeploymentTarget]struct{}, len(config.AllowedTargets))
 	for _, target := range config.AllowedTargets {
 		if !target.Valid() {
-			return nil, fmt.Errorf("invalid allowed metrics target")
+			return nil, errors.New("invalid allowed metrics target")
 		}
 		allowed[target] = struct{}{}
 	}
@@ -219,5 +218,5 @@ func quote(value string) string {
 }
 
 func durationLiteral(value time.Duration) string {
-	return strings.ReplaceAll(value.String(), "µ", "u")
+	return model.Duration(value).String()
 }

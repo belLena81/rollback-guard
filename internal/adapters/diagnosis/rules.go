@@ -2,7 +2,7 @@ package diagnosis
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -20,10 +20,10 @@ type RuleDiagnoserConfig struct {
 
 func NewRuleDiagnoser(ids ports.IDGenerator, config RuleDiagnoserConfig) (*RuleDiagnoser, error) {
 	if ids == nil {
-		return nil, fmt.Errorf("id generator is required")
+		return nil, errors.New("id generator is required")
 	}
 	if config.CorrelationWindow <= 0 {
-		return nil, fmt.Errorf("correlation window must be positive")
+		return nil, errors.New("correlation window must be positive")
 	}
 	return &RuleDiagnoser{ids: ids, correlationWindow: config.CorrelationWindow}, nil
 }

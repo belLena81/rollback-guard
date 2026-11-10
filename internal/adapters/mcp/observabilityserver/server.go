@@ -22,7 +22,7 @@ func New(backend Backend) (*mcp.Server, error) {
 		return nil, &domain.ValidationError{Field: "observability_mcp", Reason: "backend is required"}
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "rollback-guardian-observability", Version: buildinfo.Version}, nil)
-	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPointer(false), IdempotentHint: true, OpenWorldHint: boolPointer(false)}
+	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: new(false), IdempotentHint: true, OpenWorldHint: new(false)}
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetHTTPErrorRate, Description: "Read a fixed-window HTTP 5xx ratio", Annotations: annotations}, metricHandler(backend, domain.SymptomHTTPErrorRate))
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolCompareErrorRateWindows, Description: "Compare current and baseline HTTP 5xx ratios", Annotations: annotations}, compareWindows(backend))
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetRequestLatency, Description: "Read a fixed request latency percentile", Annotations: annotations}, latency(backend))

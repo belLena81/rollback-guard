@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -236,9 +237,7 @@ func assertLabels(t *testing.T, got []*dto.LabelPair, want map[string]string) {
 
 func withLabel(base map[string]string, name, value string) map[string]string {
 	out := make(map[string]string, len(base)+1)
-	for k, v := range base {
-		out[k] = v
-	}
+	maps.Copy(out, base)
 	out[name] = value
 	return out
 }

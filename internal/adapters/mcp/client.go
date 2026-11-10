@@ -31,7 +31,7 @@ type boundedCaller struct {
 
 func BoundCalls(caller Caller, timeout time.Duration) (Caller, error) {
 	if caller == nil || timeout <= 0 {
-		return nil, fmt.Errorf("invalid MCP call timeout")
+		return nil, errors.New("invalid MCP call timeout")
 	}
 	return boundedCaller{next: caller, timeout: timeout}, nil
 }
@@ -57,13 +57,13 @@ const (
 func Connect(ctx context.Context, endpoint string, httpClient *http.Client, clientName string) (*Client, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return nil, fmt.Errorf("invalid MCP endpoint")
+		return nil, errors.New("invalid MCP endpoint")
 	}
 	if httpClient == nil {
-		return nil, fmt.Errorf("MCP HTTP client is required")
+		return nil, errors.New("MCP HTTP client is required")
 	}
 	if strings.TrimSpace(clientName) == "" {
-		return nil, fmt.Errorf("MCP client name is required")
+		return nil, errors.New("MCP client name is required")
 	}
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: clientName, Version: buildinfo.Version}, nil)
 	session, err := client.Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
@@ -110,7 +110,7 @@ func requireToolCatalog(served, expected []string) error {
 func callTool[In, Out any](ctx context.Context, caller Caller, name string, input In) (Out, error) {
 	var zero Out
 	if caller == nil {
-		return zero, fmt.Errorf("MCP caller is required")
+		return zero, errors.New("MCP caller is required")
 	}
 	result, err := caller.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: input})
 	if err != nil {

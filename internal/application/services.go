@@ -1,6 +1,7 @@
 package application
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -63,7 +64,7 @@ type Services struct {
 
 func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, error) {
 	if dependencies.UnitOfWork == nil || dependencies.Inspector == nil || dependencies.Metrics == nil || dependencies.Executor == nil || dependencies.RollbackPolicy == nil || dependencies.ApprovalPolicy == nil || dependencies.Clock == nil || dependencies.IDGenerator == nil {
-		return Services{}, fmt.Errorf("all service dependencies are required")
+		return Services{}, errors.New("all service dependencies are required")
 	}
 	if err := config.validate(); err != nil {
 		return Services{}, fmt.Errorf("validate workflow config: %w", err)

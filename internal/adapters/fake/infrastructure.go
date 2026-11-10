@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -38,7 +39,7 @@ func (f *Infrastructure) InspectDeployment(ctx context.Context, target domain.De
 		return domain.DeploymentEvidence{}, f.InspectErr
 	}
 	if !f.Deployment.Target.Equal(target) {
-		return domain.DeploymentEvidence{}, fmt.Errorf("unexpected deployment target")
+		return domain.DeploymentEvidence{}, errors.New("unexpected deployment target")
 	}
 	return f.Deployment, nil
 }
@@ -53,7 +54,7 @@ func (f *Infrastructure) Observe(ctx context.Context, target domain.DeploymentTa
 		return domain.MetricEvidence{}, f.MetricErr
 	}
 	if !f.Deployment.Target.Equal(target) {
-		return domain.MetricEvidence{}, fmt.Errorf("unexpected metric target")
+		return domain.MetricEvidence{}, errors.New("unexpected metric target")
 	}
 	return f.Metric, nil
 }

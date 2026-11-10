@@ -99,17 +99,15 @@ func TestConcurrentTransactionsAreRaceSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	var group sync.WaitGroup
-	for index := 0; index < 32; index++ {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+	for range 32 {
+		group.Go(func() {
 			if err := uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
 				_, err := repositories.Incidents().Get(incident.ID())
 				return err
 			}); err != nil {
 				t.Errorf("read transaction: %v", err)
 			}
-		}()
+		})
 	}
 	group.Wait()
 }
@@ -176,7 +174,6 @@ func TestConcurrentStaleUpdatesYieldOneVersionConflict(t *testing.T) {
 	}
 	results := make(chan error, 2)
 	for _, value := range []domain.Incident{first, second} {
-		value := value
 		go func() {
 			results <- uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
 				return repositories.Incidents().Update(value, incident.Version())
@@ -184,7 +181,7 @@ func TestConcurrentStaleUpdatesYieldOneVersionConflict(t *testing.T) {
 		}()
 	}
 	conflicts := 0
-	for index := 0; index < 2; index++ {
+	for range 2 {
 		if err := <-results; errors.Is(err, domain.ErrVersionConflict) {
 			conflicts++
 		}

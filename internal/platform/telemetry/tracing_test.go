@@ -277,7 +277,7 @@ func TestNewRejectsInvalidSettings(t *testing.T) {
 func decodeRecords(t *testing.T, buffer *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var records []map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(buffer.String()), "\n") {
 		if line == "" {
 			continue
 		}

@@ -300,13 +300,13 @@ func TestApproveAndExecuteFailureBranches(t *testing.T) {
 			arm: func(h *approveHarness) {
 				h.infra.BeforeMutation = func(deployment *domain.DeploymentEvidence) { deployment.CurrentRevision = "revision-3" }
 			},
-			wantCalls: 1, wantStatus: domain.StatusFailed, wantExecution: outcome(domain.ExecutionFailed), wantLastEvent: domain.EventIncidentFailed,
+			wantCalls: 1, wantStatus: domain.StatusFailed, wantExecution: new(domain.ExecutionFailed), wantLastEvent: domain.EventIncidentFailed,
 		},
 		{
 			name:          "executor reports a failed rollback",
 			arm:           func(h *approveHarness) { h.infra.ExecuteErr = errors.New("rollout stalled") },
 			wantStatus:    domain.StatusFailed,
-			wantExecution: outcome(domain.ExecutionFailed), wantMutations: 1, wantCalls: 1, wantLastEvent: domain.EventIncidentFailed,
+			wantExecution: new(domain.ExecutionFailed), wantMutations: 1, wantCalls: 1, wantLastEvent: domain.EventIncidentFailed,
 		},
 		{
 			name:      "rollback outcome unknown",
@@ -318,7 +318,7 @@ func TestApproveAndExecuteFailureBranches(t *testing.T) {
 			name:          "recovery verification fails",
 			arm:           func(h *approveHarness) { h.infra.AfterExecute = nil },
 			wantStatus:    domain.StatusFailed,
-			wantExecution: outcome(domain.ExecutionSucceeded), wantVerified: boolPtr(false), wantMutations: 1, wantCalls: 1, wantLastEvent: domain.EventIncidentFailed,
+			wantExecution: new(domain.ExecutionSucceeded), wantVerified: new(false), wantMutations: 1, wantCalls: 1, wantLastEvent: domain.EventIncidentFailed,
 		},
 		{
 			name: "recovery metrics unavailable",
@@ -326,7 +326,7 @@ func TestApproveAndExecuteFailureBranches(t *testing.T) {
 				h.infra.AfterExecute = func() { h.infra.MetricErr = errMetricsUnavailable }
 			},
 			wantErr: errMetricsUnavailable, wantStatus: domain.StatusVerifying,
-			wantExecution: outcome(domain.ExecutionSucceeded), wantMutations: 1, wantCalls: 1, wantLastEvent: domain.EventStatusChanged,
+			wantExecution: new(domain.ExecutionSucceeded), wantMutations: 1, wantCalls: 1, wantLastEvent: domain.EventStatusChanged,
 		},
 	}
 	for _, test := range tests {
@@ -730,10 +730,6 @@ var (
 	errReadonlyUnavailable = errors.New("readonly MCP unavailable")
 	errMetricsUnavailable  = errors.New("prometheus unavailable")
 )
-
-func outcome(value domain.ExecutionOutcome) *domain.ExecutionOutcome { return &value }
-
-func boolPtr(value bool) *bool { return &value }
 
 type hookInspector struct {
 	mu   sync.Mutex

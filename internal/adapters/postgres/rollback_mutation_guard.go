@@ -23,7 +23,7 @@ type RollbackMutationGuard struct {
 
 func NewRollbackMutationGuard(pool *pgxpool.Pool) (*RollbackMutationGuard, error) {
 	if pool == nil {
-		return nil, fmt.Errorf("postgres pool is required")
+		return nil, errors.New("postgres pool is required")
 	}
 	return &RollbackMutationGuard{pool: pool, locks: make(map[domain.IdempotencyKey]*rollbackMutationLock)}, nil
 }

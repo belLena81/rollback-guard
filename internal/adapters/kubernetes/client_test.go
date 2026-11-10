@@ -27,7 +27,7 @@ func TestPodEventsFindsOwnedPodBeyondListLimit(t *testing.T) {
 	deployment := testDeployment("healthy:v1")
 	replicaSet := testReplicaSet(deployment, "current", "healthy:v1", false, time.Now())
 	objects := []runtime.Object{deployment, replicaSet}
-	for index := 0; index < 101; index++ {
+	for index := range 101 {
 		objects = append(objects, testPod(replicaSet, fmt.Sprintf("pod-%03d", index), types.UID(fmt.Sprintf("pod-%03d-uid", index))))
 	}
 	wanted := testPod(replicaSet, "pod-zzz", "pod-zzz-uid")
@@ -789,7 +789,7 @@ func testReplicaSet(deployment *appsv1.Deployment, name, image string, stable bo
 		annotations[StableRevisionAnnotation] = "true"
 	}
 	return &appsv1.ReplicaSet{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: deployment.Namespace, UID: types.UID(name), CreationTimestamp: metav1.NewTime(created), Labels: map[string]string{"app": "demo-api"}, Annotations: annotations, OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: boolPtr(true)}}},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: deployment.Namespace, UID: types.UID(name), CreationTimestamp: metav1.NewTime(created), Labels: map[string]string{"app": "demo-api"}, Annotations: annotations, OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: new(true)}}},
 		Spec:       appsv1.ReplicaSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "demo-api", appsv1.DefaultDeploymentUniqueLabelKey: name}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "api", Image: image}}}}},
 	}
 }
@@ -806,13 +806,11 @@ func testPod(replicaSet *appsv1.ReplicaSet, name string, uid types.UID) *corev1.
 				Kind:       "ReplicaSet",
 				Name:       replicaSet.Name,
 				UID:        replicaSet.UID,
-				Controller: boolPtr(true),
+				Controller: new(true),
 			}},
 		},
 	}
 }
-
-func boolPtr(value bool) *bool { return &value }
 
 func mustRevision(t *testing.T, template corev1.PodTemplateSpec) domain.Revision {
 	t.Helper()
