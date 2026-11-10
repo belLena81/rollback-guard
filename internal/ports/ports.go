@@ -16,6 +16,36 @@ var (
 	ErrReasonerInvalidResponse = errors.New("reasoner returned an invalid response")
 )
 
+// Identity provider failures (docs/phase7-auth.md, "GitHub login"). An
+// IdentityProvider wraps exactly one of them and never the provider's
+// response body, token or authorization code.
+var (
+	// ErrAuthorizationCodeRejected: the provider refused the authorization
+	// code or PKCE verifier (wrong, expired or already used). The client
+	// must start the login again.
+	ErrAuthorizationCodeRejected = errors.New("authorization code rejected")
+	// ErrIdentityProviderFailed: the provider was unreachable, timed out or
+	// answered with an unusable response.
+	ErrIdentityProviderFailed = errors.New("identity provider failed")
+)
+
+// GitHubIdentity is what an IdentityProvider learned about the signed-in
+// GitHub user. It is untrusted input until the login service validates it.
+type GitHubIdentity struct {
+	GitHubID      int64
+	Login         string
+	Email         string
+	Organizations []string
+}
+
+// IdentityProvider runs the provider side of the OAuth authorization-code
+// flow with PKCE (S256). Exchange redeems the code, reads the user and their
+// organizations, and discards the provider access token before returning.
+type IdentityProvider interface {
+	AuthorizationURL(state, codeChallenge string) string
+	Exchange(ctx context.Context, code, codeVerifier string) (GitHubIdentity, error)
+}
+
 type DeploymentInspector interface {
 	InspectDeployment(context.Context, domain.DeploymentTarget) (domain.DeploymentEvidence, error)
 }

@@ -115,6 +115,13 @@ func RehydrateUser(s UserSnapshot) (User, error) {
 	}, nil
 }
 
+// IsGitHubLogin reports whether value is a well-formed GitHub user or
+// organization login: 1 to MaxGitHubLoginLength characters of a-z, A-Z, 0-9
+// or -.
+func IsGitHubLogin(value string) bool {
+	return validGitHubLogin(value)
+}
+
 func validGitHubLogin(login string) bool {
 	if login == "" || len(login) > MaxGitHubLoginLength {
 		return false
@@ -172,6 +179,40 @@ func (u User) WithRole(role Role, now time.Time) (User, error) {
 		return User{}, invalid("user.role", "unknown role")
 	}
 	return u.changed(now, func(next *User) { next.role = role })
+}
+
+// WithProfile returns a copy of u holding the login, email and organizations
+// GitHub reported at the latest sign-in, validated like NewUser. The role,
+// disabled flag and GitHub ID are unchanged.
+func (u User) WithProfile(login, email string, organizations []string, now time.Time) (User, error) {
+	if !u.Valid() {
+		return User{}, invalid("user", "must be a constructed user")
+	}
+	snapshot := u.Snapshot()
+	snapshot.Login, snapshot.Email, snapshot.Organizations = login, email, organizations
+	profile, err := RehydrateUser(snapshot)
+	if err != nil {
+		return User{}, err
+	}
+	return u.changed(now, func(next *User) {
+		next.login = profile.login
+		next.email = profile.email
+		next.organizations = profile.organizations
+	})
+}
+
+// SameProfile reports whether u already holds login, email and organizations
+// after the trimming NewUser applies, so a sign-in need not write the row.
+func (u User) SameProfile(login, email string, organizations []string) bool {
+	if u.login != strings.TrimSpace(login) || u.email != strings.TrimSpace(email) || len(u.organizations) != len(organizations) {
+		return false
+	}
+	for i, org := range organizations {
+		if u.organizations[i] != strings.TrimSpace(org) {
+			return false
+		}
+	}
+	return true
 }
 
 // Disable returns a copy of u that cannot produce an Actor.

@@ -59,6 +59,21 @@ func NewSessionService(dependencies SessionDependencies, ttl time.Duration) (*Se
 // caller must hand to the client and then drop. A disabled user, by the
 // given value or by the stored row, gets no session.
 func (s *SessionService) Issue(ctx context.Context, user domain.User) (string, domain.Session, error) {
+	var token string
+	var session domain.Session
+	if err := s.uow.WithinAuthTransaction(ctx, func(repos ports.AuthRepositories) error {
+		var err error
+		token, session, err = s.issueIn(repos, user)
+		return err
+	}); err != nil {
+		return "", domain.Session{}, err
+	}
+	return token, session, nil
+}
+
+// issueIn creates a session for user inside the caller's transaction, so a
+// login can upsert the user and issue the session atomically.
+func (s *SessionService) issueIn(repos ports.AuthRepositories, user domain.User) (string, domain.Session, error) {
 	if _, err := domain.ActorFor(user); err != nil {
 		return "", domain.Session{}, err
 	}
@@ -75,9 +90,7 @@ func (s *SessionService) Issue(ctx context.Context, user domain.User) (string, d
 	if err != nil {
 		return "", domain.Session{}, err
 	}
-	if err := s.uow.WithinAuthTransaction(ctx, func(repos ports.AuthRepositories) error {
-		return repos.Sessions().Create(session)
-	}); err != nil {
+	if err := repos.Sessions().Create(session); err != nil {
 		return "", domain.Session{}, fmt.Errorf("create session: %w", err)
 	}
 	return sessionTokenEncoding.EncodeToString(secret), session, nil
