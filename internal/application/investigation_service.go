@@ -30,7 +30,7 @@ func (s *IncidentService) CreateIncident(ctx context.Context, command CreateInci
 		if err := repositories.Incidents().Create(incident); err != nil {
 			return err
 		}
-		return c.appendEvent(ctx, repositories, incident.ID(), domain.EventIncidentCreated, command.Actor, domain.IncidentCreatedDetail{Target: command.Target}, now)
+		return c.appendEvents(ctx, repositories, incident.ID(), now, incidentCreated(command))
 	})
 	if err != nil {
 		return domain.Incident{}, fmt.Errorf("create incident transaction: %w", err)
@@ -67,10 +67,9 @@ func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command Creat
 		if err := repositories.InvestigationTasks().Create(dispatch); err != nil {
 			return err
 		}
-		if err := c.appendEvent(ctx, repositories, incident.ID(), domain.EventIncidentCreated, command.Actor, domain.IncidentCreatedDetail{Target: command.Target}, now); err != nil {
-			return err
-		}
-		return c.appendEvent(ctx, repositories, incident.ID(), domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusCreated, To: domain.StatusInvestigating}, now)
+		return c.appendEvents(ctx, repositories, incident.ID(), now,
+			incidentCreated(command),
+			statusChangeEvent(c.systemActor, domain.StatusCreated, domain.StatusInvestigating))
 	})
 	if err != nil {
 		return domain.Incident{}, fmt.Errorf("create asynchronous incident transaction: %w", err)
@@ -155,36 +154,29 @@ func (s *InvestigationService) complete(ctx context.Context, incident domain.Inc
 			if err := repositories.Evidence().Add(item); err != nil {
 				return err
 			}
-			if err := c.appendEvent(ctx, repositories, incidentID, domain.EventEvidenceCollected, c.systemActor, domain.EvidenceCollectedDetail{EvidenceID: item.ID(), Kind: item.Kind()}, now); err != nil {
+			if err := c.appendEvents(ctx, repositories, incidentID, now, c.systemEvent(domain.EventEvidenceCollected, domain.EvidenceCollectedDetail{EvidenceID: item.ID(), Kind: item.Kind()})); err != nil {
 				return err
 			}
 		}
 		if err := repositories.Conclusions().Save(conclusion); err != nil {
 			return err
 		}
-		if err := c.appendEvent(ctx, repositories, incidentID, domain.EventDiagnosisCompleted, c.systemActor, domain.DiagnosisCompletedDetail{ConclusionID: conclusion.ID(), Recommendation: conclusion.Recommendation()}, now); err != nil {
+		if err := c.appendEvents(ctx, repositories, incidentID, now, c.systemEvent(domain.EventDiagnosisCompleted, domain.DiagnosisCompletedDetail{ConclusionID: conclusion.ID(), Recommendation: conclusion.Recommendation()})); err != nil {
 			return err
 		}
 		if err := repositories.PolicyDecisions().Save(decision); err != nil {
 			return err
 		}
-		if err := c.appendEvent(ctx, repositories, incidentID, domain.EventPolicyEvaluated, c.systemActor, domain.PolicyEvaluatedDetail{DecisionID: decision.ID(), Allowed: decision.Allowed()}, now); err != nil {
+		if err := c.appendEvents(ctx, repositories, incidentID, now, c.systemEvent(domain.EventPolicyEvaluated, domain.PolicyEvaluatedDetail{DecisionID: decision.ID(), Allowed: decision.Allowed()})); err != nil {
 			return err
 		}
 
-		expectedVersion := fresh.Version()
 		if !decision.Allowed() {
-			if err := fresh.Decline(now); err != nil {
+			incident, err = c.transition(ctx, repositories, fresh, now, (*domain.Incident).Decline, statusChanged(c.systemActor))
+			if err != nil {
 				return err
 			}
-			if err := repositories.Incidents().Update(fresh, expectedVersion); err != nil {
-				return err
-			}
-			incident = fresh
-			if err := c.completeInvestigationDispatch(repositories, incidentID, now); err != nil {
-				return err
-			}
-			return c.appendEvent(ctx, repositories, incidentID, domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusInvestigating, To: domain.StatusDeclined}, now)
+			return c.completeInvestigationDispatch(repositories, incidentID, now)
 		}
 
 		proposal, err := domain.NewRollbackProposal(
@@ -202,20 +194,14 @@ func (s *InvestigationService) complete(ctx context.Context, incident domain.Inc
 		if err := repositories.Proposals().Save(proposal); err != nil {
 			return err
 		}
-		if err := c.appendEvent(ctx, repositories, incidentID, domain.EventProposalCreated, c.systemActor, domain.ProposalCreatedDetail{ActionID: proposal.ActionID(), ProposalHash: proposal.Hash()}, now); err != nil {
+		if err := c.appendEvents(ctx, repositories, incidentID, now, c.systemEvent(domain.EventProposalCreated, domain.ProposalCreatedDetail{ActionID: proposal.ActionID(), ProposalHash: proposal.Hash()})); err != nil {
 			return err
 		}
-		if err := fresh.AwaitApproval(now); err != nil {
+		incident, err = c.transition(ctx, repositories, fresh, now, (*domain.Incident).AwaitApproval, statusChanged(c.systemActor))
+		if err != nil {
 			return err
 		}
-		if err := repositories.Incidents().Update(fresh, expectedVersion); err != nil {
-			return err
-		}
-		incident = fresh
-		if err := c.completeInvestigationDispatch(repositories, incidentID, now); err != nil {
-			return err
-		}
-		return c.appendEvent(ctx, repositories, incidentID, domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusInvestigating, To: domain.StatusAwaitingApproval}, now)
+		return c.completeInvestigationDispatch(repositories, incidentID, now)
 	})
 	if err != nil {
 		return domain.Incident{}, fmt.Errorf("persist investigation: %w", err)
@@ -247,13 +233,8 @@ func (s *InvestigationService) Fail(ctx context.Context, incidentID domain.Incid
 		if incident.Status() == domain.StatusCanceled {
 			return nil
 		}
-		alreadyFailed := incident.Status() == domain.StatusFailed
-		if !alreadyFailed {
-			expectedIncidentVersion := incident.Version()
-			if err := incident.Fail(now); err != nil {
-				return err
-			}
-			if err := repositories.Incidents().Update(incident, expectedIncidentVersion); err != nil {
+		if incident.Status() != domain.StatusFailed {
+			if _, err := c.transition(ctx, repositories, incident, now, (*domain.Incident).Fail, terminated(c.systemActor, domain.EventIncidentFailed, code)); err != nil {
 				return err
 			}
 		}
@@ -263,13 +244,7 @@ func (s *InvestigationService) Fail(ctx context.Context, incidentID domain.Incid
 		}
 		expectedDispatchVersion := dispatch.Version
 		dispatch.Fail(code, now)
-		if err := repositories.InvestigationTasks().Update(dispatch, expectedDispatchVersion); err != nil {
-			return err
-		}
-		if alreadyFailed {
-			return nil
-		}
-		return c.appendEvent(ctx, repositories, incidentID, domain.EventIncidentFailed, c.systemActor, domain.TerminalDetail{Reason: code}, now)
+		return repositories.InvestigationTasks().Update(dispatch, expectedDispatchVersion)
 	})
 }
 
@@ -302,15 +277,8 @@ func (c *workflow) beginOrResumeInvestigation(ctx context.Context, incidentID do
 			return nil
 		}
 
-		expectedVersion := incident.Version()
-		if err := incident.StartInvestigation(now); err != nil {
-			return err
-		}
-		if err := repositories.Incidents().Update(incident, expectedVersion); err != nil {
-			return err
-		}
-		result = incident
-		return c.appendEvent(ctx, repositories, incidentID, domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusCreated, To: domain.StatusInvestigating}, now)
+		result, err = c.transition(ctx, repositories, incident, now, (*domain.Incident).StartInvestigation, statusChanged(c.systemActor))
+		return err
 	})
 	if err != nil {
 		return domain.Incident{}, fmt.Errorf("begin investigation: %w", err)
@@ -393,15 +361,8 @@ func (s *ApprovalService) recordDecision(ctx context.Context, command ApprovalCo
 		}
 		if proposal.Expired(now) {
 			if incident.Status() != domain.StatusExpired {
-				expected := incident.Version()
-				if transitionErr := incident.Expire(now); transitionErr != nil {
-					return transitionErr
-				}
-				if updateErr := repositories.Incidents().Update(incident, expected); updateErr != nil {
-					return updateErr
-				}
-				if eventErr := c.appendEvent(ctx, repositories, command.IncidentID, domain.EventIncidentExpired, c.systemActor, domain.TerminalDetail{Reason: "proposal expired"}, now); eventErr != nil {
-					return eventErr
+				if _, err := c.transition(ctx, repositories, incident, now, (*domain.Incident).Expire, terminated(c.systemActor, domain.EventIncidentExpired, "proposal expired")); err != nil {
+					return err
 				}
 			}
 			expired = true
@@ -418,35 +379,18 @@ func (s *ApprovalService) recordDecision(ctx context.Context, command ApprovalCo
 		if err != nil {
 			return err
 		}
-		expected := incident.Version()
-		if decision == domain.ApprovalApproved {
-			err = incident.Approve(now)
-		} else {
-			err = incident.Reject(now)
-		}
-		if err != nil {
-			return err
+		apply := (*domain.Incident).Approve
+		if decision != domain.ApprovalApproved {
+			apply = (*domain.Incident).Reject
 		}
 		// Transition first: a concurrent request that recorded the same
 		// decision has already moved the incident on, so this one fails on
 		// the version guard (a conflict) instead of a duplicate approval
 		// insert. Both writes commit or roll back together.
-		if err := repositories.Incidents().Update(incident, expected); err != nil {
+		if _, err := c.transition(ctx, repositories, incident, now, apply, approvalEvents(command.Actor, approval, reason)); err != nil {
 			return err
 		}
-		if err := repositories.Approvals().Save(approval); err != nil {
-			return err
-		}
-		kind := domain.EventApprovalRecorded
-		var detail domain.EventDetail = domain.ApprovalRecordedDetail{ApprovalID: approval.ID(), Actor: approval.Actor()}
-		if decision == domain.ApprovalRejected {
-			kind = domain.EventRejectionRecorded
-			detail = domain.RejectionRecordedDetail{ApprovalID: approval.ID(), Reason: reason}
-		}
-		if err := c.appendEvent(ctx, repositories, command.IncidentID, kind, command.Actor, detail, now); err != nil {
-			return err
-		}
-		return c.appendEvent(ctx, repositories, command.IncidentID, domain.EventStatusChanged, command.Actor, domain.StatusChangedDetail{From: domain.StatusAwaitingApproval, To: incident.Status()}, now)
+		return repositories.Approvals().Save(approval)
 	})
 	if err != nil {
 		return domain.Approval{}, fmt.Errorf("record approval decision: %w", err)

@@ -160,17 +160,10 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 		if fresh.Version() != loaded.incident.Version() {
 			return &domain.VersionConflictError{Expected: loaded.incident.Version(), Actual: fresh.Version()}
 		}
-		expected, from := fresh.Version(), fresh.Status()
-		if err := fresh.StartExecution(startedAt); err != nil {
+		if _, err := c.transition(ctx, repositories, fresh, startedAt, (*domain.Incident).StartExecution, statusChanged(c.systemActor)); err != nil {
 			return err
 		}
-		if err := repositories.Incidents().Update(fresh, expected); err != nil {
-			return err
-		}
-		if err := repositories.Idempotency().Create(record); err != nil {
-			return err
-		}
-		return c.appendEvent(ctx, repositories, fresh.ID(), domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: from, To: domain.StatusExecuting}, startedAt)
+		return repositories.Idempotency().Create(record)
 	})
 	if err != nil {
 		return executionPreparation{}, fmt.Errorf("start rollback execution: %w", err)
@@ -290,40 +283,35 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 		// that completed the same attempt has already moved the incident on,
 		// so this one fails with a conflict here instead of a duplicate
 		// execution insert. Everything below commits or rolls back together.
-		expected := fresh.Version()
-		from := fresh.Status()
-		if execution.Outcome() == domain.ExecutionSucceeded {
-			err = fresh.StartVerification(completedAt)
-		} else {
-			err = fresh.Fail(completedAt)
+		apply := (*domain.Incident).StartVerification
+		if execution.Outcome() != domain.ExecutionSucceeded {
+			apply = (*domain.Incident).Fail
 		}
-		if err != nil {
-			return err
-		}
-		if err := repositories.Incidents().Update(fresh, expected); err != nil {
+		if _, err := c.transition(ctx, repositories, fresh, completedAt, apply, c.executionEvents(execution)); err != nil {
 			return err
 		}
 		if err := repositories.Executions().Save(execution); err != nil {
 			return err
 		}
-		if err := repositories.Idempotency().Update(completedRecord, domain.IdempotencyPending); err != nil {
-			return err
-		}
-		if err := c.appendEvent(ctx, repositories, proposal.IncidentID(), domain.EventExecutionCompleted, c.systemActor, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()}, completedAt); err != nil {
-			return err
-		}
-		kind := domain.EventStatusChanged
-		var detail domain.EventDetail = domain.StatusChangedDetail{From: from, To: fresh.Status()}
-		if fresh.Status() == domain.StatusFailed {
-			kind = domain.EventIncidentFailed
-			detail = domain.TerminalDetail{Reason: execution.FailureReason()}
-		}
-		return c.appendEvent(ctx, repositories, proposal.IncidentID(), kind, c.systemActor, detail, completedAt)
+		return repositories.Idempotency().Update(completedRecord, domain.IdempotencyPending)
 	})
 	if err != nil {
 		return fmt.Errorf("complete rollback execution: %w", err)
 	}
 	return nil
+}
+
+// executionEvents audits a completed execution, then the incident outcome it
+// caused: verification starts, or the incident fails with the execution's
+// failure reason.
+func (c *workflow) executionEvents(execution domain.RollbackExecution) eventsFor {
+	return func(from, to domain.Status) []auditEvent {
+		completed := c.systemEvent(domain.EventExecutionCompleted, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()})
+		if to == domain.StatusFailed {
+			return []auditEvent{completed, c.systemEvent(domain.EventIncidentFailed, domain.TerminalDetail{Reason: execution.FailureReason()})}
+		}
+		return []auditEvent{completed, statusChangeEvent(c.systemActor, from, to)}
+	}
 }
 
 func validateExecutionResult(execution domain.RollbackExecution, proposal domain.RollbackProposal, key domain.IdempotencyKey) error {
@@ -439,25 +427,15 @@ func (s *VerificationService) Verify(ctx context.Context, incidentID domain.Inci
 		if err := repositories.Verifications().Save(verification); err != nil {
 			return err
 		}
-		if err := c.appendEvent(ctx, repositories, incidentID, domain.EventVerificationCompleted, c.systemActor, domain.VerificationCompletedDetail{Passed: verification.Passed(), Revision: verification.Revision()}, now); err != nil {
+		if err := c.appendEvents(ctx, repositories, incidentID, now, c.systemEvent(domain.EventVerificationCompleted, domain.VerificationCompletedDetail{Passed: verification.Passed(), Revision: verification.Revision()})); err != nil {
 			return err
 		}
-		expected := fresh.Version()
 		if verification.Passed() {
-			err = fresh.Resolve(now)
+			_, err = c.transition(ctx, repositories, fresh, now, (*domain.Incident).Resolve, statusChanged(c.systemActor))
 		} else {
-			err = fresh.Fail(now)
+			_, err = c.transition(ctx, repositories, fresh, now, (*domain.Incident).Fail, terminated(c.systemActor, domain.EventIncidentFailed, verification.FailureReason()))
 		}
-		if err != nil {
-			return err
-		}
-		if err := repositories.Incidents().Update(fresh, expected); err != nil {
-			return err
-		}
-		if verification.Passed() {
-			return c.appendEvent(ctx, repositories, incidentID, domain.EventStatusChanged, c.systemActor, domain.StatusChangedDetail{From: domain.StatusVerifying, To: domain.StatusResolved}, now)
-		}
-		return c.appendEvent(ctx, repositories, incidentID, domain.EventIncidentFailed, c.systemActor, domain.TerminalDetail{Reason: verification.FailureReason()}, now)
+		return err
 	})
 	if err != nil {
 		return domain.RecoveryVerification{}, fmt.Errorf("persist recovery verification: %w", err)
@@ -486,11 +464,8 @@ func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentComm
 		if err != nil {
 			return err
 		}
-		expected := incident.Version()
-		if err := incident.Cancel(now); err != nil {
-			return err
-		}
-		if err := repositories.Incidents().Update(incident, expected); err != nil {
+		incident, err = c.transition(ctx, repositories, incident, now, (*domain.Incident).Cancel, terminated(command.Actor, domain.EventIncidentCanceled, command.Reason))
+		if err != nil {
 			return err
 		}
 		dispatch, dispatchErr := repositories.InvestigationTasks().GetByIncident(command.IncidentID)
@@ -504,7 +479,7 @@ func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentComm
 			return dispatchErr
 		}
 		result = incident
-		return c.appendEvent(ctx, repositories, command.IncidentID, domain.EventIncidentCanceled, command.Actor, domain.TerminalDetail{Reason: command.Reason}, now)
+		return nil
 	})
 	if err != nil {
 		return domain.Incident{}, fmt.Errorf("cancel incident: %w", err)
@@ -516,7 +491,7 @@ func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentComm
 // one transaction, but only while the incident is still at version. When the
 // incident has changed since then it writes nothing and returns nil: the
 // caller's failure belongs to a superseded view and the newer state wins.
-func (c *workflow) terminateIfUnchanged(ctx context.Context, incidentID domain.IncidentID, version uint64, transition func(*domain.Incident, time.Time) error, kind domain.EventKind, reason string) error {
+func (c *workflow) terminateIfUnchanged(ctx context.Context, incidentID domain.IncidentID, version uint64, apply func(*domain.Incident, time.Time) error, kind domain.EventKind, reason string) error {
 	now := c.clock.Now()
 	return c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		incident, err := repositories.Incidents().Get(incidentID)
@@ -526,13 +501,8 @@ func (c *workflow) terminateIfUnchanged(ctx context.Context, incidentID domain.I
 		if incident.Version() != version {
 			return nil
 		}
-		if err := transition(&incident, now); err != nil {
-			return err
-		}
-		if err := repositories.Incidents().Update(incident, version); err != nil {
-			return err
-		}
-		return c.appendEvent(ctx, repositories, incidentID, kind, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
+		_, err = c.transition(ctx, repositories, incident, now, apply, terminated(c.systemActor, kind, reason))
+		return err
 	})
 }
 
@@ -552,13 +522,7 @@ func (c *workflow) failIncident(ctx context.Context, incidentID domain.IncidentI
 		if err != nil {
 			return err
 		}
-		expected := incident.Version()
-		if err := incident.Fail(now); err != nil {
-			return err
-		}
-		if err := repositories.Incidents().Update(incident, expected); err != nil {
-			return err
-		}
-		return c.appendEvent(ctx, repositories, incidentID, domain.EventIncidentFailed, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
+		_, err = c.transition(ctx, repositories, incident, now, (*domain.Incident).Fail, terminated(c.systemActor, domain.EventIncidentFailed, reason))
+		return err
 	})
 }

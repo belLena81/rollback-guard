@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
@@ -107,24 +106,4 @@ func (s *QueryService) ListEvents(ctx context.Context, incidentID domain.Inciden
 		return nil, fmt.Errorf("list incident events: %w", err)
 	}
 	return events, nil
-}
-
-func (c *workflow) appendEvent(ctx context.Context, repositories ports.Repositories, incidentID domain.IncidentID, kind domain.EventKind, actor domain.Actor, detail domain.EventDetail, now time.Time) error {
-	sequence, err := repositories.Events().NextSequence(ctx, incidentID)
-	if err != nil {
-		return fmt.Errorf("get next event sequence: %w", err)
-	}
-	event, err := domain.NewOperationEvent(
-		domain.EventID(c.ids.NewID("event")),
-		incidentID,
-		sequence,
-		kind,
-		now,
-		actor,
-		detail,
-	)
-	if err != nil {
-		return err
-	}
-	return repositories.Events().Append(event)
 }
