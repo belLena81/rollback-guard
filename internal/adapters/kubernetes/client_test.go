@@ -12,9 +12,11 @@ import (
 	"github.com/belLena81/rollback-guard/internal/ports"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -439,6 +441,55 @@ func TestExecuteApprovedRollbackReleasesPendingMutationThroughGuardPort(t *testi
 	}
 }
 
+func TestExecuteApprovedRollbackReportsGuardReleaseFailure(t *testing.T) {
+	target := mustTarget(t)
+	deployment := testDeployment("broken:v2")
+	current := testReplicaSet(deployment, "current", "broken:v2", false, time.Now())
+	stable := testReplicaSet(deployment, "stable", "healthy:v1", true, time.Now().Add(-time.Minute))
+	otherStable := testReplicaSet(deployment, "other-stable", "healthy:v0", true, time.Now().Add(-2*time.Minute))
+	client := fake.NewClientset(deployment, current, stable, otherStable)
+	approved := testApprovedRollback(t, target, mustRevision(t, deployment.Spec.Template), mustRevision(t, stable.Spec.Template))
+	guard := newSharedMutationGuard(approved)
+	guard.releaseErr = errors.New("unlock failed")
+	service, err := NewService(client, Config{ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, MutationGuard: decoratedMutationGuard{guard}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.ExecuteApprovedRollback(context.Background(), approved.Proposal().Hash(), "release-failure-key")
+	if !errors.Is(err, ErrStableRevision) || !errors.Is(err, guard.releaseErr) {
+		t.Fatalf("ExecuteApprovedRollback() error = %v, want both %v and %v", err, ErrStableRevision, guard.releaseErr)
+	}
+}
+
+func TestExecuteApprovedRollbackReleasesBeforeAndAfterReconcilingPatchConflict(t *testing.T) {
+	target := mustTarget(t)
+	deployment := testDeployment("broken:v2")
+	current := testReplicaSet(deployment, "current", "broken:v2", false, time.Now())
+	stable := testReplicaSet(deployment, "stable", "healthy:v1", true, time.Now().Add(-time.Minute))
+	client := fake.NewClientset(deployment, current, stable)
+	client.PrependReactor("patch", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Group: "apps", Resource: "deployments"}, deployment.Name, errors.New("resource version changed"))
+	})
+	approved := testApprovedRollback(t, target, mustRevision(t, deployment.Spec.Template), mustRevision(t, stable.Spec.Template))
+	guard := newSharedMutationGuard(approved)
+	service, err := NewService(client, Config{ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, MutationGuard: decoratedMutationGuard{guard}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The patch conflicts and the deployment still runs the bad revision, so
+	// reconciliation reports drift: one release before it and one after.
+	_, err = service.ExecuteApprovedRollback(context.Background(), approved.Proposal().Hash(), "conflict-key")
+	if !errors.Is(err, ErrRevisionDrift) {
+		t.Fatalf("ExecuteApprovedRollback() error = %v, want %v", err, ErrRevisionDrift)
+	}
+	released := guard.releasedKeys()
+	if len(released) != 2 || released[0] != "conflict-key" || released[1] != "conflict-key" {
+		t.Fatalf("released mutation keys = %v, want [conflict-key conflict-key]", released)
+	}
+}
+
 func TestRollbackRejectsUntrustedCommandBeforeKubernetesAccess(t *testing.T) {
 	target := mustTarget(t)
 	deployment := testDeployment("broken:v2")
@@ -513,6 +564,8 @@ type sharedMutationGuard struct {
 	approved map[domain.ProposalHash]domain.ApprovedRollback
 	records  map[domain.IdempotencyKey]domain.RollbackMutation
 	released []domain.IdempotencyKey
+	// releaseErr is returned by every Release call when set.
+	releaseErr error
 }
 
 func newSharedMutationGuard(approved domain.ApprovedRollback) *sharedMutationGuard {
@@ -566,7 +619,7 @@ func (g *sharedMutationGuard) Release(_ context.Context, pending domain.Rollback
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.released = append(g.released, pending.Key())
-	return nil
+	return g.releaseErr
 }
 
 func (g *sharedMutationGuard) releasedKeys() []domain.IdempotencyKey {

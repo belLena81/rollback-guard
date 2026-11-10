@@ -250,9 +250,10 @@ func mapTaskState(state a2a.TaskState) (ports.InvestigationTaskState, error) {
 	case a2a.TaskStateFailed, a2a.TaskStateRejected:
 		return ports.InvestigationTaskFailed, nil
 	case a2a.TaskStateUnspecified, a2a.TaskStateAuthRequired, a2a.TaskStateInputRequired:
-		return 0, fmt.Errorf("unsupported investigation task state %q", state)
+		return 0, fmt.Errorf("unsupported investigation task state")
 	default:
-		return 0, fmt.Errorf("unknown investigation task state %q", state)
+		// The remote value is not echoed: it is untrusted and unbounded.
+		return 0, fmt.Errorf("unknown investigation task state")
 	}
 }
 

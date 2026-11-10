@@ -2,6 +2,7 @@ package a2aadapter
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -235,6 +236,10 @@ func TestResultWireRejectsUnknownRecommendation(t *testing.T) {
 			decoded, err := decodeResult(wire)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("decodeResult() with recommendation %q error = %v, wantErr %t", test.recommendation, err, test.wantErr)
+			}
+			var validation *domain.ValidationError
+			if test.wantErr && (!errors.As(err, &validation) || validation.Field != "conclusion.recommendation") {
+				t.Fatalf("decodeResult() with recommendation %q error = %v, want a conclusion.recommendation validation error", test.recommendation, err)
 			}
 			if err == nil && decoded.Conclusion.Recommendation().String() != test.recommendation {
 				t.Fatalf("decoded recommendation = %s, want %s", decoded.Conclusion.Recommendation(), test.recommendation)

@@ -270,6 +270,9 @@ type InvestigationTaskRepository interface {
 }
 type EventRepository interface {
 	NextSequence(context.Context, domain.IncidentID) (uint64, error)
+	// Append returns a VersionConflictError when the sequence is already
+	// taken. The caller must return that error from its unit of work so the
+	// state change it was auditing is rolled back with it.
 	Append(domain.OperationEvent) error
 	List(domain.IncidentID) ([]domain.OperationEvent, error)
 }

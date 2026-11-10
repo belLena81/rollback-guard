@@ -562,7 +562,9 @@ func (repo idempotencyRepo) Create(record domain.IdempotencyRecord) error {
 		if isUniqueViolation(err) {
 			return &domain.IdempotencyConflictError{Key: s.Key}
 		}
-		return fmt.Errorf("create idempotency key: %w", mapError(err, "idempotency key", string(s.Key)))
+		// Not mapped through mapError: a missing incident or proposal here is
+		// an internal inconsistency, not a missing idempotency key.
+		return fmt.Errorf("create idempotency key: %w", err)
 	}
 	return nil
 }

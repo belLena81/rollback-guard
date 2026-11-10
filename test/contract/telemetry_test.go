@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +128,16 @@ func TestMCPTelemetryOptionsKeepToolCatalogs(t *testing.T) {
 			defer closeOrFail(t, client)
 			if err := client.RequireTools(ctx, test.want); err != nil {
 				t.Fatal(err)
+			}
+			// The catalog check fails closed on any difference from the served tools.
+			for name, catalog := range map[string][]string{
+				"server serves a tool the client does not expect": test.want[1:],
+				"server lacks a tool the client expects":          append(slices.Clone(test.want), "generic_shell"),
+				"expected names joined by a space":                {strings.Join(test.want, " ")},
+			} {
+				if err := client.RequireTools(ctx, catalog); err == nil {
+					t.Fatalf("RequireTools() accepted a mismatching catalog: %s", name)
+				}
 			}
 			response, err := http.Get(server.URL + "/metrics")
 			if err != nil {

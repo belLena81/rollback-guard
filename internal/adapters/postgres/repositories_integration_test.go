@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,52 +29,119 @@ func TestEventAppendReportsSequenceConflictToSecondWriter(t *testing.T) {
 
 	// Both writers computed sequence 1 before either committed. The second
 	// insert blocks on the unique index until the first writer commits.
-	secondErr := make(chan error, 1)
-	var sequenceAfterConflict uint64
-	err = uow.WithinTransaction(ctx, func(first ports.Repositories) error {
-		if err := first.Events().Append(testStatusEvent(t, "event-first", "incident-events", 1, now)); err != nil {
-			return err
-		}
-		secondStarted := make(chan struct{})
-		go func() {
-			secondErr <- uow.WithinTransaction(ctx, func(second ports.Repositories) error {
-				close(secondStarted)
-				appendErr := second.Events().Append(testStatusEvent(t, "event-second", "incident-events", 1, now))
-				// The transaction must stay usable after the conflict is reported.
-				var sequenceErr error
-				sequenceAfterConflict, sequenceErr = second.Events().NextSequence(ctx, "incident-events")
-				if sequenceErr != nil {
-					return fmt.Errorf("next sequence after conflict: %w (append error: %w)", sequenceErr, appendErr)
-				}
-				return appendErr
-			})
-		}()
-		<-secondStarted
-		time.Sleep(100 * time.Millisecond)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("first writer error = %v", err)
-	}
+	secondErr, sequenceAfterAppend := appendWhileFirstWriterHoldsSequence(ctx, t, pool, uow, "incident-events", now, nil)
 
-	err = <-secondErr
 	var conflict *domain.VersionConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("second writer error = %v, want *domain.VersionConflictError", err)
+	if !errors.As(secondErr, &conflict) {
+		t.Fatalf("second writer error = %v, want *domain.VersionConflictError", secondErr)
 	}
 	if conflict.Expected != 2 || conflict.Actual != 1 {
 		t.Fatalf("conflict = expected %d actual %d, want expected 2 actual 1", conflict.Expected, conflict.Actual)
 	}
-	if sequenceAfterConflict != 2 {
-		t.Fatalf("next sequence after conflict = %d, want 2", sequenceAfterConflict)
+	if sequenceAfterAppend != 2 {
+		t.Fatalf("next sequence after conflict = %d, want 2", sequenceAfterAppend)
 	}
-	var count int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM operation_events WHERE incident_id = 'incident-events'`).Scan(&count); err != nil {
+	if got := storedEventIDs(ctx, t, pool, "incident-events"); len(got) != 1 || got[0] != "event-first" {
+		t.Fatalf("stored events = %v, want [event-first]", got)
+	}
+}
+
+func TestEventAppendSucceedsWhenFirstWriterRollsBack(t *testing.T) {
+	pool := isolatedRollbackGuardPool(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	seedTrustedRollback(t, pool, "incident-rollback", "key-rollback", now)
+	uow, err := NewUnitOfWork(repositoryPool(t, pool, 4))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Fatalf("stored events = %d, want 1", count)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	firstFailure := errors.New("first writer failed")
+	secondErr, sequenceAfterAppend := appendWhileFirstWriterHoldsSequence(ctx, t, pool, uow, "incident-rollback", now, firstFailure)
+
+	if secondErr != nil {
+		t.Fatalf("second writer error = %v, want nil after the first writer rolled back", secondErr)
 	}
+	if sequenceAfterAppend != 2 {
+		t.Fatalf("next sequence after append = %d, want 2", sequenceAfterAppend)
+	}
+	if got := storedEventIDs(ctx, t, pool, "incident-rollback"); len(got) != 1 || got[0] != "event-second" {
+		t.Fatalf("stored events = %v, want [event-second]", got)
+	}
+}
+
+// appendWhileFirstWriterHoldsSequence appends sequence 1 in a first
+// transaction, starts a second transaction appending the same sequence, waits
+// until PostgreSQL reports that insert blocked on a lock, and then ends the
+// first transaction with firstResult. It returns the second transaction's
+// error and the next sequence the second transaction saw after its append.
+func appendWhileFirstWriterHoldsSequence(ctx context.Context, t *testing.T, observer *pgxpool.Pool, uow *UnitOfWork, incidentID domain.IncidentID, now time.Time, firstResult error) (error, uint64) {
+	t.Helper()
+	firstEvent := testStatusEvent(t, "event-first", incidentID, 1, now)
+	secondEvent := testStatusEvent(t, "event-second", incidentID, 1, now)
+	secondErr := make(chan error, 1)
+	var sequenceAfterAppend uint64
+	firstErr := uow.WithinTransaction(ctx, func(first ports.Repositories) error {
+		if err := first.Events().Append(firstEvent); err != nil {
+			return err
+		}
+		go func() {
+			secondErr <- uow.WithinTransaction(ctx, func(second ports.Repositories) error {
+				appendErr := second.Events().Append(secondEvent)
+				// The transaction must stay usable whatever Append reported.
+				var sequenceErr error
+				sequenceAfterAppend, sequenceErr = second.Events().NextSequence(ctx, incidentID)
+				if sequenceErr != nil {
+					return fmt.Errorf("next sequence after append: %w (append error: %w)", sequenceErr, appendErr)
+				}
+				return appendErr
+			})
+		}()
+		for {
+			var blocked int
+			if err := observer.QueryRow(ctx, `
+				SELECT count(*) FROM pg_stat_activity
+				WHERE datname = current_database() AND pid <> pg_backend_pid()
+					AND wait_event_type = 'Lock' AND query LIKE '%INSERT INTO operation_events%'
+			`).Scan(&blocked); err != nil {
+				return fmt.Errorf("observe blocked insert: %w", err)
+			}
+			if blocked > 0 {
+				return firstResult
+			}
+			select {
+			case err := <-secondErr:
+				return fmt.Errorf("second writer finished before the first: %w", err)
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	})
+	if !errors.Is(firstErr, firstResult) {
+		t.Fatalf("first writer error = %v, want %v", firstErr, firstResult)
+	}
+	select {
+	case err := <-secondErr:
+		return err, sequenceAfterAppend
+	case <-ctx.Done():
+		t.Fatalf("second writer did not finish: %v", ctx.Err())
+		return nil, 0
+	}
+}
+
+func storedEventIDs(ctx context.Context, t *testing.T, pool *pgxpool.Pool, incidentID domain.IncidentID) []string {
+	t.Helper()
+	rows, err := pool.Query(ctx, `SELECT id FROM operation_events WHERE incident_id = $1 ORDER BY sequence`, string(incidentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ids
 }
 
 func TestEventAppendStillRejectsDuplicateEventID(t *testing.T) {
@@ -191,6 +259,71 @@ func TestWithinTransactionPanicLeavesPoolUsable(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("events written by the panicking transaction = %d, want 0 (rolled back)", count)
 	}
+}
+
+func TestWithinTransactionClassifiesBeginCallbackAndCommitErrors(t *testing.T) {
+	shared := isolatedRollbackGuardPool(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	seedTrustedRollback(t, shared, "incident-classify", "key-classify", now)
+	pool := repositoryPool(t, shared, 2)
+	uow, err := NewUnitOfWork(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("callback error is returned unchanged and rolled back", func(t *testing.T) {
+		callbackErr := errors.New("callback failed")
+		err := uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+			if err := repositories.Events().Append(testStatusEvent(t, "event-callback", "incident-classify", 1, now)); err != nil {
+				return err
+			}
+			return callbackErr
+		})
+		if err != callbackErr { //nolint:errorlint // identity: the callback error must not be wrapped or joined
+			t.Fatalf("WithinTransaction() error = %v, want the callback error itself", err)
+		}
+		if got := storedEventIDs(context.Background(), t, shared, "incident-classify"); len(got) != 0 {
+			t.Fatalf("events after a failed callback = %v, want none", got)
+		}
+	})
+
+	t.Run("commit failure is wrapped and rolled back", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		err := uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+			if err := repositories.Events().Append(testStatusEvent(t, "event-commit", "incident-classify", 1, now)); err != nil {
+				return err
+			}
+			cancel()
+			return nil
+		})
+		if !errors.Is(err, context.Canceled) || !strings.HasPrefix(fmt.Sprint(err), "commit transaction: ") {
+			t.Fatalf("WithinTransaction() error = %v, want a wrapped commit failure", err)
+		}
+		if got := storedEventIDs(context.Background(), t, shared, "incident-classify"); len(got) != 0 {
+			t.Fatalf("events after a failed commit = %v, want none", got)
+		}
+	})
+
+	t.Run("begin failure is wrapped and the callback does not run", func(t *testing.T) {
+		closed := repositoryPool(t, shared, 1)
+		closed.Close()
+		closedUOW, err := NewUnitOfWork(closed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		called := false
+		err = closedUOW.WithinTransaction(context.Background(), func(ports.Repositories) error {
+			called = true
+			return nil
+		})
+		if err == nil || !strings.HasPrefix(err.Error(), "begin transaction: ") {
+			t.Fatalf("WithinTransaction() error = %v, want a wrapped begin failure", err)
+		}
+		if called {
+			t.Fatal("callback ran without a transaction")
+		}
+	})
 }
 
 // repositoryPool opens a pool on the isolated schema that uses pgx's default
