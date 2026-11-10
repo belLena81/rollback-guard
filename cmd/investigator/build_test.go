@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	mcpadapter "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/adapters/mcp/mcptest"
 	"github.com/belLena81/rollback-guard/internal/platform/buildinfo"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
@@ -31,9 +32,8 @@ func testTelemetry(t *testing.T) *telemetry.Provider {
 // The investigator used to introduce itself to the MCP servers as the
 // orchestrator.
 func TestBuildMCPConnectsAsTheInvestigator(t *testing.T) {
-	// buildMCP requires exactly the catalogs it lists today.
-	read := mcptest.NewServer(t, "get_deployment")
-	observability := mcptest.NewServer(t, "get_http_error_rate")
+	read := mcptest.NewServer(t, mcpadapter.KubernetesReadonlyCatalog()...)
+	observability := mcptest.NewServer(t, mcpadapter.ObservabilityCatalog()...)
 	cfg := config.InvestigatorConfig{KubernetesReadMCPURL: read.Endpoint, ObservabilityMCPURL: observability.Endpoint, MCPConnectTimeout: 5 * time.Second, MCPCallTimeout: 5 * time.Second}
 	logger := slog.New(slog.DiscardHandler)
 
@@ -62,8 +62,8 @@ func TestBuildMCPConnectsAsTheInvestigator(t *testing.T) {
 }
 
 func TestBuildMCPClosesTheFirstSessionWhenTheSecondFails(t *testing.T) {
-	read := mcptest.NewServer(t, "get_deployment")
-	observability := mcptest.NewServer(t, "get_http_error_rate", "generic_shell")
+	read := mcptest.NewServer(t, mcpadapter.KubernetesReadonlyCatalog()...)
+	observability := mcptest.NewServer(t, append(mcpadapter.ObservabilityCatalog(), "generic_shell")...)
 	cfg := config.InvestigatorConfig{KubernetesReadMCPURL: read.Endpoint, ObservabilityMCPURL: observability.Endpoint, MCPConnectTimeout: 5 * time.Second, MCPCallTimeout: 5 * time.Second}
 	logger := slog.New(slog.DiscardHandler)
 

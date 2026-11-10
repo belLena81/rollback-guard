@@ -129,10 +129,7 @@ func buildMCP(ctx context.Context, cfg config.Config, tel *telemetry.Provider, l
 	clients.read, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientOrchestrator, httpClient, bootstrap.MCPServer{
 		Name:     "readonly kubernetes",
 		Endpoint: cfg.KubernetesReadMCPURL,
-		Tools: []string{
-			mcpadapter.ToolGetDeployment, mcpadapter.ToolGetReplicaSets, mcpadapter.ToolListPods,
-			mcpadapter.ToolGetPodEvents, mcpadapter.ToolGetRolloutStatus, mcpadapter.ToolWatchRollout,
-		},
+		Tools:    mcpadapter.KubernetesReadonlyCatalog(),
 	})
 	if err != nil {
 		return clients, err
@@ -140,7 +137,7 @@ func buildMCP(ctx context.Context, cfg config.Config, tel *telemetry.Provider, l
 	clients.write, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientOrchestrator, httpClient, bootstrap.MCPServer{
 		Name:     "rollback kubernetes",
 		Endpoint: cfg.KubernetesWriteMCPURL,
-		Tools:    []string{mcpadapter.ToolPrepareRollback, mcpadapter.ToolExecuteApprovedRollback},
+		Tools:    mcpadapter.KubernetesRollbackCatalog(),
 	})
 	if err != nil {
 		return clients, err
@@ -148,10 +145,7 @@ func buildMCP(ctx context.Context, cfg config.Config, tel *telemetry.Provider, l
 	clients.observability, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientOrchestrator, httpClient, bootstrap.MCPServer{
 		Name:     "observability",
 		Endpoint: cfg.ObservabilityMCPURL,
-		Tools: []string{
-			mcpadapter.ToolGetHTTPErrorRate, mcpadapter.ToolCompareErrorRateWindows, mcpadapter.ToolGetRequestLatency,
-			mcpadapter.ToolGetPodCPUUsage, mcpadapter.ToolGetPodMemoryUsage, mcpadapter.ToolEvaluateRecovery,
-		},
+		Tools:    mcpadapter.ObservabilityCatalog(),
 	})
 	return clients, err
 }

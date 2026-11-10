@@ -95,7 +95,9 @@ func (c mcpClients) ping(ctx context.Context) error {
 }
 
 // buildMCP connects the two MCP sessions the investigator collects evidence
-// through. On failure it closes the session it already opened.
+// through and fails closed unless each server serves exactly its full
+// catalog. The investigator never connects to the rollback server. On
+// failure it closes the session it already opened.
 func buildMCP(ctx context.Context, cfg config.InvestigatorConfig, tel *telemetry.Provider, logger *slog.Logger) (clients mcpClients, err error) {
 	connectCtx, cancel := context.WithTimeout(ctx, cfg.MCPConnectTimeout)
 	defer cancel()
@@ -109,7 +111,7 @@ func buildMCP(ctx context.Context, cfg config.InvestigatorConfig, tel *telemetry
 	clients.read, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientInvestigator, httpClient, bootstrap.MCPServer{
 		Name:     "readonly kubernetes",
 		Endpoint: cfg.KubernetesReadMCPURL,
-		Tools:    []string{mcpadapter.ToolGetDeployment},
+		Tools:    mcpadapter.KubernetesReadonlyCatalog(),
 	})
 	if err != nil {
 		return clients, err
@@ -117,7 +119,7 @@ func buildMCP(ctx context.Context, cfg config.InvestigatorConfig, tel *telemetry
 	clients.observability, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientInvestigator, httpClient, bootstrap.MCPServer{
 		Name:     "observability",
 		Endpoint: cfg.ObservabilityMCPURL,
-		Tools:    []string{mcpadapter.ToolGetHTTPErrorRate},
+		Tools:    mcpadapter.ObservabilityCatalog(),
 	})
 	return clients, err
 }

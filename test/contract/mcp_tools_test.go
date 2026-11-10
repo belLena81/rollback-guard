@@ -3,7 +3,7 @@ package contract_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -33,14 +33,19 @@ func TestMCPToolCatalogsAreExactAndNarrow(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// want is spelled out, not taken from production code, so widening a
+	// server and its shared catalog together still fails here. The shared
+	// catalog is what the orchestrator and investigator require at startup,
+	// so it must equal both want and the served tools.
 	tests := []struct {
-		name   string
-		server *mcp.Server
-		want   []string
+		name    string
+		server  *mcp.Server
+		catalog []string
+		want    []string
 	}{
-		{name: "kubernetes readonly", server: readonly, want: []string{protocol.ToolGetDeployment, protocol.ToolGetReplicaSets, protocol.ToolListPods, protocol.ToolGetPodEvents, protocol.ToolGetRolloutStatus, protocol.ToolWatchRollout}},
-		{name: "kubernetes rollback", server: rollback, want: []string{protocol.ToolPrepareRollback, protocol.ToolExecuteApprovedRollback}},
-		{name: "observability", server: observability, want: []string{protocol.ToolGetHTTPErrorRate, protocol.ToolCompareErrorRateWindows, protocol.ToolGetRequestLatency, protocol.ToolGetPodCPUUsage, protocol.ToolGetPodMemoryUsage, protocol.ToolEvaluateRecovery}},
+		{name: "kubernetes readonly", server: readonly, catalog: protocol.KubernetesReadonlyCatalog(), want: []string{"get_deployment", "get_replica_sets", "list_pods", "get_pod_events", "get_rollout_status", "watch_rollout"}},
+		{name: "kubernetes rollback", server: rollback, catalog: protocol.KubernetesRollbackCatalog(), want: []string{"prepare_rollback", "execute_approved_rollback"}},
+		{name: "observability", server: observability, catalog: protocol.ObservabilityCatalog(), want: []string{"get_http_error_rate", "compare_error_rate_windows", "get_request_latency", "get_pod_cpu_usage", "get_pod_memory_usage", "evaluate_recovery"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -70,8 +75,12 @@ func TestMCPToolCatalogsAreExactAndNarrow(t *testing.T) {
 			}
 			sort.Strings(got)
 			sort.Strings(test.want)
-			if fmt.Sprint(got) != fmt.Sprint(test.want) {
-				t.Fatalf("tools = %v, want %v", got, test.want)
+			sort.Strings(test.catalog)
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("served tools = %q, want %q", got, test.want)
+			}
+			if !slices.Equal(test.catalog, test.want) {
+				t.Fatalf("shared client catalog = %q, want %q", test.catalog, test.want)
 			}
 		})
 	}

@@ -112,6 +112,38 @@ func TestRequireToolCatalogComparesExactNames(t *testing.T) {
 	}
 }
 
+func TestCatalogsAreDisjointAndReturnFreshSlices(t *testing.T) {
+	t.Parallel()
+
+	catalogs := map[string]func() []string{
+		"kubernetes readonly": KubernetesReadonlyCatalog,
+		"kubernetes rollback": KubernetesRollbackCatalog,
+		"observability":       ObservabilityCatalog,
+	}
+	owner := map[string]string{}
+	for name, catalog := range catalogs {
+		first := catalog()
+		if len(first) == 0 {
+			t.Fatalf("%s catalog is empty", name)
+		}
+		for _, tool := range first {
+			if previous, taken := owner[tool]; taken {
+				t.Fatalf("tool %s is in both the %s and %s catalogs", tool, previous, name)
+			}
+			owner[tool] = name
+		}
+		want := slices.Clone(first)
+		first[0] = "generic_shell"
+		if again := catalog(); !slices.Equal(again, want) {
+			t.Fatalf("%s catalog = %q after a caller modified an earlier result, want %q", name, again, want)
+		}
+	}
+	// The mutating tool belongs to the rollback server only.
+	if owner[ToolExecuteApprovedRollback] != "kubernetes rollback" {
+		t.Fatalf("%s is in the %q catalog", ToolExecuteApprovedRollback, owner[ToolExecuteApprovedRollback])
+	}
+}
+
 type blockingCaller struct{}
 
 func (blockingCaller) CallTool(ctx context.Context, _ *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
