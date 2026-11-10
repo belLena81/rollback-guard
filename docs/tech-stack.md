@@ -27,7 +27,7 @@ Use modern Go with standard library defaults where practical:
 - PostgreSQL is canonical for v1.
 - Use `pgx`/`pgxpool`.
 - Use migrations.
-- `sqlc.yaml` is present, but nothing is generated; repositories use `pgx` directly. Generate only if query volume grows enough to justify it.
+- Repositories use `pgx` directly; no code is generated. Introduce a generator only if query volume grows enough to justify it.
 - Migrations are applied with `golang-migrate`.
 - Use Testcontainers for integration tests.
 
