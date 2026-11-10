@@ -37,6 +37,8 @@ Every label value comes from a closed set. Incident IDs, idempotency keys, propo
 | `rollback_guardian_diagnoses_total` | counter | `requested_strategy`, `effective_strategy` (rules, llm, hybrid, error), `fallback_reason` (none, provider_error, provider_timeout, provider_refusal, invalid_output) | investigator |
 | `rollback_guardian_rollback_executions_total` | counter | `outcome`: succeeded, failed | orchestrator |
 | `rollback_guardian_recovery_verifications_total` | counter | `result`: passed, failed | orchestrator |
+| `rollback_guardian_retries_total` | counter | `dependency`, `outcome` (retried, exhausted) | every process (see `docs/phase6-resilience.md`) |
+| `rollback_guardian_circuit_breaker_transitions_total` | counter | `dependency`, `state` (open, half_open, closed) | every process |
 
 Health and `/metrics` requests are counted but not traced or logged. On the orchestrator, only registered routes are instrumented. A catch-all route would turn the mux's 405 responses into 404s.
 

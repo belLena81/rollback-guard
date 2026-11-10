@@ -16,6 +16,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/platform/bootstrap"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	promapi "github.com/prometheus/client_golang/api"
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
@@ -52,7 +53,7 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 		return fmt.Errorf("create prometheus client: %w", err)
 	}
 	api := promv1.NewAPI(promClient)
-	backend, err := buildServices(cfg, api)
+	backend, err := buildServices(cfg, api, tel)
 	if err != nil {
 		return err
 	}
@@ -68,8 +69,19 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 }
 
 // buildServices creates the Prometheus-backed metrics backend.
-func buildServices(cfg config.ObservabilityMCPConfig, api promv1.API) (*metricsprom.Client, error) {
-	return metricsprom.NewClient(timeoutQueryAPI{api: api, timeout: cfg.RequestTimeout}, metricsprom.Config{
+//
+// Each Prometheus attempt gets its own RequestTimeout; transient failures
+// are retried behind one breaker for Prometheus. observer may be nil.
+func buildServices(cfg config.ObservabilityMCPConfig, api promv1.API, observer resilience.Observer) (*metricsprom.Client, error) {
+	protector, err := bootstrap.NewProtector(resilience.DependencyPrometheus, cfg.Resilience, observer)
+	if err != nil {
+		return nil, err
+	}
+	protected, err := metricsprom.NewProtectedQueryAPI(timeoutQueryAPI{api: api, timeout: cfg.RequestTimeout}, protector)
+	if err != nil {
+		return nil, err
+	}
+	return metricsprom.NewClient(protected, metricsprom.Config{
 		AllowedTargets:    cfg.AllowedTargets,
 		ObservationWindow: cfg.MetricsWindow,
 		MaxSampleAge:      cfg.MaxSampleAge,

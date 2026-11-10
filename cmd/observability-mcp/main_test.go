@@ -37,7 +37,7 @@ func testConfig(t *testing.T) config.ObservabilityMCPConfig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return config.ObservabilityMCPConfig{AllowedTargets: []domain.DeploymentTarget{target}, RequestTimeout: 750 * time.Millisecond, SessionTimeout: time.Minute, MetricsWindow: 5 * time.Minute, MaxSampleAge: time.Minute}
+	return config.ObservabilityMCPConfig{AllowedTargets: []domain.DeploymentTarget{target}, RequestTimeout: 750 * time.Millisecond, SessionTimeout: time.Minute, MetricsWindow: 5 * time.Minute, MaxSampleAge: time.Minute, Resilience: config.DefaultResilience()}
 }
 
 func TestTimeoutQueryAPIBoundsEachQuery(t *testing.T) {
@@ -55,7 +55,7 @@ func TestTimeoutQueryAPIBoundsEachQuery(t *testing.T) {
 
 func TestBuildHTTPServesHealthAndMetrics(t *testing.T) {
 	cfg := testConfig(t)
-	backend, err := buildServices(cfg, &queryAPI{})
+	backend, err := buildServices(cfg, &queryAPI{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,7 +25,7 @@ Phases 1-5 are complete. Phase 6 is in progress:
 | `cmd/demo-api` and container images | done |
 | kind manifests, RBAC ordering, local demo make targets (`docs/phase6-kind.md`) | done |
 | Prometheus metrics, log correlation, OpenTelemetry tracing (`docs/phase6-telemetry.md`) | done |
-| Retry/circuit-breaker decorators | not started |
+| Retry/circuit-breaker decorators (`docs/phase6-resilience.md`) | done |
 | Unattended E2E flow (`create-incident`, `approve-latest-action`, `verify`) | not started |
 | CI checks | not started |
 

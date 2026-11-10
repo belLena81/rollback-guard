@@ -123,6 +123,7 @@ func TestBuildCoordinatorBoundsTheA2AConnectByItsOwnTimeout(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	cfg := config.Config{
 		InvestigatorURL:   stalled.URL,
+		Resilience:        config.DefaultResilience(),
 		A2AConnectTimeout: 200 * time.Millisecond,
 		MCPConnectTimeout: 30 * time.Second,
 		A2ATaskTimeout:    30 * time.Second,

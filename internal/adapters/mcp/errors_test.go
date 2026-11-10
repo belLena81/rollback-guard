@@ -2,11 +2,14 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/belLena81/rollback-guard/internal/adapters/kubernetes"
 	metricsprom "github.com/belLena81/rollback-guard/internal/adapters/prometheus"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 func TestErrorMappingIsStableAndDoesNotLeakDetails(t *testing.T) {
@@ -22,6 +25,8 @@ func TestErrorMappingIsStableAndDoesNotLeakDetails(t *testing.T) {
 		{name: "expired", err: &domain.ExpiryError{Resource: "approval"}, code: CodeExpired},
 		{name: "timeout", err: context.DeadlineExceeded, code: CodeTimeout, retryable: true},
 		{name: "bad dependency result", err: metricsprom.ErrInvalidResult, code: CodeDependencyUnavailable, retryable: true},
+		{name: "open breaker is unavailable, not internal", err: fmt.Errorf("read: %w", &resilience.CircuitOpenError{Dependency: resilience.DependencyKubernetesAPI}), code: CodeDependencyUnavailable, retryable: true},
+		{name: "api server unavailable after retries", err: resilience.MarkTransient(apierrors.NewServiceUnavailable("down")), code: CodeDependencyUnavailable, retryable: true},
 		{name: "unknown", err: &privateError{}, code: CodeInternal},
 	}
 	for _, test := range tests {

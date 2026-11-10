@@ -17,7 +17,7 @@ Source: a code-quality audit of the `phase6` branch (production code under `cmd/
 | 1 | Phase 6 telemetry (in progress) | Touches the same `main.go` files and adapters; merge it first. |
 | 2 | R1 Correctness defects (done) | Real bugs in persistence; cheap; must not ship into the E2E run. |
 | 3 | R2 Process bootstrap and config (done) | Removes four-way duplication before the resilience decorators add more wiring. |
-| 4 | Phase 6 resilience decorators | |
+| 4 | Phase 6 resilience decorators (done) | |
 | 5 | R3 Approve-and-execute use case | The E2E flow drives exactly this path; fix its shape first. |
 | 6 | Phase 6 E2E flow and CI | CI enforces the ratcheted lint config from here on. |
 | 7 | R4-R8 | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |

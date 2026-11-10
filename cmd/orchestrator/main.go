@@ -21,6 +21,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/platform/bootstrap"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	"github.com/belLena81/rollback-guard/internal/platform/runtime"
 	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	"github.com/belLena81/rollback-guard/internal/ports"
@@ -176,6 +177,33 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 	if err != nil {
 		return application.Services{}, err
 	}
+	// Reads retry transient failures behind one breaker per MCP server; the
+	// rollback executor gets only the narrow not-sent retry (see
+	// resilience.NewExecutor).
+	readProtector, err := bootstrap.NewProtector(resilience.DependencyKubernetesReadonlyMCP, cfg.Resilience, tel)
+	if err != nil {
+		return application.Services{}, err
+	}
+	observabilityProtector, err := bootstrap.NewProtector(resilience.DependencyObservabilityMCP, cfg.Resilience, tel)
+	if err != nil {
+		return application.Services{}, err
+	}
+	mutationRetrier, err := bootstrap.NewMutationRetrier(resilience.DependencyKubernetesRollbackMCP, cfg.Resilience, tel)
+	if err != nil {
+		return application.Services{}, err
+	}
+	protectedInspector, err := resilience.NewInspector(inspector, readProtector)
+	if err != nil {
+		return application.Services{}, err
+	}
+	protectedMetrics, err := resilience.NewMetrics(metrics, observabilityProtector)
+	if err != nil {
+		return application.Services{}, err
+	}
+	protectedExecutor, err := resilience.NewExecutor(executor, mutationRetrier)
+	if err != nil {
+		return application.Services{}, err
+	}
 	ids := &runtime.IDGenerator{}
 	diagnoser, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: cfg.RuleCorrelationWindow})
 	if err != nil {
@@ -195,10 +223,10 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 	}
 	return application.NewServices(application.Dependencies{
 		UnitOfWork:     uow,
-		Inspector:      inspector,
-		Metrics:        metrics,
+		Inspector:      protectedInspector,
+		Metrics:        protectedMetrics,
 		Diagnoser:      diagnoser,
-		Executor:       executor,
+		Executor:       protectedExecutor,
 		RollbackPolicy: policy,
 		ApprovalPolicy: domain.ApprovalAuthorizer{},
 		Clock:          runtime.Clock{},
@@ -227,7 +255,18 @@ func buildCoordinator(ctx context.Context, cfg config.Config, uow ports.UnitOfWo
 			logger.Warn("close investigator A2A client", "error", err)
 		}
 	}
-	gateway, err := tel.ObserveGateway(a2aGateway)
+	observedGateway, err := tel.ObserveGateway(a2aGateway)
+	if err != nil {
+		closeGateway()
+		return nil, nil, err
+	}
+	a2aProtector, err := bootstrap.NewProtector(resilience.DependencyA2AInvestigator, cfg.Resilience, tel)
+	if err != nil {
+		closeGateway()
+		return nil, nil, err
+	}
+	// Outside the observed gateway, so every attempt is counted as a call.
+	gateway, err := resilience.NewGateway(observedGateway, a2aProtector)
 	if err != nil {
 		closeGateway()
 		return nil, nil, err

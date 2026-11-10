@@ -44,6 +44,7 @@ type Config struct {
 	A2AWorkerID           string
 	A2AMaxAttempts        int
 	Telemetry             TelemetryConfig
+	Resilience            ResilienceConfig
 }
 
 type InvestigatorConfig struct {
@@ -67,6 +68,7 @@ type InvestigatorConfig struct {
 	LLMTimeout            time.Duration
 	LLMMaxOutputTokens    int
 	Telemetry             TelemetryConfig
+	Resilience            ResilienceConfig
 }
 
 type KubernetesMCPConfig struct {
@@ -81,6 +83,7 @@ type KubernetesMCPConfig struct {
 	RequestTimeout time.Duration
 	SessionTimeout time.Duration
 	Telemetry      TelemetryConfig
+	Resilience     ResilienceConfig
 }
 
 type ObservabilityMCPConfig struct {
@@ -92,6 +95,7 @@ type ObservabilityMCPConfig struct {
 	MetricsWindow  time.Duration
 	MaxSampleAge   time.Duration
 	Telemetry      TelemetryConfig
+	Resilience     ResilienceConfig
 }
 
 // Load reads the orchestrator configuration.
@@ -128,6 +132,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	resilience, err := resilienceEnv()
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		HTTPAddr:              stringEnv("HTTP_ADDR", DefaultOrchestratorAddr),
 		DatabaseURL:           db.url,
@@ -157,6 +165,7 @@ func Load() (Config, error) {
 		A2AWorkerID:           stringEnv("A2A_WORKER_ID", defaultA2AWorkerID),
 		A2AMaxAttempts:        a2a.maxAttempts,
 		Telemetry:             telemetry,
+		Resilience:            resilience,
 	}, nil
 }
 
@@ -190,6 +199,10 @@ func LoadInvestigator() (InvestigatorConfig, error) {
 	if err != nil {
 		return InvestigatorConfig{}, err
 	}
+	resilience, err := resilienceEnv()
+	if err != nil {
+		return InvestigatorConfig{}, err
+	}
 	llm, err := loadLLM(strategy, mcp.callTimeout, taskTimeout)
 	if err != nil {
 		return InvestigatorConfig{}, err
@@ -215,6 +228,7 @@ func LoadInvestigator() (InvestigatorConfig, error) {
 		LLMTimeout:            llm.timeout,
 		LLMMaxOutputTokens:    llm.maxOutputTokens,
 		Telemetry:             telemetry,
+		Resilience:            resilience,
 	}, nil
 }
 
@@ -256,6 +270,10 @@ func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
 	if err != nil {
 		return KubernetesMCPConfig{}, err
 	}
+	resilience, err := resilienceEnv()
+	if err != nil {
+		return KubernetesMCPConfig{}, err
+	}
 	return KubernetesMCPConfig{
 		HTTPAddr:       stringEnv("HTTP_ADDR", defaultAddr),
 		Mode:           mode,
@@ -268,6 +286,7 @@ func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
 		RequestTimeout: requestTimeout,
 		SessionTimeout: sessionTimeout,
 		Telemetry:      telemetry,
+		Resilience:     resilience,
 	}, nil
 }
 
@@ -297,6 +316,10 @@ func LoadObservabilityMCP() (ObservabilityMCPConfig, error) {
 	if err != nil {
 		return ObservabilityMCPConfig{}, err
 	}
+	resilience, err := resilienceEnv()
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
 	return ObservabilityMCPConfig{
 		HTTPAddr:       stringEnv("HTTP_ADDR", DefaultObservabilityMCPAddr),
 		PrometheusURL:  stringEnv("PROMETHEUS_URL", defaultPrometheusURL),
@@ -306,6 +329,7 @@ func LoadObservabilityMCP() (ObservabilityMCPConfig, error) {
 		MetricsWindow:  window,
 		MaxSampleAge:   maxAge,
 		Telemetry:      telemetry,
+		Resilience:     resilience,
 	}, nil
 }
 

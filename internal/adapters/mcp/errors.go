@@ -8,6 +8,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/kubernetes"
 	metricsprom "github.com/belLena81/rollback-guard/internal/adapters/prometheus"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -43,7 +44,8 @@ func classifyError(err error) ToolError {
 		return ToolError{Code: CodeIdempotencyConflict, Message: "idempotency key conflicts with another request"}
 	case apierrors.IsForbidden(err):
 		return ToolError{Code: CodeTargetForbidden, Message: "Kubernetes identity is not authorized"}
-	case errors.Is(err, metricsprom.ErrInvalidResult), apierrors.IsServerTimeout(err), apierrors.IsTimeout(err), apierrors.IsTooManyRequests(err):
+	case errors.Is(err, metricsprom.ErrInvalidResult), errors.Is(err, resilience.ErrCircuitOpen),
+		apierrors.IsServerTimeout(err), apierrors.IsTimeout(err), apierrors.IsTooManyRequests(err), apierrors.IsServiceUnavailable(err):
 		return ToolError{Code: CodeDependencyUnavailable, Message: "infrastructure dependency is unavailable", Retryable: true}
 	default:
 		return ToolError{Code: CodeInternal, Message: "tool operation failed"}

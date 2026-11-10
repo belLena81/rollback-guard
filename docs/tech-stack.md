@@ -58,6 +58,16 @@ Default `go test ./...` must not require Kubernetes, network access, real LLM ca
 - Prometheus metrics (`prometheus/client_golang`, per-process registry) for HTTP, incidents, investigations, A2A and MCP calls, diagnoses, rollbacks, and verifications.
 - OpenTelemetry traces across REST, A2A, MCP, and Kubernetes/Prometheus calls; OTLP export when configured.
 
+## Resilience
+
+Retry and circuit-breaker decorators around transient external ports live in `internal/platform/resilience` (design and settings: `docs/phase6-resilience.md`). They are written in-repo (about 600 lines, no third-party dependencies) instead of using `sony/gobreaker` and `sethvargo/go-retry`. Reasons:
+
+- The rules that matter are project-specific and must be unit-tested: what is transient, what a mutation may retry, retry never sleeping past a context deadline, a caller's cancellation being neutral for a breaker, and an open LLM breaker reading as `ErrReasonerUnavailable`. A library would still need a wrapper for each, and `gobreaker` reads the wall clock internally, so half-open timing is hard to test without sleeping.
+- No new dependency means no new `govulncheck` surface or supply-chain review.
+- The decorators are generic functions over our ports, so no port signature changes.
+
+Revisit if breaker needs grow beyond consecutive-failure counting (for example rate-based tripping), where `gobreaker` would then be the better choice.
+
 Planned for the rest of Phase 6:
 
-- Retry/circuit-breaker decorators around transient external ports.
+- None for resilience; the unattended E2E flow and CI remain.

@@ -18,6 +18,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/platform/bootstrap"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	"github.com/belLena81/rollback-guard/internal/platform/runtime"
 	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	"github.com/belLena81/rollback-guard/internal/ports"
@@ -135,18 +136,34 @@ func buildServices(cfg config.InvestigatorConfig, pool *pgxpool.Pool, clients mc
 	if err != nil {
 		return nil, err
 	}
-	inspector, err := mcpadapter.NewDeploymentInspector(read)
+	rawInspector, err := mcpadapter.NewDeploymentInspector(read)
 	if err != nil {
 		return nil, err
 	}
-	metrics, err := mcpadapter.NewMetricsAdapter(observability, cfg.MetricsWindow)
+	rawMetrics, err := mcpadapter.NewMetricsAdapter(observability, cfg.MetricsWindow)
+	if err != nil {
+		return nil, err
+	}
+	readProtector, err := bootstrap.NewProtector(resilience.DependencyKubernetesReadonlyMCP, cfg.Resilience, tel)
+	if err != nil {
+		return nil, err
+	}
+	observabilityProtector, err := bootstrap.NewProtector(resilience.DependencyObservabilityMCP, cfg.Resilience, tel)
+	if err != nil {
+		return nil, err
+	}
+	inspector, err := resilience.NewInspector(rawInspector, readProtector)
+	if err != nil {
+		return nil, err
+	}
+	metrics, err := resilience.NewMetrics(rawMetrics, observabilityProtector)
 	if err != nil {
 		return nil, err
 	}
 	ids := &runtime.IDGenerator{}
 	// The LLM provider client is deliberately not traced: its requests carry
 	// the API key and prompt, and nothing about them is exported.
-	strategyDiagnoser, err := newDiagnoser(cfg, ids, &http.Client{Timeout: cfg.LLMTimeout})
+	strategyDiagnoser, err := newDiagnoser(cfg, ids, &http.Client{Timeout: cfg.LLMTimeout}, tel)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +198,10 @@ func buildHTTP(cfg config.InvestigatorConfig, investigator ports.Investigator, p
 	return tel.InstrumentServer(handler, a2aadapter.RouteOf), nil
 }
 
-func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, providerHTTPClient *http.Client) (ports.Diagnoser, error) {
+// newDiagnoser builds the configured strategy. The LLM is wrapped in retry
+// and a circuit breaker; an open breaker reads as an unavailable provider, so
+// the rule diagnoser stays in charge. observer may be nil.
+func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, providerHTTPClient *http.Client, observer resilience.Observer) (ports.Diagnoser, error) {
 	rules, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: cfg.RuleCorrelationWindow})
 	if err != nil {
 		return nil, err
@@ -189,10 +209,18 @@ func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, provider
 	if cfg.DiagnosisStrategy == domain.StrategyRules {
 		return rules, nil
 	}
-	reasoner, err := llmadapter.NewOpenAICompatibleReasoner(llmadapter.OpenAICompatibleConfig{
+	rawReasoner, err := llmadapter.NewOpenAICompatibleReasoner(llmadapter.OpenAICompatibleConfig{
 		BaseURL: cfg.LLMBaseURL, APIKey: cfg.LLMAPIKey, Model: cfg.LLMModel,
 		MaxOutputTokens: cfg.LLMMaxOutputTokens, HTTPClient: providerHTTPClient,
 	})
+	if err != nil {
+		return nil, err
+	}
+	llmProtector, err := bootstrap.NewLLMProtector(cfg.Resilience, observer)
+	if err != nil {
+		return nil, err
+	}
+	reasoner, err := resilience.NewReasoner(rawReasoner, llmProtector)
 	if err != nil {
 		return nil, err
 	}

@@ -46,6 +46,13 @@ func defaultTargets(t *testing.T) []domain.DeploymentTarget {
 	return []domain.DeploymentTarget{target}
 }
 
+func defaultResilience() ResilienceConfig {
+	return ResilienceConfig{
+		RetryMaxAttempts: 3, RetryBaseDelay: 200 * time.Millisecond, RetryMaxDelay: 2 * time.Second,
+		LLMRetryMaxAttempts: 2, BreakerFailureThreshold: 5, BreakerOpenTimeout: 30 * time.Second,
+	}
+}
+
 func defaultTelemetry(service string) TelemetryConfig {
 	return TelemetryConfig{ServiceName: service, SampleRatio: 1, ShutdownTimeout: 5 * time.Second, LogLevel: slog.LevelInfo}
 }
@@ -88,6 +95,7 @@ func TestOrchestratorDefaults(t *testing.T) {
 		A2AWorkerID:           "orchestrator-1",
 		A2AMaxAttempts:        3,
 		Telemetry:             defaultTelemetry("orchestrator"),
+		Resilience:            defaultResilience(),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Load() defaults:\n got %+v\nwant %+v", got, want)
@@ -118,6 +126,7 @@ func TestInvestigatorDefaults(t *testing.T) {
 		LLMTimeout:            15 * time.Second,
 		LLMMaxOutputTokens:    512,
 		Telemetry:             defaultTelemetry("investigator"),
+		Resilience:            defaultResilience(),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("LoadInvestigator() defaults:\n got %+v\nwant %+v", got, want)
@@ -133,12 +142,12 @@ func TestKubernetesMCPDefaults(t *testing.T) {
 		{
 			name: "readonly reads no database settings",
 			env:  map[string]string{"DATABASE_URL": testDatabaseURL, "DB_MAX_CONNS": "not-a-number", "DB_PING_TIMEOUT": "not-a-duration"},
-			want: KubernetesMCPConfig{HTTPAddr: "127.0.0.1:8091", Mode: "readonly", ClusterID: "local", RequestTimeout: 2 * time.Minute, SessionTimeout: 5 * time.Minute, Telemetry: defaultTelemetry("kubernetes-mcp-readonly")},
+			want: KubernetesMCPConfig{HTTPAddr: "127.0.0.1:8091", Mode: "readonly", ClusterID: "local", RequestTimeout: 2 * time.Minute, SessionTimeout: 5 * time.Minute, Telemetry: defaultTelemetry("kubernetes-mcp-readonly"), Resilience: defaultResilience()},
 		},
 		{
 			name: "rollback",
 			env:  map[string]string{"KUBERNETES_MCP_MODE": "rollback", "DATABASE_URL": testDatabaseURL},
-			want: KubernetesMCPConfig{HTTPAddr: "127.0.0.1:8092", Mode: "rollback", ClusterID: "local", DatabaseURL: testDatabaseURL, DBMaxConns: 4, DBPingTimeout: 2 * time.Second, RequestTimeout: 2 * time.Minute, SessionTimeout: 5 * time.Minute, Telemetry: defaultTelemetry("kubernetes-mcp-rollback")},
+			want: KubernetesMCPConfig{HTTPAddr: "127.0.0.1:8092", Mode: "rollback", ClusterID: "local", DatabaseURL: testDatabaseURL, DBMaxConns: 4, DBPingTimeout: 2 * time.Second, RequestTimeout: 2 * time.Minute, SessionTimeout: 5 * time.Minute, Telemetry: defaultTelemetry("kubernetes-mcp-rollback"), Resilience: defaultResilience()},
 		},
 	}
 	for _, test := range tests {
@@ -171,6 +180,7 @@ func TestObservabilityMCPDefaults(t *testing.T) {
 		MetricsWindow:  5 * time.Minute,
 		MaxSampleAge:   time.Minute,
 		Telemetry:      defaultTelemetry("observability-mcp"),
+		Resilience:     defaultResilience(),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("LoadObservabilityMCP() defaults:\n got %+v\nwant %+v", got, want)

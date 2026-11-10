@@ -26,6 +26,8 @@ type metrics struct {
 	diagnoses             *prometheus.CounterVec
 	rollbackExecutions    *prometheus.CounterVec
 	recoveryVerifications *prometheus.CounterVec
+	retries               *prometheus.CounterVec
+	breakerTransitions    *prometheus.CounterVec
 }
 
 var (
@@ -67,11 +69,16 @@ func newMetrics(registerer prometheus.Registerer) (*metrics, error) {
 			Help: "Rollback executions completed (committed), by outcome."}, []string{"outcome"}),
 		recoveryVerifications: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "recovery_verifications_total",
 			Help: "Recovery verifications completed (committed), by result."}, []string{"result"}),
+		retries: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "retries_total",
+			Help: "Retries of calls to external dependencies, by dependency and outcome (retried, exhausted)."}, []string{"dependency", "outcome"}),
+		breakerTransitions: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "circuit_breaker_transitions_total",
+			Help: "Circuit breaker state changes, by dependency and the state entered (open, half_open, closed)."}, []string{"dependency", "state"}),
 	}
 	for _, collector := range []prometheus.Collector{
 		m.httpRequests, m.httpDuration, m.incidentsCreated, m.incidentsTerminal, m.approvalDecisions,
 		m.dispatches, m.dispatchDuration, m.a2aCalls, m.a2aDuration, m.mcpCalls, m.mcpCallDuration,
 		m.mcpTools, m.mcpToolDuration, m.diagnoses, m.rollbackExecutions, m.recoveryVerifications,
+		m.retries, m.breakerTransitions,
 	} {
 		if err := registerer.Register(collector); err != nil {
 			return nil, err

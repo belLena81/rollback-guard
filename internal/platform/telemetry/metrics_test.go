@@ -14,6 +14,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/belLena81/rollback-guard/internal/testkit"
@@ -64,6 +65,13 @@ func TestMetricCatalogue(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	provider.RetryAttempted(resilience.DependencyLLM, resilience.RetryRetried)
+	provider.RetryAttempted(resilience.DependencyLLM, resilience.RetryRetried)
+	provider.RetryAttempted(resilience.DependencyLLM, resilience.RetryExhausted)
+	provider.BreakerStateChanged(resilience.DependencyPrometheus, resilience.StateOpen)
+	provider.BreakerStateChanged(resilience.DependencyPrometheus, resilience.StateHalfOpen)
+	provider.BreakerStateChanged(resilience.DependencyPrometheus, resilience.StateClosed)
+
 	runLifecycle(t, provider)
 
 	labels, values := rollbackGuardianFamilies(t, provider.Gatherer())
@@ -84,6 +92,8 @@ func TestMetricCatalogue(t *testing.T) {
 		"rollback_guardian_diagnoses_total":                      "effective_strategy,fallback_reason,requested_strategy",
 		"rollback_guardian_rollback_executions_total":            "outcome",
 		"rollback_guardian_recovery_verifications_total":         "result",
+		"rollback_guardian_retries_total":                        "dependency,outcome",
+		"rollback_guardian_circuit_breaker_transitions_total":    "dependency,state",
 	}
 	for name, labelSet := range want {
 		got, ok := labels[name]
@@ -112,6 +122,17 @@ func TestMetricCatalogue(t *testing.T) {
 	}
 	if got := metricValue(t, provider.Gatherer(), "rollback_guardian_diagnoses_total", map[string]string{"requested_strategy": "hybrid", "effective_strategy": "rules", "fallback_reason": "provider_timeout"}); got != 1 {
 		t.Errorf("diagnosis fallback series = %v", got)
+	}
+	if got := metricValue(t, provider.Gatherer(), "rollback_guardian_retries_total", map[string]string{"dependency": "llm", "outcome": "retried"}); got != 2 {
+		t.Errorf("retried series = %v, want 2", got)
+	}
+	if got := metricValue(t, provider.Gatherer(), "rollback_guardian_retries_total", map[string]string{"dependency": "llm", "outcome": "exhausted"}); got != 1 {
+		t.Errorf("exhausted series = %v, want 1", got)
+	}
+	for _, state := range []string{"open", "half_open", "closed"} {
+		if got := metricValue(t, provider.Gatherer(), "rollback_guardian_circuit_breaker_transitions_total", map[string]string{"dependency": "prometheus", "state": state}); got != 1 {
+			t.Errorf("breaker transition to %s = %v, want 1", state, got)
+		}
 	}
 	if got := metricValue(t, provider.Gatherer(), "rollback_guardian_a2a_calls_total", map[string]string{"operation": "watch", "outcome": "timeout"}); got != 1 {
 		t.Errorf("a2a watch timeout series = %v", got)

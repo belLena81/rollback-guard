@@ -33,7 +33,7 @@ func testTelemetry(t *testing.T) *telemetry.Provider {
 func mcpConfig(read, write, observability *mcptest.Server) config.Config {
 	return config.Config{
 		KubernetesReadMCPURL: read.Endpoint, KubernetesWriteMCPURL: write.Endpoint, ObservabilityMCPURL: observability.Endpoint,
-		MCPConnectTimeout: 5 * time.Second, MCPCallTimeout: 5 * time.Second, MCPWatchTimeout: 5 * time.Second,
+		MCPConnectTimeout: 5 * time.Second, MCPCallTimeout: 5 * time.Second, MCPWatchTimeout: 5 * time.Second, Resilience: config.DefaultResilience(),
 	}
 }
 

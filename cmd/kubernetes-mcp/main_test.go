@@ -25,7 +25,7 @@ func testConfig(t *testing.T, mode string) config.KubernetesMCPConfig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return config.KubernetesMCPConfig{Mode: mode, ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, RequestTimeout: time.Second, SessionTimeout: time.Minute}
+	return config.KubernetesMCPConfig{Mode: mode, ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, RequestTimeout: time.Second, SessionTimeout: time.Minute, Resilience: config.DefaultResilience()}
 }
 
 func demoDeployment() *appsv1.Deployment {

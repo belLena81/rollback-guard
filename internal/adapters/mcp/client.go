@@ -154,6 +154,13 @@ func (e *toolCallError) Error() string {
 	return e.message
 }
 
+// Transient lets the resilience decorators retry reads when the server says
+// a dependency was unavailable. Internal and unrecognized codes are not
+// transient: the server may already have acted.
+func (e *toolCallError) Transient() bool {
+	return e.code == CodeDependencyUnavailable
+}
+
 func errorFromTool(toolError ToolError) error {
 	switch toolError.Code {
 	case CodeInvalidArgument:

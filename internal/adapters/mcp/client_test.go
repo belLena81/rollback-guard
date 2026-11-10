@@ -3,11 +3,13 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -72,6 +74,35 @@ func TestErrorFromToolKeepsUnknownOutcomesAmbiguous(t *testing.T) {
 		}
 		if got := ambiguousToolError(err); got != test.wantAmbiguous {
 			t.Errorf("ambiguousToolError(errorFromTool(%s, retryable=%t)) = %t, want %t", test.code, test.retryable, got, test.wantAmbiguous)
+		}
+	}
+}
+
+// Only the server's dependency_unavailable code is worth retrying. Internal
+// and unknown codes may already have had an effect, and the rest are answers.
+func TestToolErrorsAreTransientOnlyForUnavailableDependencies(t *testing.T) {
+	tests := []struct {
+		code ErrorCode
+		want bool
+	}{
+		{CodeDependencyUnavailable, true},
+		{CodeTimeout, true},
+		{CodeInternal, false},
+		{ErrorCode("code_from_a_newer_server"), false},
+		{CodeInvalidArgument, false},
+		{CodeTargetForbidden, false},
+		{CodeNotFound, false},
+		{CodeRevisionDrift, false},
+		{CodePolicyDenied, false},
+		{CodeApprovalMismatch, false},
+		{CodeExpired, false},
+		{CodeIdempotencyConflict, false},
+		{CodeCanceled, false},
+	}
+	for _, test := range tests {
+		err := fmt.Errorf("call: %w", errorFromTool(ToolError{Code: test.code, Message: "m", Retryable: true}))
+		if got := resilience.IsTransient(err); got != test.want {
+			t.Errorf("IsTransient(%s) = %t, want %t", test.code, got, test.want)
 		}
 	}
 }

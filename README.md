@@ -63,7 +63,7 @@ test/
 docs/
 ```
 
-Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is in progress: the `demo-api` workload, container images, kind manifests, the local demo flow, and telemetry (metrics, correlated logs, tracing) exist; retry/circuit-breaker decorators, the unattended end-to-end run, and CI do not yet. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
+Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is in progress: the `demo-api` workload, container images, kind manifests, the local demo flow, and telemetry (metrics, correlated logs, tracing) exist; retry/circuit-breaker decorators exist too (`docs/phase6-resilience.md`); the unattended end-to-end run and CI do not yet. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
 
 ## Canonical Choices
 

@@ -16,6 +16,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/platform/bootstrap"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -62,7 +63,11 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 		}
 		defer pool.Close()
 	}
-	backend, err := buildServices(cfg, clientset, pool)
+	service, err := buildServices(cfg, clientset, pool)
+	if err != nil {
+		return err
+	}
+	backend, err := protectBackend(cfg, service, tel)
 	if err != nil {
 		return err
 	}
@@ -101,6 +106,17 @@ func buildServices(cfg config.KubernetesMCPConfig, clientset kubernetes.Interfac
 		mutationGuard = guard
 	}
 	return kubernetesadapter.NewService(clientset, kubernetesadapter.Config{ClusterID: cfg.ClusterID, AllowedTargets: cfg.AllowedTargets, MutationGuard: mutationGuard})
+}
+
+// protectBackend retries transient Kubernetes API failures on the read tools
+// behind one breaker. Mutations and the rollout watch pass through untouched
+// (see kubernetesserver.NewProtectedBackend). observer may be nil.
+func protectBackend(cfg config.KubernetesMCPConfig, backend kubernetesserver.Backend, observer resilience.Observer) (kubernetesserver.Backend, error) {
+	protector, err := bootstrap.NewProtector(resilience.DependencyKubernetesAPI, cfg.Resilience, observer)
+	if err != nil {
+		return nil, err
+	}
+	return kubernetesserver.NewProtectedBackend(backend, protector)
 }
 
 // readiness checks PostgreSQL (rollback mode only) and that the first

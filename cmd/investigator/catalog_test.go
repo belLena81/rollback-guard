@@ -50,7 +50,7 @@ func startRealServers(t *testing.T) realServers {
 func realServerConfig(read, observability string) config.InvestigatorConfig {
 	return config.InvestigatorConfig{
 		KubernetesReadMCPURL: read, ObservabilityMCPURL: observability,
-		MCPConnectTimeout: 5 * time.Second, MCPCallTimeout: 5 * time.Second,
+		MCPConnectTimeout: 5 * time.Second, MCPCallTimeout: 5 * time.Second, Resilience: config.DefaultResilience(),
 	}
 }
 
