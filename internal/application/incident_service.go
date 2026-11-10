@@ -16,6 +16,7 @@ type IncidentService struct {
 	uow    ports.UnitOfWork
 	clock  ports.Clock
 	tracer ports.Tracer
+	access AccessPolicy
 }
 
 type CreateIncidentCommand struct {
@@ -25,6 +26,9 @@ type CreateIncidentCommand struct {
 }
 
 func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command CreateIncidentCommand) (domain.Incident, error) {
+	if err := s.access.Authorize(ctx, command.Actor, domain.ActionCreateIncident); err != nil {
+		return domain.Incident{}, fmt.Errorf("authorize create incident: %w", err)
+	}
 	now := s.clock.Now()
 	incident, err := domain.NewIncident(domain.IncidentID(s.ids.NewID("incident")), command.Target, command.Symptom, now)
 	if err != nil {
@@ -69,6 +73,9 @@ type CancelIncidentCommand struct {
 }
 
 func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentCommand) (domain.Incident, error) {
+	if err := s.access.Authorize(ctx, command.Actor, domain.ActionCancelIncident); err != nil {
+		return domain.Incident{}, fmt.Errorf("authorize cancel incident: %w", err)
+	}
 	if strings.TrimSpace(command.Reason) == "" {
 		return domain.Incident{}, &domain.ValidationError{Field: "cancel.reason", Reason: "must not be empty"}
 	}

@@ -70,7 +70,7 @@ func TestBuildServicesAndHTTPWireTheAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer clients.close(logger)
-	services, err := buildServices(cfg, memory.NewUnitOfWork(), clients, tel)
+	services, err := buildServices(cfg, memory.NewUnitOfWork(), memory.NewAuthUnitOfWork(), clients, tel)
 	if err != nil {
 		t.Fatal(err)
 	}

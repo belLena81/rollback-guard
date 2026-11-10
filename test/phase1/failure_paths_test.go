@@ -148,7 +148,7 @@ func TestInvestigationAuditRedactsAdapterFailures(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), sensitiveDetail) {
 				t.Fatalf("Investigate() error = %v, want original adapter failure", err)
 			}
-			events, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+			events, err := h.services.Queries.ListEvents(context.Background(), applicationtest.Reader(), h.incident.ID())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -183,7 +183,7 @@ func TestInvestigationRetryAfterFinalPersistenceFailure(t *testing.T) {
 	if incident.Status() != domain.StatusAwaitingApproval {
 		t.Fatalf("retry status = %s, want awaiting approval", incident.Status())
 	}
-	events, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+	events, err := h.services.Queries.ListEvents(context.Background(), applicationtest.Reader(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestApprovalDecisionRetriesAreIdempotentAndConflictsAreRejected(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventsBefore, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+	eventsBefore, err := h.services.Queries.ListEvents(context.Background(), applicationtest.Reader(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestApprovalDecisionRetriesAreIdempotentAndConflictsAreRejected(t *testing.
 	if retry.ID() != first.ID() {
 		t.Fatalf("retry approval = %q, want %q", retry.ID(), first.ID())
 	}
-	eventsAfter, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+	eventsAfter, err := h.services.Queries.ListEvents(context.Background(), applicationtest.Reader(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestExecutionRejectsDifferentKeyAfterSuccessfulRollback(t *testing.T) {
 	if _, err := h.services.Executions.Execute(context.Background(), h.incident.ID(), "first-execution"); err != nil {
 		t.Fatal(err)
 	}
-	eventsBefore, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+	eventsBefore, err := h.services.Queries.ListEvents(context.Background(), applicationtest.Reader(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestExecutionRejectsDifferentKeyAfterSuccessfulRollback(t *testing.T) {
 		t.Fatalf("execution count = %d, want 1", h.infrastructure.ExecutionCount())
 	}
 	assertIncidentStatus(t, h, domain.StatusVerifying)
-	eventsAfter, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+	eventsAfter, err := h.services.Queries.ListEvents(context.Background(), applicationtest.Reader(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +650,7 @@ func newHarnessWithOverrides(t *testing.T, overrides harnessOverrides) phaseHarn
 	}
 	services, err := application.NewServices(application.Dependencies{
 		UnitOfWork: selectedUnitOfWork, Inspector: selectedInspector, Metrics: selectedMetrics,
-		Executor: selectedExecutor, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids,
+		Executor: selectedExecutor, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{}, Clock: clock, IDGenerator: ids,
 	}, application.WorkflowConfig{
 		ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: systemActor,
 		RecoveryTimeout: overrides.recoveryTimeout, RecoveryPollInterval: overrides.recoveryPollInterval,
@@ -751,7 +751,7 @@ func mustServiceProposal(t *testing.T, h phaseHarness) domain.RollbackProposal {
 
 func assertIncidentStatus(t *testing.T, h phaseHarness, want domain.Status) {
 	t.Helper()
-	incident, err := h.services.Queries.GetIncident(context.Background(), h.incident.ID())
+	incident, err := h.services.Queries.GetIncident(context.Background(), applicationtest.Reader(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +762,7 @@ func assertIncidentStatus(t *testing.T, h phaseHarness, want domain.Status) {
 
 func assertLastEventKind(t *testing.T, h phaseHarness, want domain.EventKind) {
 	t.Helper()
-	events, err := h.services.Queries.ListEvents(context.Background(), h.incident.ID())
+	events, err := h.services.Queries.ListEvents(context.Background(), applicationtest.Reader(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}

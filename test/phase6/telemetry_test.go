@@ -31,6 +31,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
 	metricsprom "github.com/belLena81/rollback-guard/internal/adapters/prometheus"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/application/applicationtest"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 	"github.com/belLena81/rollback-guard/internal/platform/runtime"
@@ -107,7 +108,7 @@ func TestTelemetryLinksRESTThroughA2AAndMCP(t *testing.T) {
 	policy := must(domain.NewEligibilityPolicy(domain.EligibilityPolicyConfig{MinimumConfidence: 0.8, CorrelationWindow: 10 * time.Minute, AllowedTargets: []domain.DeploymentTarget{target}}))
 	system := must(domain.NewActor("rollback-guardian", domain.ActorSystem))
 	human := must(domain.NewActor("local-admin", domain.ActorHuman))
-	services, err := application.NewServices(application.Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: runtime.Clock{}, IDGenerator: ids, Tracer: orchestrator},
+	services, err := application.NewServices(application.Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{}, Clock: runtime.Clock{}, IDGenerator: ids, Tracer: orchestrator},
 		application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +168,7 @@ func TestTelemetryLinksRESTThroughA2AAndMCP(t *testing.T) {
 	if len(reported) != 0 {
 		t.Fatalf("coordinator reported %v", reported)
 	}
-	summary, err := services.Queries.GetIncidentSummary(ctx, domain.IncidentID(created.Incident.ID))
+	summary, err := services.Queries.GetIncidentSummary(ctx, applicationtest.Reader(), domain.IncidentID(created.Incident.ID))
 	if err != nil || summary.Incident.Status() != domain.StatusAwaitingApproval {
 		t.Fatalf("incident after investigation = %#v, %v", summary.Incident.Status(), err)
 	}
@@ -335,7 +336,7 @@ func connectMCP(t *testing.T, ctx context.Context, provider *telemetry.Provider,
 func coordinatorDone(t *testing.T, services application.Services, incidentID string) func() bool {
 	t.Helper()
 	return func() bool {
-		summary, err := services.Queries.GetIncidentSummary(context.Background(), domain.IncidentID(incidentID))
+		summary, err := services.Queries.GetIncidentSummary(context.Background(), applicationtest.Reader(), domain.IncidentID(incidentID))
 		return err == nil && summary.Incident.Status() != domain.StatusInvestigating
 	}
 }

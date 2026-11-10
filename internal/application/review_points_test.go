@@ -194,6 +194,7 @@ func TestApprovalRetryAfterProposalExpiryReturnsExpiry(t *testing.T) {
 		clock:       testkit.NewClock(now),
 		audit:       audit{ids: &testkit.IDGenerator{}, systemActor: systemActor},
 		approvalTTL: time.Minute,
+		access:      allowAll{},
 	}
 	command := ApprovalCommand{
 		IncidentID:   incidentID,
@@ -227,7 +228,7 @@ func TestCancelRejectsBlankReasonBeforeTransaction(t *testing.T) {
 
 	clock := testkit.NewClock(time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
 	uow := &transactionSpyUnitOfWork{}
-	svc := &IncidentService{uow: uow, clock: clock}
+	svc := &IncidentService{uow: uow, clock: clock, access: allowAll{}}
 
 	for _, reason := range []string{"", "   ", "\n\t"} {
 		t.Run("reason="+reason, func(t *testing.T) {

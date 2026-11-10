@@ -16,6 +16,7 @@ type ApprovalService struct {
 	uow         ports.UnitOfWork
 	clock       ports.Clock
 	approvalTTL time.Duration
+	access      AccessPolicy
 }
 
 type ApprovalCommand struct {
@@ -33,11 +34,19 @@ type RejectionCommand struct {
 	Reason       string
 }
 
+// Approve authorizes command.Actor for ActionApproveRollback before the
+// approval transaction; that same actor is the one recorded.
 func (s *ApprovalService) Approve(ctx context.Context, command ApprovalCommand) (domain.Approval, error) {
+	if err := s.access.Authorize(ctx, command.Actor, domain.ActionApproveRollback); err != nil {
+		return domain.Approval{}, fmt.Errorf("authorize approve rollback: %w", err)
+	}
 	return s.recordDecision(ctx, command, domain.ApprovalApproved, "")
 }
 
 func (s *ApprovalService) Reject(ctx context.Context, command RejectionCommand) (domain.Approval, error) {
+	if err := s.access.Authorize(ctx, command.Actor, domain.ActionRejectIncident); err != nil {
+		return domain.Approval{}, fmt.Errorf("authorize reject incident: %w", err)
+	}
 	approvalCommand := ApprovalCommand{IncidentID: command.IncidentID, Actor: command.Actor, ActionID: command.ActionID, ProposalHash: command.ProposalHash}
 	return s.recordDecision(ctx, approvalCommand, domain.ApprovalRejected, command.Reason)
 }

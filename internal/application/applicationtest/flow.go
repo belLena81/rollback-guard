@@ -71,7 +71,7 @@ func (f Flow) Investigate(ctx context.Context, incidentID domain.IncidentID) (do
 
 // Proposal returns the incident's rollback proposal, or a not-found error.
 func (f Flow) Proposal(ctx context.Context, incidentID domain.IncidentID) (domain.RollbackProposal, error) {
-	summary, err := f.Services.Queries.GetIncidentSummary(ctx, incidentID)
+	summary, err := f.Services.Queries.GetIncidentSummary(ctx, f.SystemActor, incidentID)
 	if err != nil {
 		return domain.RollbackProposal{}, fmt.Errorf("get incident summary query service: %w", err)
 	}

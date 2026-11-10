@@ -64,7 +64,7 @@ func TestCreateIncidentAsyncPersistsRequestTraceCarrier(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+			summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 			if err != nil {
 				t.Fatal(err)
 			}

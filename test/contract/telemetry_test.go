@@ -21,6 +21,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/mcp/observabilityserver"
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/application/applicationtest"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	"github.com/belLena81/rollback-guard/internal/testkit"
@@ -187,7 +188,7 @@ func contractServices(t *testing.T) application.Services {
 		t.Fatal(err)
 	}
 	infra := &fake.Infrastructure{}
-	services, err := application.NewServices(application.Dependencies{UnitOfWork: memory.NewUnitOfWork(), Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: testkit.NewClock(now), IDGenerator: &testkit.IDGenerator{}},
+	services, err := application.NewServices(application.Dependencies{UnitOfWork: memory.NewUnitOfWork(), Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{}, Clock: testkit.NewClock(now), IDGenerator: &testkit.IDGenerator{}},
 		application.WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)

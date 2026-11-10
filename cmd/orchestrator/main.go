@@ -69,7 +69,11 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 		return err
 	}
 	defer clients.close(logger)
-	services, err := buildServices(cfg, uow, clients, tel)
+	authStore, err := postgres.NewAuthUnitOfWork(pool)
+	if err != nil {
+		return fmt.Errorf("create auth unit of work: %w", err)
+	}
+	services, err := buildServices(cfg, uow, authStore, clients, tel)
 	if err != nil {
 		return err
 	}
@@ -83,10 +87,6 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 			return fmt.Errorf("ping database: %w", err)
 		}
 		return clients.ping(ctx)
-	}
-	authStore, err := postgres.NewAuthUnitOfWork(pool)
-	if err != nil {
-		return fmt.Errorf("create auth unit of work: %w", err)
 	}
 	handler, err := buildHTTP(cfg, services, authStore, ready, tel, logger)
 	if err != nil {
@@ -159,7 +159,43 @@ func buildMCP(ctx context.Context, cfg config.Config, tel *telemetry.Provider, l
 }
 
 // buildServices wires the application use cases onto the MCP-backed ports.
-func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, tel *telemetry.Provider) (application.Services, error) {
+// buildAccessPolicy selects the authorization of human use cases by
+// AUTH_MODE: local allows only the configured local actor; github resolves
+// the actor's live role from the users table on every call.
+func buildAccessPolicy(cfg config.Config, authStore ports.AuthUnitOfWork) (application.AccessPolicy, error) {
+	switch cfg.Auth.Mode {
+	case config.AuthModeLocal:
+		localActor, err := domain.NewActor(cfg.LocalActorID, domain.ActorHuman)
+		if err != nil {
+			return nil, err
+		}
+		access, err := application.NewLocalAccessPolicy(localActor)
+		if err != nil {
+			return nil, fmt.Errorf("create local access policy: %w", err)
+		}
+		return access, nil
+	case config.AuthModeGitHub:
+		access, err := application.NewRoleAccessPolicy(authStore)
+		if err != nil {
+			return nil, fmt.Errorf("create role access policy: %w", err)
+		}
+		return access, nil
+	default:
+		return nil, fmt.Errorf("unsupported auth mode %q", cfg.Auth.Mode)
+	}
+}
+
+func buildServices(
+	cfg config.Config,
+	uow ports.UnitOfWork,
+	authStore ports.AuthUnitOfWork,
+	clients mcpClients,
+	tel *telemetry.Provider,
+) (application.Services, error) {
+	access, err := buildAccessPolicy(cfg, authStore)
+	if err != nil {
+		return application.Services{}, err
+	}
 	read, err := bootstrap.ObservedCalls(clients.read, cfg.MCPCallTimeout, mcpadapter.ServerKubernetesReadonly, tel)
 	if err != nil {
 		return application.Services{}, fmt.Errorf("observe mcp calls: %w", err)
@@ -233,6 +269,7 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 		ApprovalPolicy: domain.ApprovalAuthorizer{},
 		Clock:          runtime.Clock{},
 		IDGenerator:    ids,
+		Access:         access,
 		Tracer:         tel,
 	}, application.WorkflowConfig{
 		ProposalTTL:          cfg.ProposalTTL,

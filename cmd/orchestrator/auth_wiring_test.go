@@ -41,7 +41,7 @@ func authHandler(t *testing.T, mutate func(*config.Config)) (http.Handler, *byte
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { clients.close(logger) })
-	services, err := buildServices(cfg, memory.NewUnitOfWork(), clients, tel)
+	services, err := buildServices(cfg, memory.NewUnitOfWork(), memory.NewAuthUnitOfWork(), clients, tel)
 	if err != nil {
 		t.Fatal(err)
 	}

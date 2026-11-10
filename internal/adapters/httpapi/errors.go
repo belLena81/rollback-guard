@@ -102,6 +102,8 @@ const (
 	messageValidation        = "request validation failed"
 	messageNotFound          = "resource not found"
 	messageForbidden         = "only a human actor can decide approvals"
+	messageRoleForbidden     = "your role does not allow this operation"
+	messageUnauthenticated   = "authentication required"
 	messageIllegalTransition = "the incident is not in a state that allows this operation"
 	messageVersionConflict   = "the incident was changed by another request; reload and retry"
 	messageIdempotency       = "the request conflicts with an earlier request for the same operation"
@@ -144,6 +146,12 @@ func errorResponse(err error) (int, string, string) {
 		return http.StatusNotFound, codeNotFound, notFound.Error()
 	case errors.Is(err, domain.ErrNotFound):
 		return http.StatusNotFound, codeNotFound, messageNotFound
+	// Authentication and authorization come before every conflict class: a
+	// caller who may not act learns nothing about the incident's state.
+	case errors.Is(err, domain.ErrUnauthenticated):
+		return http.StatusUnauthorized, codeUnauthenticated, messageUnauthenticated
+	case errors.Is(err, domain.ErrForbidden):
+		return http.StatusForbidden, codeForbidden, messageRoleForbidden
 	case errors.Is(err, domain.ErrNonHumanApproval):
 		return http.StatusForbidden, codeForbidden, messageForbidden
 	case errors.Is(err, domain.ErrIllegalTransition):
@@ -177,6 +185,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		s.logger.ErrorContext(r.Context(), "request failed", "status", status, "cause", codeRollbackOutcomeUnknown, "request_id", requestID(r))
 	case codeInternal:
 		s.logger.ErrorContext(r.Context(), "request failed", "status", status, "cause", "internal", "request_id", requestID(r))
+	case codeUnauthenticated:
+		w.Header().Set("WWW-Authenticate", "Bearer")
 	}
 	s.writeJSON(w, r, status, errorDTO{Error: code, Message: message, RequestID: requestID(r)})
 }

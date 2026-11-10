@@ -167,7 +167,7 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := ports.WithCorrelation(r.Context(), ports.Correlation{IncidentID: incident.ID()})
-	summary, err := s.services.Queries.GetIncidentSummary(ctx, incident.ID())
+	summary, err := s.services.Queries.GetIncidentSummary(ctx, actor, incident.ID())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -185,7 +185,11 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getIncident(w http.ResponseWriter, r *http.Request) {
-	summary, err := s.services.Queries.GetIncidentSummary(r.Context(), domain.IncidentID(r.PathValue("incidentId")))
+	actor, ok := requestActor(w, r)
+	if !ok {
+		return
+	}
+	summary, err := s.services.Queries.GetIncidentSummary(r.Context(), actor, domain.IncidentID(r.PathValue("incidentId")))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -194,12 +198,16 @@ func (s *Server) getIncident(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
+	actor, ok := requestActor(w, r)
+	if !ok {
+		return
+	}
 	incidentID := domain.IncidentID(r.PathValue("incidentId"))
-	if _, err := s.services.Queries.GetIncident(r.Context(), incidentID); err != nil {
+	if _, err := s.services.Queries.GetIncident(r.Context(), actor, incidentID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	events, err := s.services.Queries.ListEvents(r.Context(), incidentID)
+	events, err := s.services.Queries.ListEvents(r.Context(), actor, incidentID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -258,7 +266,7 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	summary, err := s.services.Queries.GetIncidentSummary(r.Context(), incidentID)
+	summary, err := s.services.Queries.GetIncidentSummary(r.Context(), actor, incidentID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -283,7 +291,7 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	summary, err := s.services.Queries.GetIncidentSummary(r.Context(), incidentID)
+	summary, err := s.services.Queries.GetIncidentSummary(r.Context(), actor, incidentID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

@@ -251,7 +251,7 @@ func runLifecycle(t *testing.T, provider *telemetry.Provider) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	services, err := application.NewServices(application.Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids, Tracer: provider}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: time.Second, SystemActor: system})
+	services, err := application.NewServices(application.Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{}, Clock: clock, IDGenerator: ids, Tracer: provider}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
 	}

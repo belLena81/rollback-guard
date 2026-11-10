@@ -27,7 +27,7 @@ func TestAsyncIncidentCreationAndCoordinatorCompletion(t *testing.T) {
 	if err := coordinator.ProcessNext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestCancelQueuedInvestigationCommitsIncidentAndTaskTogether(t *testing.T) {
 	if canceled.Status() != domain.StatusCanceled {
 		t.Fatalf("incident status = %s", canceled.Status())
 	}
-	summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestCoordinatorRetriesAmbiguousSubmissionWithSameCorrelation(t *testing.T) 
 	if err := coordinator.ProcessNext(context.Background()); err == nil {
 		t.Fatal("expected first submission error")
 	}
-	summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestCoordinatorRetriesAmbiguousSubmissionWithSameCorrelation(t *testing.T) 
 	if err := coordinator.ProcessNext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	summary, err = services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	summary, err = services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestCoordinatorCancelsInvestigationWhileWatchIsBlocked(t *testing.T) {
 	if gateway.cancelCalls.Load() != 1 {
 		t.Fatalf("remote cancellation calls = %d, want 1", gateway.cancelCalls.Load())
 	}
-	summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestCoordinatorPreservesCancellationDuringProgress(t *testing.T) {
 	if !gateway.progressRejected.Load() {
 		t.Fatal("progress callback accepted an update after cancellation")
 	}
-	summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestCoordinatorCancelsSubmissionCompletedAfterRequest(t *testing.T) {
 	if gateway.cancelCalls.Load() != 1 || gateway.watchCalls.Load() != 0 {
 		t.Fatalf("remote cancel/watch calls = %d/%d, want 1/0", gateway.cancelCalls.Load(), gateway.watchCalls.Load())
 	}
-	summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestCoordinatorRejectsProgressAfterTimeoutFailure(t *testing.T) {
 	if err := waitForResult(t, gateway.progressResult, "late progress callback"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("late progress error = %v, want deadline exceeded", err)
 	}
-	summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestCoordinatorShutdownPreservesLeasedInvestigationOnFinalAttempt(t *testin
 	if gateway.cancelCalls.Load() != 0 {
 		t.Fatalf("remote cancellation calls = %d, want 0", gateway.cancelCalls.Load())
 	}
-	summary, err := services.Queries.GetIncidentSummary(context.Background(), incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func asyncHarness(t *testing.T) (Services, *InvestigationCoordinator, domain.Dep
 		t.Fatal(err)
 	}
 	uow := memory.NewUnitOfWork()
-	services, err := NewServices(Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids}, WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Second, SystemActor: system})
+	services, err := NewServices(Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: allowAll{}, Clock: clock, IDGenerator: ids}, WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
 	}

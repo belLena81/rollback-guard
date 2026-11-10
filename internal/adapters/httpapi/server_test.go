@@ -324,7 +324,7 @@ func (h synchronousInvestigationHandler) ServeHTTP(w http.ResponseWriter, r *htt
 		copyRecordedResponse(w, recorder)
 		return
 	}
-	summary, err := h.server.services.Queries.GetIncidentSummary(r.Context(), domain.IncidentID(accepted.Incident.ID))
+	summary, err := h.server.services.Queries.GetIncidentSummary(r.Context(), applicationtest.Reader(), domain.IncidentID(accepted.Incident.ID))
 	if err != nil {
 		copyRecordedResponse(w, recorder)
 		return
@@ -407,9 +407,9 @@ func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *testServ
 		Metrics:        infrastructure,
 		Executor:       infrastructure,
 		RollbackPolicy: policy,
-		ApprovalPolicy: domain.ApprovalAuthorizer{},
-		Clock:          clock,
-		IDGenerator:    ids,
+		ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{},
+		Clock:       clock,
+		IDGenerator: ids,
 	}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: systemActor})
 	if err != nil {
 		t.Fatal(err)

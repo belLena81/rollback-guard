@@ -18,6 +18,9 @@ type Dependencies struct {
 	ApprovalPolicy ports.ApprovalPolicy
 	Clock          ports.Clock
 	IDGenerator    ports.IDGenerator
+	// Access authorizes every human-initiated use case. Required: there is
+	// no permissive default.
+	Access AccessPolicy
 	// Tracer is optional; nil disables tracing.
 	Tracer ports.Tracer
 }
@@ -67,7 +70,8 @@ func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, er
 		dependencies.RollbackPolicy == nil ||
 		dependencies.ApprovalPolicy == nil ||
 		dependencies.Clock == nil ||
-		dependencies.IDGenerator == nil {
+		dependencies.IDGenerator == nil ||
+		dependencies.Access == nil {
 		return Services{}, errors.New("all service dependencies are required")
 	}
 	if err := config.validate(); err != nil {
@@ -78,14 +82,14 @@ func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, er
 		tracer = ports.NoopTracer{}
 	}
 	trail := audit{ids: dependencies.IDGenerator, systemActor: config.SystemActor}
-	uow, clock := dependencies.UnitOfWork, dependencies.Clock
+	uow, clock, access := dependencies.UnitOfWork, dependencies.Clock, dependencies.Access
 	services := Services{
-		Incidents: &IncidentService{audit: trail, uow: uow, clock: clock, tracer: tracer},
+		Incidents: &IncidentService{audit: trail, uow: uow, clock: clock, tracer: tracer, access: access},
 		Investigations: &InvestigationService{
 			audit: trail, uow: uow, clock: clock,
 			rollbackPolicy: dependencies.RollbackPolicy, proposalTTL: config.ProposalTTL, cleanupTimeout: config.CleanupTimeout,
 		},
-		Approvals: &ApprovalService{audit: trail, uow: uow, clock: clock, approvalTTL: config.ApprovalTTL},
+		Approvals: &ApprovalService{audit: trail, uow: uow, clock: clock, approvalTTL: config.ApprovalTTL, access: access},
 		Executions: &ExecutionService{
 			audit: trail, uow: uow, clock: clock, inspector: dependencies.Inspector, executor: dependencies.Executor,
 			approvalPolicy: dependencies.ApprovalPolicy, cleanupTimeout: config.CleanupTimeout,
@@ -94,7 +98,7 @@ func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, er
 			audit: trail, uow: uow, clock: clock, inspector: dependencies.Inspector, metrics: dependencies.Metrics,
 			recoveryTimeout: config.RecoveryTimeout, recoveryPollInterval: config.RecoveryPollInterval,
 		},
-		Queries: &QueryService{uow: uow},
+		Queries: &QueryService{uow: uow, access: access},
 	}
 	services.ApproveAndExecute = &ApproveAndExecuteService{
 		approvals: services.Approvals, executions: services.Executions,

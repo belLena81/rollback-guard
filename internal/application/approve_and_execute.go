@@ -57,7 +57,7 @@ func (s *ApproveAndExecuteService) Run(ctx context.Context, command ApprovalComm
 	if _, err := s.executions.Execute(executionCtx, command.IncidentID, key); err != nil {
 		return s.committedOrError(ctx, command.IncidentID, err, executionFailureCommitted)
 	}
-	summary, err := s.queries.GetIncidentSummary(ctx, command.IncidentID)
+	summary, err := s.queries.summary(ctx, command.IncidentID)
 	if err != nil {
 		return IncidentSummary{}, fmt.Errorf("load summary after execution: %w", err)
 	}
@@ -69,7 +69,7 @@ func (s *ApproveAndExecuteService) Run(ctx context.Context, command ApprovalComm
 	if _, err := s.verifications.Verify(ctx, command.IncidentID); err != nil {
 		return s.committedOrError(ctx, command.IncidentID, err, verificationFailureCommitted)
 	}
-	summary, err = s.queries.GetIncidentSummary(ctx, command.IncidentID)
+	summary, err = s.queries.summary(ctx, command.IncidentID)
 	if err != nil {
 		return IncidentSummary{}, fmt.Errorf("load summary after verification: %w", err)
 	}
@@ -85,7 +85,7 @@ func (s *ApproveAndExecuteService) committedOrError(
 	cause error,
 	committed func(IncidentSummary) bool,
 ) (IncidentSummary, error) {
-	summary, err := s.queries.GetIncidentSummary(ctx, incidentID)
+	summary, err := s.queries.summary(ctx, incidentID)
 	if err != nil || !committed(summary) {
 		return IncidentSummary{}, cause
 	}

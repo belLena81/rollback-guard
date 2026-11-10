@@ -9,8 +9,19 @@ import (
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
-// QueryService reads incidents and their records.
-type QueryService struct{ uow ports.UnitOfWork }
+// QueryService reads incidents and their records. Every exported read is a
+// human use case and authorizes its actor for domain.ActionRead first.
+type QueryService struct {
+	uow    ports.UnitOfWork
+	access AccessPolicy
+}
+
+func (s *QueryService) authorizeRead(ctx context.Context, actor domain.Actor) error {
+	if err := s.access.Authorize(ctx, actor, domain.ActionRead); err != nil {
+		return fmt.Errorf("authorize read: %w", err)
+	}
+	return nil
+}
 
 type IncidentSummary struct {
 	Incident      domain.Incident
@@ -22,7 +33,10 @@ type IncidentSummary struct {
 	Verification  *domain.RecoveryVerification
 }
 
-func (s *QueryService) GetIncident(ctx context.Context, incidentID domain.IncidentID) (domain.Incident, error) {
+func (s *QueryService) GetIncident(ctx context.Context, actor domain.Actor, incidentID domain.IncidentID) (domain.Incident, error) {
+	if err := s.authorizeRead(ctx, actor); err != nil {
+		return domain.Incident{}, err
+	}
 	var incident domain.Incident
 	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		var err error
@@ -35,7 +49,16 @@ func (s *QueryService) GetIncident(ctx context.Context, incidentID domain.Incide
 	return incident, nil
 }
 
-func (s *QueryService) GetIncidentSummary(ctx context.Context, incidentID domain.IncidentID) (IncidentSummary, error) {
+func (s *QueryService) GetIncidentSummary(ctx context.Context, actor domain.Actor, incidentID domain.IncidentID) (IncidentSummary, error) {
+	if err := s.authorizeRead(ctx, actor); err != nil {
+		return IncidentSummary{}, err
+	}
+	return s.summary(ctx, incidentID)
+}
+
+// summary reads the incident summary without an access check, for a use case
+// that has already authorized its actor (ApproveAndExecuteService).
+func (s *QueryService) summary(ctx context.Context, incidentID domain.IncidentID) (IncidentSummary, error) {
 	var summary IncidentSummary
 	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		incident, err := repositories.Incidents().Get(incidentID)
@@ -81,7 +104,10 @@ func (s *QueryService) GetIncidentSummary(ctx context.Context, incidentID domain
 	return summary, nil
 }
 
-func (s *QueryService) ListEvents(ctx context.Context, incidentID domain.IncidentID) ([]domain.OperationEvent, error) {
+func (s *QueryService) ListEvents(ctx context.Context, actor domain.Actor, incidentID domain.IncidentID) ([]domain.OperationEvent, error) {
+	if err := s.authorizeRead(ctx, actor); err != nil {
+		return nil, err
+	}
 	var events []domain.OperationEvent
 	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		var err error

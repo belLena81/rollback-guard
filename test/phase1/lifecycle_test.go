@@ -83,7 +83,7 @@ func runCompleteRollbackLifecycle(t *testing.T, factory diagnosisFactory, effect
 	services, err := application.NewServices(application.Dependencies{
 		UnitOfWork: uow, Inspector: infrastructure, Metrics: infrastructure,
 		Executor: infrastructure, RollbackPolicy: policy,
-		ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids,
+		ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{}, Clock: clock, IDGenerator: ids,
 	}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: systemActor})
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func runCompleteRollbackLifecycle(t *testing.T, factory diagnosisFactory, effect
 	if incident.Status() != domain.StatusAwaitingApproval {
 		t.Fatalf("Investigate() status = %s", incident.Status())
 	}
-	summary, err := services.Queries.GetIncidentSummary(ctx, incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(ctx, applicationtest.Reader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func runCompleteRollbackLifecycle(t *testing.T, factory diagnosisFactory, effect
 	if !verification.Passed() {
 		t.Fatal("verification did not pass")
 	}
-	incident, err = services.Queries.GetIncident(ctx, incident.ID())
+	incident, err = services.Queries.GetIncident(ctx, applicationtest.Reader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func runCompleteRollbackLifecycle(t *testing.T, factory diagnosisFactory, effect
 		t.Fatalf("final status = %s, want resolved", incident.Status())
 	}
 
-	events, err := services.Queries.ListEvents(ctx, incident.ID())
+	events, err := services.Queries.ListEvents(ctx, applicationtest.Reader(), incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}

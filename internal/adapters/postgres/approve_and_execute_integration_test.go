@@ -88,7 +88,7 @@ func newApprovePostgresHarness(t *testing.T, unitOfWork func(*UnitOfWork) ports.
 	}
 	services, err := application.NewServices(application.Dependencies{
 		UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra,
-		RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids,
+		RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{}, Clock: clock, IDGenerator: ids,
 	}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 5 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestApproveAndExecuteConcurrentSameApprovalOnPostgres(t *testing.T) {
 			t.Fatalf("retry after conflicts: %v", err)
 		}
 	}
-	summary, err := h.queries.GetIncidentSummary(context.Background(), h.incident)
+	summary, err := h.queries.GetIncidentSummary(context.Background(), applicationtest.Reader(), h.incident)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestApproveAndExecuteConcurrentSameApprovalOnPostgres(t *testing.T) {
 	if got := h.infra.ExecutionCount(); got != 1 {
 		t.Fatalf("mutations = %d, want 1", got)
 	}
-	events, err := h.queries.ListEvents(context.Background(), h.incident)
+	events, err := h.queries.ListEvents(context.Background(), applicationtest.Reader(), h.incident)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestApproveAndExecuteRollsBackStateWithFailedAuditEventOnPostgres(t *testin
 	if _, err := h.services.ApproveAndExecute.Run(context.Background(), h.command); !errors.Is(err, errInjectedAppend) {
 		t.Fatalf("Run() error = %v, want the injected append failure", err)
 	}
-	summary, err := h.queries.GetIncidentSummary(context.Background(), h.incident)
+	summary, err := h.queries.GetIncidentSummary(context.Background(), applicationtest.Reader(), h.incident)
 	if err != nil {
 		t.Fatal(err)
 	}

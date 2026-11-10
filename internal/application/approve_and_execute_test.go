@@ -38,6 +38,9 @@ type approveHarness struct {
 type harnessOptions struct {
 	approvalPolicy ports.ApprovalPolicy
 	failEventKind  domain.EventKind
+	// access, when set, replaces the permissive policy once the harness has
+	// set up an incident awaiting approval.
+	access AccessPolicy
 }
 
 const testApprovalTTL = 5 * time.Minute
@@ -77,9 +80,10 @@ func newApproveHarness(t *testing.T, options harnessOptions) *approveHarness {
 	inspector := &hookInspector{next: infra}
 	executor := &spyExecutor{next: infra, clock: clock}
 	system := mustActor(t, "rollback-guardian", domain.ActorSystem)
+	access := &switchablePolicy{current: allowAll{}}
 	services, err := NewServices(Dependencies{
 		UnitOfWork: unitOfWork, Inspector: inspector, Metrics: infra, Executor: executor,
-		RollbackPolicy: policy, ApprovalPolicy: approvalPolicy, Clock: clock, IDGenerator: ids,
+		RollbackPolicy: policy, ApprovalPolicy: approvalPolicy, Access: access, Clock: clock, IDGenerator: ids,
 	}, WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: testApprovalTTL, CleanupTimeout: time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
@@ -104,11 +108,14 @@ func newApproveHarness(t *testing.T, options harnessOptions) *approveHarness {
 	if incident.Status() != domain.StatusAwaitingApproval {
 		t.Fatalf("incident status = %s, want awaiting_approval", incident.Status())
 	}
-	summary, err := services.Queries.GetIncidentSummary(ctx, incident.ID())
+	summary, err := services.Queries.GetIncidentSummary(ctx, testReader(), incident.ID())
 	if err != nil || summary.Proposal == nil {
 		t.Fatalf("proposal after investigation = %v, %v", summary.Proposal, err)
 	}
 	proposal := *summary.Proposal
+	if options.access != nil {
+		access.current = options.access
+	}
 	return &approveHarness{
 		services: services, uow: uow, clock: clock, infra: infra, inspector: inspector, executor: executor,
 		incident: incident.ID(), proposal: proposal, human: mustActor(t, "alice", domain.ActorHuman), faults: faults, t: t,
@@ -130,7 +137,7 @@ func (h *approveHarness) status(t *testing.T) domain.Status {
 
 func (h *approveHarness) events(t *testing.T) []domain.OperationEvent {
 	t.Helper()
-	events, err := h.services.Queries.ListEvents(context.Background(), h.incident)
+	events, err := h.services.Queries.ListEvents(context.Background(), testReader(), h.incident)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +146,7 @@ func (h *approveHarness) events(t *testing.T) []domain.OperationEvent {
 
 func (h *approveHarness) approvalID(t *testing.T) domain.ApprovalID {
 	t.Helper()
-	summary, err := h.services.Queries.GetIncidentSummary(context.Background(), h.incident)
+	summary, err := h.services.Queries.GetIncidentSummary(context.Background(), testReader(), h.incident)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +362,7 @@ func TestApproveAndExecuteFailureBranches(t *testing.T) {
 			if got := h.status(t); got != test.wantStatus {
 				t.Fatalf("stored status = %s, want %s", got, test.wantStatus)
 			}
-			stored, storedErr := h.services.Queries.GetIncidentSummary(context.Background(), h.incident)
+			stored, storedErr := h.services.Queries.GetIncidentSummary(context.Background(), testReader(), h.incident)
 			if storedErr != nil {
 				t.Fatal(storedErr)
 			}
@@ -460,7 +467,7 @@ func TestApproveAndExecuteAuditEventsCommitWithTheirStateChange(t *testing.T) {
 			if got := h.status(t); got != test.wantStatus {
 				t.Fatalf("status = %s, want %s: the state change must roll back with its event", got, test.wantStatus)
 			}
-			summary, err := h.services.Queries.GetIncidentSummary(context.Background(), h.incident)
+			summary, err := h.services.Queries.GetIncidentSummary(context.Background(), testReader(), h.incident)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/application/applicationtest"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
@@ -291,7 +292,7 @@ func TestVerificationWaitStopsOnCancellation(t *testing.T) {
 		t.Fatalf("Verify() error = %v, want context.Canceled", err)
 	}
 	assertIncidentStatus(t, h, domain.StatusVerifying)
-	if summary, err := h.services.Queries.GetIncidentSummary(context.Background(), h.incident.ID()); err != nil || summary.Verification != nil {
+	if summary, err := h.services.Queries.GetIncidentSummary(context.Background(), applicationtest.Reader(), h.incident.ID()); err != nil || summary.Verification != nil {
 		t.Fatalf("summary verification = %v, err = %v; want none recorded", summary.Verification, err)
 	}
 }
@@ -314,7 +315,7 @@ func TestWorkflowConfigRejectsInvalidRecoveryWait(t *testing.T) {
 			h := newHarness(t, nil)
 			_, err = application.NewServices(application.Dependencies{
 				UnitOfWork: h.uow, Inspector: h.infrastructure, Metrics: h.infrastructure,
-				Executor: h.infrastructure, RollbackPolicy: domain.EligibilityPolicy{}, ApprovalPolicy: domain.ApprovalAuthorizer{},
+				Executor: h.infrastructure, RollbackPolicy: domain.EligibilityPolicy{}, ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{},
 				Clock: h.clock, IDGenerator: idGenerator{},
 			}, application.WorkflowConfig{
 				ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Second, SystemActor: systemActor,
