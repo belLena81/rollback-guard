@@ -72,6 +72,7 @@ Also in this path, found by the R1 reviews:
 
 - **Lock release ownership.** `Release` is keyed by idempotency key only, so a late deferred release from one request can unlock the lock held by a replay of the same key. The `resourceVersion` precondition and the ledger state check bound the impact, but ownership should be explicit: release only the attempt that acquired the lock.
 - **Raw error text in 409 responses.** `writeError` returns `err.Error()` for conflict-class errors, so a failed cleanup can put database error text in a response body. Return fixed messages.
+- **Ambiguous rollback outcome reported as failure.** If `execute_approved_rollback` fails after the request was sent with a plain transport error (EOF, reset), the MCP adapter returns it raw instead of `ErrRollbackOutcomeUnknown`, so the application records a failed execution although the server may have applied the rollback. Route every post-send transport error through the adapter's reconcile path. Found during Phase 6 task 4.
 - **Encode-failure 500.** `writeJSON` has no request ID or logger, so the failure is neither correlated nor logged.
 
 Change: an application use case `ApproveAndExecute` that owns the sequence, the compensation, and the key derivation. The handler decodes, calls, encodes. Existing HTTP tests keep passing unchanged; the flow gets application-level tests for each failure branch.
