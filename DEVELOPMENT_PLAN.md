@@ -47,7 +47,7 @@ Open findings from the E2E task:
 - Two approve requests for one incident each run their own recovery wait; the version check lets only one commit (the other gets 409). A per-incident single-flight or lease would avoid the duplicate polling.
 - The demo runs the investigator and, unless `ROLLBACK_MCP_DATABASE_URL` is set, the rollback MCP with the owner database role; `migrate` receives `DATABASE_URL` on its command line. Dedicated roles (`docs/phase3-mcp.md`) and passing the URL by environment are left to the deployment work.
 
-Phase 7 has not started.
+Phase 7 has not started; its task breakdown and decisions are in `docs/phase7-auth.md`.
 
 ## Phase 1: Domain Core
 
