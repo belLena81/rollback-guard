@@ -50,7 +50,7 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 - **Failures.** Response bodies are fixed per class and never say which check failed. Only the class is logged: never the code, state, cookie, token, client secret or provider body. Any GitHub failure, including a timeout or an unexpected response, returns `502 bad_gateway`.
 - **Bounds.** Each GitHub request is limited by a 10 s timeout (`config.GitHubHTTPTimeout`) and a 1 MiB response limit; redirects are not followed. Organizations are read 100 per page for at most 5 pages. A member whose allowed organization is not within the first 500 is denied (fail closed).
 - **Resilience.** The token exchange is not retried, because an authorization code is single-use. A failed login is retried by the user starting again.
-- **Leaving the organization.** Membership is checked only at login. A known user who is denied at login because they left the organization has all open sessions revoked; the user row is kept, so re-admission restores access. Until that user tries to log in again, existing sessions stay valid up to `SESSION_TTL`. An administrator disables the user (7.5) to cut access at once.
+- **Leaving the organization.** Membership is checked only at login. A known user who is denied at login because they left the organization has all open sessions revoked; the user row is kept, so re-admission restores access. Until that user tries to log in again, existing sessions stay valid up to `SESSION_TTL`. An administrator revokes the user's sessions (7.5) to cut access at once.
 - **Login collisions.** Users are keyed by GitHub ID. If a GitHub login was renamed and then taken by another account, the new account gets `409 conflict` until the old account signs in again (which refreshes its stored login).
 - **Accepted risks.** The email is the public profile field and is display-only; it never feeds an authorization decision. Bootstrap admins are matched by numeric GitHub ID, never by login (a renamed login can be taken by another account); the login in each entry is only a readable label. The state cookie is not bound to a browser session: an attacker able to plant cookies for the host (for example from a sibling subdomain) could perform a login CSRF into their own account. Serve the orchestrator from a host without untrusted sibling subdomains.
 - **Gap: rate limiting.** The login and callback endpoints are not rate-limited. Put them behind a proxy rate limit in any exposed deployment.
@@ -67,6 +67,24 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 | `AUTH_STATE_SECRET` | none | required, at least 32 bytes; never logged or rendered |
 | `AUTH_GITHUB_BASE_URL` | `https://github.com` | HTTPS unless loopback |
 | `AUTH_GITHUB_API_URL` | `https://api.github.com` | HTTPS unless loopback |
+
+## Authorization, audit and user administration (7.5)
+
+- **Enforcement.** Every human use case calls `AccessPolicy.Authorize(ctx, actor, action)` inside the application service before any state change; handlers only supply the session actor. `github` mode wires `RoleAccessPolicy`, which loads the user live on each call: unknown or disabled is `401`, a role below the action's minimum is `403 forbidden`, and a non-`github:<id>` actor is denied. `local` mode wires `LocalAccessPolicy`. Viewer reads; operator also creates, rejects and cancels; only an administrator approves a rollback (the recorded approver is the authorized actor) or administers users. A role change applies on the caller's next request. System transitions never consult the policy, and a system actor cannot use a human use case. Reads take the actor, so `QueryService` methods gained an actor parameter.
+- **Routes** (`github` mode only; `404` in `local`).
+  - `POST /v1/auth/logout`: revokes the caller's session, clears the cookie, `204`. Needs no role.
+  - `GET /v1/me`: `{actorId, login, role}` with the live role.
+  - `PATCH /v1/users/{userId}/role` (administrator): body `{"role": ...}`, strict JSON, at most 1 KiB. `userId` is the public actor ID `github:<id>`; a malformed ID is `400`, an unknown user `404`. Returns the target's identity. Setting the current role is a no-op and writes no audit row.
+  - `POST /v1/users/{userId}/sessions:revoke` (administrator): revokes every open session of the user and returns `200 {"revoked": n}`.
+- **Last administrator.** A role change that would leave no enabled administrator, including self-demotion, is `409 conflict`. The service locks the enabled administrator rows (`SELECT ... FOR UPDATE`) and re-checks inside the transaction that the caller is still an enabled administrator, so two concurrent demotions cannot both succeed.
+- **Audit.** Migration `000006` adds `auth_audit_events`: `id, occurred_at, actor_id, action, target_user_id, from_role, to_role, session_count`. Actions are `role_changed`, `sessions_revoked` (written even when `n` is 0) and `logout`. A shape `CHECK` ties the nullable columns to the action, and a trigger rejects `UPDATE` and `DELETE` (append-only). Each row is written in the same transaction as the change it records, so a failed audit write rolls the change back. Rows hold no token, token hash, header or email. The incident `operation_events` schema is unchanged; those events now carry `github:<id>`. The down migration refuses to run while audit rows exist.
+- **Contract.** `test/contract` checks that every OpenAPI operation is routed in `github` mode and that, behind the real session middleware, only the OAuth entry points, `/health/*` and `/metrics` answer without a session.
+
+### Known gaps
+
+- **Approver role at execution.** The rollback-mode Kubernetes MCP re-checks the pending execution, proposal, policy decision and approval record before mutating, but not the approver's current role. An approval authorized when it was made stays executable if the approver is demoted before execution (bounded by `APPROVAL_TTL`).
+- **No disable endpoint.** There is no API to disable a user. `sessions:revoke` cuts access at once, but an organization member can sign in again; to keep them out, demote them to `viewer` or remove them from the organization.
+- **Audit reads.** There is no API to list auth audit rows; read the table directly.
 
 ## Tasks
 
