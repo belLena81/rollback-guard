@@ -16,6 +16,9 @@ dist/
 coverage.out
 *.test
 
+# Local demo state (service-account kubeconfigs hold bearer tokens)
+.demo/
+
 # OS/editor noise
 .DS_Store
 *.swp

@@ -1,0 +1,10 @@
+# `kubectl apply -k deploy/kubernetes` (make deploy) applies the whole local
+# demo in dependency order: kustomize emits the Namespace before the
+# ServiceAccounts/Roles/RoleBindings from deploy/rbac and the demo workload, so
+# a fresh cluster no longer fails on the missing rollback-demo namespace.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - ../rbac
+  - demo-api.yaml

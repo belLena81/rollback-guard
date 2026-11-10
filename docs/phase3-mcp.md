@@ -6,7 +6,7 @@ Phase 3 replaces the orchestrator's fake infrastructure adapter with three indep
 - Kubernetes rollback MCP on `:8092`.
 - Observability MCP on `:8093`.
 
-Run the Kubernetes binary twice with different service-account credentials and `KUBERNETES_MCP_MODE=readonly` or `rollback`. Apply `deploy/rbac/mcp.yaml` to create the separate namespace-scoped identities. The rollback identity can only get and patch `rollback-demo/demo-api`; it cannot update arbitrary resources, read secrets, delete objects, or execute in pods.
+Run the Kubernetes binary twice with different service-account credentials and `KUBERNETES_MCP_MODE=readonly` or `rollback`. Apply `deploy/rbac/mcp.yaml` to create the separate namespace-scoped identities. Use `make deploy` (`kubectl apply -k deploy/kubernetes`), which creates the `rollback-demo` namespace first (see `docs/phase6-kind.md`). The rollback identity can only get and patch `rollback-demo/demo-api`; it cannot update arbitrary resources, read secrets, delete objects, or execute in pods.
 
 The previous stable ReplicaSet must carry this annotation:
 

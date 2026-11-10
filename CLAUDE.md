@@ -21,7 +21,7 @@ go test ./internal/domain -run TestName -v
 go test -tags=integration ./test/integration/phase4/... -run TestName -v
 ```
 
-Integration tests use the `//go:build integration` tag, so plain `go test ./...` skips them. The phase docs run every gate with `GOCACHE=/tmp/rollback-guard-go-cache` prefixed; use the same prefix if the default Go cache isn't writable. The README lists many future make targets (`compose-up`, `kind-*`, `demo-*`, ...) that don't exist yet. The Makefile is the source of truth.
+Integration tests use the `//go:build integration` tag, so plain `go test ./...` skips them. The phase docs run every gate with `GOCACHE=/tmp/rollback-guard-go-cache` prefixed; use the same prefix if the default Go cache isn't writable. The kind demo targets (`kind-create`, `kind-load`, `deploy`, `demo-v1`, `demo-v2-broken`, `generate-load`, `rbac-check`, `kubeconfigs`, `phase6-kind-check`) are documented in `docs/phase6-kind.md`. The README still lists future targets (`compose-up`, `create-incident`, `verify`, ...) that don't exist yet. The Makefile is the source of truth.
 
 ## Architecture
 
