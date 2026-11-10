@@ -249,8 +249,11 @@ func TestAuditFailureRollsBackTheChange(t *testing.T) {
 		t.Fatal("Logout succeeded without its audit event")
 	}
 	err := store.WithinAuthTransaction(ctx, func(repos ports.AuthRepositories) error {
-		hash, _ := domain.NewSessionTokenHash(bytes.Repeat([]byte{1}, domain.SessionTokenHashLength))
-		_, _, err := repos.Sessions().ResolveActive(hash, userCreatedAt.Add(time.Minute))
+		hash, err := domain.NewSessionTokenHash(bytes.Repeat([]byte{1}, domain.SessionTokenHashLength))
+		if err != nil {
+			return err
+		}
+		_, _, err = repos.Sessions().ResolveActive(hash, userCreatedAt.Add(time.Minute))
 		return err
 	})
 	if err != nil {
@@ -312,8 +315,11 @@ func TestLogout(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := f.store.WithinAuthTransaction(ctx, func(repos ports.AuthRepositories) error {
-		hash, _ := domain.NewSessionTokenHash(bytes.Repeat([]byte{1}, domain.SessionTokenHashLength))
-		_, _, err := repos.Sessions().ResolveActive(hash, userCreatedAt.Add(time.Minute))
+		hash, err := domain.NewSessionTokenHash(bytes.Repeat([]byte{1}, domain.SessionTokenHashLength))
+		if err != nil {
+			return err
+		}
+		_, _, err = repos.Sessions().ResolveActive(hash, userCreatedAt.Add(time.Minute))
 		return err
 	})
 	if !errors.Is(err, domain.ErrNoActiveSession) {

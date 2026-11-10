@@ -6,10 +6,19 @@ import (
 	"time"
 )
 
+func mustActor(t *testing.T, id ActorID, kind ActorKind) Actor {
+	t.Helper()
+	actor, err := NewActor(id, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return actor
+}
+
 func TestAuthAuditEventConstruction(t *testing.T) {
 	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.FixedZone("x", 3600))
-	admin, _ := NewActor("github:3", ActorHuman)
-	system, _ := NewActor("rollback-guardian", ActorSystem)
+	admin := mustActor(t, "github:3", ActorHuman)
+	system := mustActor(t, "rollback-guardian", ActorSystem)
 	tests := []struct {
 		name  string
 		build func() (AuthAuditEvent, error)

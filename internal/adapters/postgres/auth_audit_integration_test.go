@@ -192,11 +192,9 @@ func TestConcurrentAdminDemotionsKeepOneAdministrator(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
 		for i, pair := range [][2]string{{"github:501", "github:502"}, {"github:502", "github:501"}} {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				_, errs[i] = service.ChangeRole(ctx, auditActor(t, pair[0]), domain.ActorID(pair[1]), domain.RoleOperator)
-			}()
+			})
 		}
 		wg.Wait()
 		cancel()

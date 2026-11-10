@@ -82,7 +82,10 @@ func NewRoleChangedAudit(id AuthAuditEventID, actor Actor, target UserID, from, 
 
 // NewSessionsRevokedAudit records actor revoking count sessions of target.
 func NewSessionsRevokedAudit(id AuthAuditEventID, actor Actor, target UserID, count int, now time.Time) (AuthAuditEvent, error) {
-	return newAuthAudit(AuthAuditEvent{id: id, occurredAt: now, actor: actor, action: AuthAuditSessionsRevoked, targetUserID: target, sessionCount: count, hasCount: true})
+	return newAuthAudit(AuthAuditEvent{
+		id: id, occurredAt: now, actor: actor, action: AuthAuditSessionsRevoked,
+		targetUserID: target, sessionCount: count, hasCount: true,
+	})
 }
 
 // NewLogoutAudit records actor (user) ending their own session.

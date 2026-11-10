@@ -141,10 +141,18 @@ func (h *roleHarness) pending(t *testing.T) incidentSummaryDTO {
 	return summary
 }
 
+func mustJSON(value any) []byte {
+	body, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
 func decisionBody(summary incidentSummaryDTO, reason string) string {
-	body, _ := json.Marshal(map[string]string{"actionId": summary.Proposal.ActionID, "proposalHash": summary.Proposal.ProposalHash, "reason": reason})
+	body := mustJSON(map[string]string{"actionId": summary.Proposal.ActionID, "proposalHash": summary.Proposal.ProposalHash, "reason": reason})
 	if reason == "" {
-		body, _ = json.Marshal(approvalRequest{ActionID: summary.Proposal.ActionID, ProposalHash: summary.Proposal.ProposalHash})
+		body = mustJSON(approvalRequest{ActionID: summary.Proposal.ActionID, ProposalHash: summary.Proposal.ProposalHash})
 	}
 	return string(body)
 }

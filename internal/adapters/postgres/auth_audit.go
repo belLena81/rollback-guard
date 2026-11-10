@@ -100,7 +100,9 @@ func (repo authAuditRepo) ListRecent(limit int) ([]domain.AuthAuditEvent, error)
 	return events, nil
 }
 
-func rehydrateAuthAudit(id string, occurredAt time.Time, actorID, action string, target, fromRole, toRole *string, sessionCount *int) (domain.AuthAuditEvent, error) {
+func rehydrateAuthAudit(
+	id string, occurredAt time.Time, actorID, action string, target, fromRole, toRole *string, sessionCount *int,
+) (domain.AuthAuditEvent, error) {
 	parsedAction, err := domain.ParseAuthAuditAction(action)
 	if err != nil {
 		return domain.AuthAuditEvent{}, err
