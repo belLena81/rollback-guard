@@ -47,9 +47,17 @@ func statusChanged(actor domain.Actor) eventsFor {
 // then the incident's status change, both attributed to the deciding actor.
 func approvalEvents(actor domain.Actor, approval domain.Approval, reason string) eventsFor {
 	return func(from, to domain.Status) []auditEvent {
-		recorded := auditEvent{kind: domain.EventApprovalRecorded, actor: actor, detail: domain.ApprovalRecordedDetail{ApprovalID: approval.ID(), Actor: approval.Actor()}}
+		recorded := auditEvent{
+			kind:   domain.EventApprovalRecorded,
+			actor:  actor,
+			detail: domain.ApprovalRecordedDetail{ApprovalID: approval.ID(), Actor: approval.Actor()},
+		}
 		if approval.Decision() == domain.ApprovalRejected {
-			recorded = auditEvent{kind: domain.EventRejectionRecorded, actor: actor, detail: domain.RejectionRecordedDetail{ApprovalID: approval.ID(), Reason: reason}}
+			recorded = auditEvent{
+				kind:   domain.EventRejectionRecorded,
+				actor:  actor,
+				detail: domain.RejectionRecordedDetail{ApprovalID: approval.ID(), Reason: reason},
+			}
 		}
 		return []auditEvent{recorded, statusChangeEvent(actor, from, to)}
 	}
@@ -72,7 +80,13 @@ func terminated(actor domain.Actor, kind domain.EventKind, reason string) events
 // The incident write comes first: a concurrent request that already moved the
 // incident on fails here with a version conflict, before the caller writes
 // anything else that could collide with the winner's rows.
-func (a audit) transition(repositories ports.Repositories, incident domain.Incident, now time.Time, apply func(*domain.Incident, time.Time) error, events eventsFor) (domain.Incident, error) {
+func (a audit) transition(
+	repositories ports.Repositories,
+	incident domain.Incident,
+	now time.Time,
+	apply func(*domain.Incident, time.Time) error,
+	events eventsFor,
+) (domain.Incident, error) {
 	expected, from := incident.Version(), incident.Status()
 	if err := apply(&incident, now); err != nil {
 		return domain.Incident{}, err

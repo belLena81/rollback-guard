@@ -68,7 +68,14 @@ type RollbackProposal struct {
 	hash                            ProposalHash
 }
 
-func NewRollbackProposal(actionID ActionID, incidentID IncidentID, policyDecisionID PolicyDecisionID, target DeploymentTarget, currentRevision, targetRevision Revision, expiresAt time.Time) (RollbackProposal, error) {
+func NewRollbackProposal(
+	actionID ActionID,
+	incidentID IncidentID,
+	policyDecisionID PolicyDecisionID,
+	target DeploymentTarget,
+	currentRevision, targetRevision Revision,
+	expiresAt time.Time,
+) (RollbackProposal, error) {
 	if actionID == "" || incidentID == "" || policyDecisionID == "" || currentRevision == "" || targetRevision == "" || expiresAt.IsZero() {
 		return RollbackProposal{}, invalid("proposal", "required value is empty")
 	}
@@ -78,7 +85,15 @@ func NewRollbackProposal(actionID ActionID, incidentID IncidentID, policyDecisio
 	if currentRevision == targetRevision {
 		return RollbackProposal{}, invalid("proposal.target_revision", "must differ from current revision")
 	}
-	p := RollbackProposal{actionID: actionID, incidentID: incidentID, policyDecisionID: policyDecisionID, target: target, currentRevision: currentRevision, targetRevision: targetRevision, expiresAt: canonicalProposalExpiry(expiresAt)}
+	p := RollbackProposal{
+		actionID:         actionID,
+		incidentID:       incidentID,
+		policyDecisionID: policyDecisionID,
+		target:           target,
+		currentRevision:  currentRevision,
+		targetRevision:   targetRevision,
+		expiresAt:        canonicalProposalExpiry(expiresAt),
+	}
 	hash, err := p.computeHash()
 	if err != nil {
 		return RollbackProposal{}, invalid("proposal.hash", err.Error())
@@ -183,7 +198,15 @@ type Approval struct {
 	rejectionReason      string
 }
 
-func NewApproval(id ApprovalID, actor Actor, decision ApprovalDecision, actionID ActionID, hash ProposalHash, decidedAt, expiresAt time.Time, reason string) (Approval, error) {
+func NewApproval(
+	id ApprovalID,
+	actor Actor,
+	decision ApprovalDecision,
+	actionID ActionID,
+	hash ProposalHash,
+	decidedAt, expiresAt time.Time,
+	reason string,
+) (Approval, error) {
 	if !actor.IsHuman() {
 		return Approval{}, &NonHumanApprovalError{Kind: actor.Kind()}
 	}
@@ -202,7 +225,16 @@ func NewApproval(id ApprovalID, actor Actor, decision ApprovalDecision, actionID
 	if decision == ApprovalApproved && reason != "" {
 		return Approval{}, invalid("approval.rejection_reason", "not allowed for approval")
 	}
-	return Approval{id: id, actor: actor, decision: decision, actionID: actionID, proposalHash: hash, decidedAt: decidedAt.UTC(), expiresAt: expiresAt.UTC(), rejectionReason: reason}, nil
+	return Approval{
+		id:              id,
+		actor:           actor,
+		decision:        decision,
+		actionID:        actionID,
+		proposalHash:    hash,
+		decidedAt:       decidedAt.UTC(),
+		expiresAt:       expiresAt.UTC(),
+		rejectionReason: reason,
+	}, nil
 }
 func (a Approval) ID() ApprovalID {
 	return a.id
@@ -248,7 +280,13 @@ func (a ApprovedRollback) PolicyDecision() PolicyDecision {
 	return a.decision
 }
 
-func AuthorizeRollback(proposal RollbackProposal, decision PolicyDecision, approval Approval, fresh DeploymentEvidence, now time.Time) (ApprovedRollback, error) {
+func AuthorizeRollback(
+	proposal RollbackProposal,
+	decision PolicyDecision,
+	approval Approval,
+	fresh DeploymentEvidence,
+	now time.Time,
+) (ApprovedRollback, error) {
 	if !decision.Allowed() || decision.ID() != proposal.PolicyDecisionID() || decision.IncidentID() != proposal.IncidentID() {
 		return ApprovedRollback{}, &PolicyDenialError{Rule: "policy_decision_binding"}
 	}
@@ -274,7 +312,13 @@ func AuthorizeRollback(proposal RollbackProposal, decision PolicyDecision, appro
 	return ApprovedRollback{proposal: proposal, decision: decision, approval: approval}, nil
 }
 
-func ResumeApprovedRollback(proposal RollbackProposal, decision PolicyDecision, approval Approval, record IdempotencyRecord, key IdempotencyKey) (ApprovedRollback, error) {
+func ResumeApprovedRollback(
+	proposal RollbackProposal,
+	decision PolicyDecision,
+	approval Approval,
+	record IdempotencyRecord,
+	key IdempotencyKey,
+) (ApprovedRollback, error) {
 	if record.Key() != key ||
 		record.Operation() != IdempotencyOperationExecuteRollback ||
 		record.State() != IdempotencyPending ||
@@ -300,7 +344,13 @@ func ResumeApprovedRollback(proposal RollbackProposal, decision PolicyDecision, 
 
 type ApprovalAuthorizer struct{}
 
-func (ApprovalAuthorizer) Authorize(proposal RollbackProposal, decision PolicyDecision, approval Approval, fresh DeploymentEvidence, now time.Time) (ApprovedRollback, error) {
+func (ApprovalAuthorizer) Authorize(
+	proposal RollbackProposal,
+	decision PolicyDecision,
+	approval Approval,
+	fresh DeploymentEvidence,
+	now time.Time,
+) (ApprovedRollback, error) {
 	return AuthorizeRollback(proposal, decision, approval, fresh, now)
 }
 
@@ -335,7 +385,15 @@ type RollbackExecution struct {
 	failureReason          string
 }
 
-func NewRollbackExecution(id ExecutionID, incidentID IncidentID, key IdempotencyKey, from, to Revision, outcome ExecutionOutcome, startedAt, completedAt time.Time, reason string) (RollbackExecution, error) {
+func NewRollbackExecution(
+	id ExecutionID,
+	incidentID IncidentID,
+	key IdempotencyKey,
+	from, to Revision,
+	outcome ExecutionOutcome,
+	startedAt, completedAt time.Time,
+	reason string,
+) (RollbackExecution, error) {
 	if id == "" || incidentID == "" || key == "" || from == "" || to == "" || from == to || startedAt.IsZero() || completedAt.Before(startedAt) {
 		return RollbackExecution{}, invalid("execution", "invalid execution")
 	}
@@ -348,7 +406,17 @@ func NewRollbackExecution(id ExecutionID, incidentID IncidentID, key Idempotency
 	if outcome == ExecutionSucceeded && reason != "" {
 		return RollbackExecution{}, invalid("execution.failure_reason", "not allowed for successful execution")
 	}
-	return RollbackExecution{id: id, incidentID: incidentID, key: key, from: from, to: to, outcome: outcome, startedAt: startedAt.UTC(), completedAt: completedAt.UTC(), failureReason: reason}, nil
+	return RollbackExecution{
+		id:            id,
+		incidentID:    incidentID,
+		key:           key,
+		from:          from,
+		to:            to,
+		outcome:       outcome,
+		startedAt:     startedAt.UTC(),
+		completedAt:   completedAt.UTC(),
+		failureReason: reason,
+	}, nil
 }
 func (e RollbackExecution) ID() ExecutionID {
 	return e.id
@@ -389,8 +457,19 @@ type RecoveryVerification struct {
 	failureReason             string
 }
 
-func NewRecoveryVerification(incidentID IncidentID, executionID ExecutionID, passed bool, revision Revision, desired, ready, available int, metricValue float64, checkedAt time.Time, reason string) (RecoveryVerification, error) {
-	if incidentID == "" || executionID == "" || revision == "" || desired < 0 || ready < 0 || available < 0 || math.IsNaN(metricValue) || math.IsInf(metricValue, 0) || checkedAt.IsZero() {
+func NewRecoveryVerification(
+	incidentID IncidentID,
+	executionID ExecutionID,
+	passed bool,
+	revision Revision,
+	desired, ready, available int,
+	metricValue float64,
+	checkedAt time.Time,
+	reason string,
+) (RecoveryVerification, error) {
+	if incidentID == "" || executionID == "" || revision == "" || desired < 0 || ready < 0 || available < 0 || math.IsNaN(metricValue) ||
+		math.IsInf(metricValue, 0) ||
+		checkedAt.IsZero() {
 		return RecoveryVerification{}, invalid("verification", "required value is empty")
 	}
 	if !passed && strings.TrimSpace(reason) == "" {
@@ -399,7 +478,18 @@ func NewRecoveryVerification(incidentID IncidentID, executionID ExecutionID, pas
 	if passed && reason != "" {
 		return RecoveryVerification{}, invalid("verification.failure_reason", "not allowed for successful verification")
 	}
-	return RecoveryVerification{incidentID: incidentID, executionID: executionID, passed: passed, revision: revision, desired: desired, ready: ready, available: available, metricValue: metricValue, checkedAt: checkedAt.UTC(), failureReason: reason}, nil
+	return RecoveryVerification{
+		incidentID:    incidentID,
+		executionID:   executionID,
+		passed:        passed,
+		revision:      revision,
+		desired:       desired,
+		ready:         ready,
+		available:     available,
+		metricValue:   metricValue,
+		checkedAt:     checkedAt.UTC(),
+		failureReason: reason,
+	}, nil
 }
 func (v RecoveryVerification) IncidentID() IncidentID {
 	return v.incidentID

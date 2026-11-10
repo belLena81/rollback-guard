@@ -35,7 +35,13 @@ func (d symptomDTO) domain() (domain.Symptom, error) {
 }
 
 func symptomResponse(symptom domain.Symptom) symptomDTO {
-	return symptomDTO{Kind: symptom.Kind().String(), Observed: symptom.Observed(), Threshold: symptom.Threshold(), Unit: symptom.Unit(), StartedAt: symptom.StartedAt()}
+	return symptomDTO{
+		Kind:      symptom.Kind().String(),
+		Observed:  symptom.Observed(),
+		Threshold: symptom.Threshold(),
+		Unit:      symptom.Unit(),
+		StartedAt: symptom.StartedAt(),
+	}
 }
 
 type actorDTO struct {
@@ -171,7 +177,17 @@ func summaryResponse(summary application.IncidentSummary) incidentSummaryDTO {
 }
 
 func investigationResponse(dispatch domain.InvestigationDispatch) investigationDTO {
-	response := investigationDTO{OperationID: dispatch.OperationID, TaskID: dispatch.Ref.TaskID, ContextID: dispatch.Ref.ContextID, State: dispatch.State.String(), Stage: dispatch.Stage.String(), Attempts: dispatch.Attempts, FailureCode: dispatch.FailureCode, CreatedAt: dispatch.CreatedAt, UpdatedAt: dispatch.UpdatedAt}
+	response := investigationDTO{
+		OperationID: dispatch.OperationID,
+		TaskID:      dispatch.Ref.TaskID,
+		ContextID:   dispatch.Ref.ContextID,
+		State:       dispatch.State.String(),
+		Stage:       dispatch.Stage.String(),
+		Attempts:    dispatch.Attempts,
+		FailureCode: dispatch.FailureCode,
+		CreatedAt:   dispatch.CreatedAt,
+		UpdatedAt:   dispatch.UpdatedAt,
+	}
 	if !dispatch.CompletedAt.IsZero() {
 		value := dispatch.CompletedAt
 		response.CompletedAt = &value

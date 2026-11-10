@@ -183,7 +183,19 @@ func (s *Service) ReplicaSets(ctx context.Context, target domain.DeploymentTarge
 		if digestErr != nil {
 			return nil, digestErr
 		}
-		result = append(result, ReplicaSetSummary{Name: replicaSet.Name, UID: string(replicaSet.UID), Revision: revision, Stable: replicaSet.Annotations[StableRevisionAnnotation] == stableAnnotationValue, DesiredReplicas: int(replicaSet.Status.Replicas), ReadyReplicas: int(replicaSet.Status.ReadyReplicas), AvailableReplicas: int(replicaSet.Status.AvailableReplicas), CreatedAt: replicaSet.CreationTimestamp.UTC()})
+		result = append(
+			result,
+			ReplicaSetSummary{
+				Name:              replicaSet.Name,
+				UID:               string(replicaSet.UID),
+				Revision:          revision,
+				Stable:            replicaSet.Annotations[StableRevisionAnnotation] == stableAnnotationValue,
+				DesiredReplicas:   int(replicaSet.Status.Replicas),
+				ReadyReplicas:     int(replicaSet.Status.ReadyReplicas),
+				AvailableReplicas: int(replicaSet.Status.AvailableReplicas),
+				CreatedAt:         replicaSet.CreationTimestamp.UTC(),
+			},
+		)
 	}
 	slices.SortFunc(result, func(a, b ReplicaSetSummary) int {
 		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
@@ -233,7 +245,17 @@ func (s *Service) ListPods(ctx context.Context, target domain.DeploymentTarget, 
 		for _, status := range pod.Status.ContainerStatuses {
 			restarts += status.RestartCount
 		}
-		result = append(result, PodSummary{Name: pod.Name, UID: string(pod.UID), Phase: string(pod.Status.Phase), Ready: ready, Restarts: restarts, CreatedAt: pod.CreationTimestamp.UTC()})
+		result = append(
+			result,
+			PodSummary{
+				Name:      pod.Name,
+				UID:       string(pod.UID),
+				Phase:     string(pod.Status.Phase),
+				Ready:     ready,
+				Restarts:  restarts,
+				CreatedAt: pod.CreationTimestamp.UTC(),
+			},
+		)
 	}
 	slices.SortFunc(result, func(a, b PodSummary) int { return cmp.Compare(a.Name, b.Name) })
 	truncated := len(result) > limit
@@ -255,7 +277,9 @@ func (s *Service) PodEvents(ctx context.Context, target domain.DeploymentTarget,
 	for _, replicaSet := range replicaSets {
 		owned[replicaSet.UID] = struct{}{}
 	}
-	pods, err := s.client.CoreV1().Pods(target.Namespace()).List(ctx, metav1.ListOptions{FieldSelector: fields.OneTermEqualSelector("metadata.name", podName).String()})
+	pods, err := s.client.CoreV1().
+		Pods(target.Namespace()).
+		List(ctx, metav1.ListOptions{FieldSelector: fields.OneTermEqualSelector("metadata.name", podName).String()})
 	if err != nil {
 		return nil, false, fmt.Errorf("list deployment pod: %w", err)
 	}
@@ -276,7 +300,9 @@ func (s *Service) PodEvents(ctx context.Context, target domain.DeploymentTarget,
 	if _, ok := owned[owner.UID]; !ok {
 		return nil, false, &domain.NotFoundError{Resource: "deployment pod", ID: podName}
 	}
-	events, err := s.client.CoreV1().Events(target.Namespace()).List(ctx, metav1.ListOptions{FieldSelector: fields.OneTermEqualSelector("involvedObject.uid", string(pod.UID)).String()})
+	events, err := s.client.CoreV1().
+		Events(target.Namespace()).
+		List(ctx, metav1.ListOptions{FieldSelector: fields.OneTermEqualSelector("involvedObject.uid", string(pod.UID)).String()})
 	if err != nil {
 		return nil, false, fmt.Errorf("list pod events: %w", err)
 	}
@@ -305,7 +331,16 @@ func (s *Service) GetRolloutStatus(ctx context.Context, target domain.Deployment
 	if err != nil {
 		return RolloutStatus{}, err
 	}
-	return RolloutStatus{Revision: revision, DesiredReplicas: desiredReplicas(deployment), UpdatedReplicas: int(deployment.Status.UpdatedReplicas), ReadyReplicas: int(deployment.Status.ReadyReplicas), AvailableReplicas: int(deployment.Status.AvailableReplicas), ObservedGeneration: deployment.Status.ObservedGeneration, Generation: deployment.Generation, Complete: rolloutComplete(deployment)}, nil
+	return RolloutStatus{
+		Revision:           revision,
+		DesiredReplicas:    desiredReplicas(deployment),
+		UpdatedReplicas:    int(deployment.Status.UpdatedReplicas),
+		ReadyReplicas:      int(deployment.Status.ReadyReplicas),
+		AvailableReplicas:  int(deployment.Status.AvailableReplicas),
+		ObservedGeneration: deployment.Status.ObservedGeneration,
+		Generation:         deployment.Generation,
+		Complete:           rolloutComplete(deployment),
+	}, nil
 }
 
 func (s *Service) WatchRollout(ctx context.Context, target domain.DeploymentTarget, expected domain.Revision) (RolloutStatus, error) {
@@ -338,7 +373,8 @@ func (s *Service) PrepareRollback(ctx context.Context, proposal domain.RollbackP
 	if err != nil {
 		return err
 	}
-	if evidence.CurrentRevision != proposal.CurrentRevision() || evidence.PreviousStableRevision != proposal.TargetRevision() || evidence.CurrentRevision == evidence.PreviousStableRevision {
+	if evidence.CurrentRevision != proposal.CurrentRevision() || evidence.PreviousStableRevision != proposal.TargetRevision() ||
+		evidence.CurrentRevision == evidence.PreviousStableRevision {
 		return ErrRevisionDrift
 	}
 	return nil
@@ -386,14 +422,22 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 		return MutationResult{}, err
 	}
 	fresh := domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: currentRevision}
-	if _, err := domain.AuthorizeRollback(proposal, attempt.Approved.PolicyDecision(), attempt.Approved.Approval(), fresh, attempt.Mutation.StartedAt()); err != nil {
+	if _, err := domain.AuthorizeRollback(
+		proposal,
+		attempt.Approved.PolicyDecision(),
+		attempt.Approved.Approval(),
+		fresh,
+		attempt.Mutation.StartedAt(),
+	); err != nil {
 		return MutationResult{}, err
 	}
 	patch, err := rollbackPatch(deployment.ResourceVersion, stable.Spec.Template)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	if _, err := s.client.AppsV1().Deployments(proposal.Target().Namespace()).Patch(ctx, proposal.Target().Deployment(), types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+	if _, err := s.client.AppsV1().
+		Deployments(proposal.Target().Namespace()).
+		Patch(ctx, proposal.Target().Deployment(), types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		if apierrors.IsConflict(err) {
 			if releaseErr := s.guard.Release(ctx, attempt); releaseErr != nil {
 				return MutationResult{}, releaseErr
@@ -538,7 +582,11 @@ func rolloutComplete(deployment *appsv1.Deployment) bool {
 	if deployment.Spec.Replicas != nil {
 		desired = *deployment.Spec.Replicas
 	}
-	if deployment.Spec.Paused || deployment.Status.ObservedGeneration < deployment.Generation || deployment.Status.Replicas != desired || deployment.Status.UpdatedReplicas != desired || deployment.Status.ReadyReplicas != desired || deployment.Status.AvailableReplicas != desired || deployment.Status.UnavailableReplicas != 0 {
+	if deployment.Spec.Paused || deployment.Status.ObservedGeneration < deployment.Generation || deployment.Status.Replicas != desired ||
+		deployment.Status.UpdatedReplicas != desired ||
+		deployment.Status.ReadyReplicas != desired ||
+		deployment.Status.AvailableReplicas != desired ||
+		deployment.Status.UnavailableReplicas != 0 {
 		return false
 	}
 	for _, condition := range deployment.Status.Conditions {

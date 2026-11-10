@@ -92,7 +92,13 @@ func (c *Client) Observe(ctx context.Context, target domain.DeploymentTarget, sy
 	if symptom.Unit() != sample.Unit {
 		return domain.MetricEvidence{}, &domain.ValidationError{Field: "symptom.unit", Reason: "does not match metric kind"}
 	}
-	return domain.MetricEvidence{Name: symptom.Kind().String(), Value: sample.Value, Threshold: symptom.Threshold(), Unit: sample.Unit, ObservedAt: sample.ObservedAt}, nil
+	return domain.MetricEvidence{
+		Name:       symptom.Kind().String(),
+		Value:      sample.Value,
+		Threshold:  symptom.Threshold(),
+		Unit:       sample.Unit,
+		ObservedAt: sample.ObservedAt,
+	}, nil
 }
 
 func (c *Client) QueryMetric(ctx context.Context, target domain.DeploymentTarget, request QueryRequest) (MetricSample, error) {
@@ -165,7 +171,14 @@ func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (st
 		if request.Percentile != 0.50 && request.Percentile != 0.95 && request.Percentile != 0.99 {
 			return "", "", &domain.ValidationError{Field: "percentile", Reason: "must be p50, p95, or p99"}
 		}
-		return fmt.Sprintf("histogram_quantile(%g, sum by (le) (rate(%s_bucket{%s}[%s]%s)))", request.Percentile, SeriesRequestDuration, matchers, window, offset), "seconds", nil
+		return fmt.Sprintf(
+			"histogram_quantile(%g, sum by (le) (rate(%s_bucket{%s}[%s]%s)))",
+			request.Percentile,
+			SeriesRequestDuration,
+			matchers,
+			window,
+			offset,
+		), "seconds", nil
 	case domain.SymptomPodCPUUsage:
 		return "sum(" + SeriesPodCPUUsage + "{" + matchers + "}" + offset + ")", "cores", nil
 	case domain.SymptomPodMemoryUsage:
@@ -193,7 +206,13 @@ func (c *Client) sourceFreshnessQuery(target domain.DeploymentTarget, kind domai
 }
 
 func targetMatchers(target domain.DeploymentTarget) string {
-	return fmt.Sprintf("cluster=%s,namespace=%s,deployment=%s,service=%s", quote(target.Cluster()), quote(target.Namespace()), quote(target.Deployment()), quote(target.Service()))
+	return fmt.Sprintf(
+		"cluster=%s,namespace=%s,deployment=%s,service=%s",
+		quote(target.Cluster()),
+		quote(target.Namespace()),
+		quote(target.Deployment()),
+		quote(target.Service()),
+	)
 }
 
 func (c *Client) singleSample(value model.Value, now time.Time) (*model.Sample, error) {

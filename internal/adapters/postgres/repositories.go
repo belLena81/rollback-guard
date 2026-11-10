@@ -74,7 +74,22 @@ func scanIncident(row incidentScanner) (domain.Incident, error) {
 	var observed, threshold float64
 	var symptomStartedAt, createdAt, updatedAt time.Time
 	var version uint64
-	if err := row.Scan(&id, &cluster, &namespace, &deployment, &service, &symptomKind, &observed, &threshold, &symptomUnit, &symptomStartedAt, &statusValue, &version, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(
+		&id,
+		&cluster,
+		&namespace,
+		&deployment,
+		&service,
+		&symptomKind,
+		&observed,
+		&threshold,
+		&symptomUnit,
+		&symptomStartedAt,
+		&statusValue,
+		&version,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
 		return domain.Incident{}, mapError(err, "incident", id)
 	}
 	target, err := domain.NewDeploymentTarget(cluster, namespace, deployment, service)
@@ -157,7 +172,19 @@ func (repo conclusionRepo) Save(conclusion domain.InvestigationConclusion) error
 			requested_strategy, model, prompt_version, input_tokens, output_tokens, fallback_reason, created_at
 		)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-	`, s.ID, s.IncidentID, strategyText(s.Strategy), s.Hypothesis, s.Confidence, recommendationText(s.Recommendation), strategyText(s.Provenance.RequestedStrategy), s.Provenance.Model, s.Provenance.PromptVersion, s.Provenance.InputTokens, s.Provenance.OutputTokens, fallbackReason, s.CreatedAt)
+	`, s.ID,
+		s.IncidentID,
+		strategyText(s.Strategy),
+		s.Hypothesis,
+		s.Confidence,
+		recommendationText(s.Recommendation),
+		strategyText(s.Provenance.RequestedStrategy),
+		s.Provenance.Model,
+		s.Provenance.PromptVersion,
+		s.Provenance.InputTokens,
+		s.Provenance.OutputTokens,
+		fallbackReason,
+		s.CreatedAt)
 	if err != nil {
 		return mapError(err, "conclusion", string(s.ID))
 	}
@@ -200,7 +227,21 @@ func (repo conclusionRepo) Get(id domain.IncidentID) (domain.InvestigationConclu
 	var fallbackReasonValue *string
 	var confidence float64
 	var createdAt time.Time
-	if err := row.Scan(&conclusionID, &incidentID, &strategyValue, &hypothesis, &confidence, &recommendationValue, &requestedStrategyValue, &model, &promptVersion, &inputTokens, &outputTokens, &fallbackReasonValue, &createdAt); err != nil {
+	if err := row.Scan(
+		&conclusionID,
+		&incidentID,
+		&strategyValue,
+		&hypothesis,
+		&confidence,
+		&recommendationValue,
+		&requestedStrategyValue,
+		&model,
+		&promptVersion,
+		&inputTokens,
+		&outputTokens,
+		&fallbackReasonValue,
+		&createdAt,
+	); err != nil {
 		return domain.InvestigationConclusion{}, mapError(err, "conclusion", string(id))
 	}
 	rows, err := repo.r.tx.Query(repo.r.ctx, `
@@ -368,7 +409,8 @@ func (repo approvalRepo) Save(approval domain.Approval) error {
 	_, err = repo.r.tx.Exec(repo.r.ctx, `
 		INSERT INTO approvals (id, incident_id, actor_id, actor_kind, decision, action_id, proposal_hash, decided_at, expires_at, rejection_reason)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`, s.ID, incidentID, s.Actor.ID(), actorKindText(s.Actor.Kind()), approvalDecisionText(s.Decision), s.ActionID, s.ProposalHash, s.DecidedAt, s.ExpiresAt, s.RejectionReason)
+	`, s.ID, incidentID, s.Actor.ID(), actorKindText(s.Actor.Kind()), approvalDecisionText(s.Decision),
+		s.ActionID, s.ProposalHash, s.DecidedAt, s.ExpiresAt, s.RejectionReason)
 	return mapError(err, "approval", string(s.ID))
 }
 
@@ -423,7 +465,9 @@ func (repo executionRepo) Save(execution domain.RollbackExecution) error {
 	if err != nil {
 		return mapError(err, "execution", string(s.ID))
 	}
-	if state != domain.IdempotencyPending.String() || requestHash != proposalHash || resourceID != string(s.IncidentID) || currentRevision != string(s.FromRevision) || targetRevision != string(s.ToRevision) {
+	if state != domain.IdempotencyPending.String() || requestHash != proposalHash || resourceID != string(s.IncidentID) ||
+		currentRevision != string(s.FromRevision) ||
+		targetRevision != string(s.ToRevision) {
 		return &domain.ValidationError{Field: "execution", Reason: "does not match pending approved rollback"}
 	}
 	_, err = repo.r.tx.Exec(repo.r.ctx, `
@@ -450,7 +494,8 @@ func (repo executionRepo) GetByIncident(id domain.IncidentID) (domain.RollbackEx
 func (repo executionRepo) getByQuery(query string, id string, resource string) (domain.RollbackExecution, error) {
 	var executionID, incidentID, key, fromRevision, toRevision, outcomeValue, reason string
 	var startedAt, completedAt time.Time
-	err := repo.r.tx.QueryRow(repo.r.ctx, query, id).Scan(&executionID, &incidentID, &key, &fromRevision, &toRevision, &outcomeValue, &startedAt, &completedAt, &reason)
+	err := repo.r.tx.QueryRow(repo.r.ctx, query, id).
+		Scan(&executionID, &incidentID, &key, &fromRevision, &toRevision, &outcomeValue, &startedAt, &completedAt, &reason)
 	if err != nil {
 		return domain.RollbackExecution{}, mapError(err, resource, id)
 	}
@@ -616,7 +661,8 @@ func (repo eventRepo) Append(event domain.OperationEvent) error {
 		INSERT INTO operation_events (id, incident_id, sequence, kind, occurred_at, actor_id, actor_kind, detail)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		ON CONFLICT (incident_id, sequence) DO NOTHING
-	`, event.ID(), event.IncidentID(), event.Sequence(), eventKindText(event.Kind()), event.OccurredAt(), event.Actor().ID(), actorKindText(event.Actor().Kind()), payload)
+	`, event.ID(), event.IncidentID(), event.Sequence(), eventKindText(event.Kind()), event.OccurredAt(),
+		event.Actor().ID(), actorKindText(event.Actor().Kind()), payload)
 	if err != nil {
 		return mapError(err, "event", string(event.ID()))
 	}
@@ -624,7 +670,8 @@ func (repo eventRepo) Append(event domain.OperationEvent) error {
 		return nil
 	}
 	var latest uint64
-	if err := repo.r.tx.QueryRow(repo.r.ctx, `SELECT COALESCE(MAX(sequence), 0) FROM operation_events WHERE incident_id = $1`, event.IncidentID()).Scan(&latest); err != nil {
+	if err := repo.r.tx.QueryRow(repo.r.ctx, `SELECT COALESCE(MAX(sequence), 0) FROM operation_events WHERE incident_id = $1`, event.IncidentID()).
+		Scan(&latest); err != nil {
 		return fmt.Errorf("load latest event sequence after conflict: %w", err)
 	}
 	return &domain.VersionConflictError{Expected: latest + 1, Actual: event.Sequence()}

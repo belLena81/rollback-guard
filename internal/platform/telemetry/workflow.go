@@ -31,7 +31,10 @@ func (u *observedUnitOfWork) WithinTransaction(ctx context.Context, fn func(port
 	err := u.next.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		// A unit of work may invoke fn more than once; only the last
 		// invocation can commit.
-		pending = &transactionObservations{terminalIncidents: map[domain.IncidentID]bool{}, dispatchStates: map[domain.IncidentID]domain.InvestigationTaskState{}}
+		pending = &transactionObservations{
+			terminalIncidents: map[domain.IncidentID]bool{},
+			dispatchStates:    map[domain.IncidentID]domain.InvestigationTaskState{},
+		}
 		return fn(observedRepositories{Repositories: repositories, observations: pending})
 	})
 	if err == nil && pending != nil {

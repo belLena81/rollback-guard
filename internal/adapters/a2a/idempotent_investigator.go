@@ -84,7 +84,14 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 		return ports.InvestigationResult{}, fmt.Errorf("claim investigation request: %w", err)
 	}
 	if !claimed {
-		reclaimed, reclaimErr := i.ledger.Reclaim(ctx, request.IdempotencyKey, request.RequestHash, request.TaskID, i.clock.Now().UTC(), i.clock.Now().UTC().Add(-i.staleAfter))
+		reclaimed, reclaimErr := i.ledger.Reclaim(
+			ctx,
+			request.IdempotencyKey,
+			request.RequestHash,
+			request.TaskID,
+			i.clock.Now().UTC(),
+			i.clock.Now().UTC().Add(-i.staleAfter),
+		)
 		if reclaimErr != nil {
 			return ports.InvestigationResult{}, reclaimErr
 		}

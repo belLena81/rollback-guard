@@ -36,11 +36,23 @@ type ServerConfig struct {
 func AgentCard(publicURL string) *a2a.AgentCard {
 	extension := a2a.AgentExtension{URI: ExtensionURI, Description: "Rollback Guardian typed investigation contract", Required: true}
 	return &a2a.AgentCard{
-		Name: "Rollback Guardian Investigator", Description: "Collects Kubernetes rollout evidence and returns a deterministic diagnosis input", Version: SchemaVersion,
+		Name:                "Rollback Guardian Investigator",
+		Description:         "Collects Kubernetes rollout evidence and returns a deterministic diagnosis input",
+		Version:             SchemaVersion,
 		SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(strings.TrimRight(publicURL, "/")+"/a2a", a2a.TransportProtocolHTTPJSON)},
 		Capabilities:        a2a.AgentCapabilities{Streaming: true, Extensions: []a2a.AgentExtension{extension}},
-		DefaultInputModes:   []string{JSONMediaType}, DefaultOutputModes: []string{JSONMediaType},
-		Skills: []a2a.AgentSkill{{ID: "investigate_rollout", Name: "Investigate rollout", Description: "Collect rollout and metric evidence and diagnose the incident", Tags: []string{"kubernetes", "rollback", "investigation"}, InputModes: []string{JSONMediaType}, OutputModes: []string{JSONMediaType}}},
+		DefaultInputModes:   []string{JSONMediaType},
+		DefaultOutputModes:  []string{JSONMediaType},
+		Skills: []a2a.AgentSkill{
+			{
+				ID:          "investigate_rollout",
+				Name:        "Investigate rollout",
+				Description: "Collect rollout and metric evidence and diagnose the incident",
+				Tags:        []string{"kubernetes", "rollback", "investigation"},
+				InputModes:  []string{JSONMediaType},
+				OutputModes: []string{JSONMediaType},
+			},
+		},
 	}
 }
 
@@ -65,7 +77,13 @@ func NewServerHandler(investigator ports.Investigator, store taskstore.Store, lo
 	}
 	card := AgentCard(config.PublicURL)
 	executor := &investigationExecutor{investigator: investigator, timeout: config.TaskTimeout, logger: logger, tracer: config.Tracer}
-	handler := a2asrv.NewHandler(executor, a2asrv.WithTaskStore(store), a2asrv.WithCapabilityChecks(&card.Capabilities), a2asrv.WithAgentInactivityTimeout(config.TaskTimeout), a2asrv.WithLogger(logger))
+	handler := a2asrv.NewHandler(
+		executor,
+		a2asrv.WithTaskStore(store),
+		a2asrv.WithCapabilityChecks(&card.Capabilities),
+		a2asrv.WithAgentInactivityTimeout(config.TaskTimeout),
+		a2asrv.WithLogger(logger),
+	)
 	rest := http.MaxBytesHandler(a2asrv.NewRESTHandler(handler), config.MaxRequestBytes)
 	mux := http.NewServeMux()
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
@@ -103,7 +121,8 @@ func (e *investigationExecutor) Execute(ctx context.Context, execCtx *a2asrv.Exe
 		if execCtx.StoredTask == nil && !yield(a2a.NewSubmittedTask(execCtx, execCtx.Message), nil) {
 			return
 		}
-		if execCtx.Message == nil || len(execCtx.Message.Parts) != 1 || execCtx.Message.Parts[0].Data() == nil || execCtx.Message.Parts[0].MediaType != JSONMediaType {
+		if execCtx.Message == nil || len(execCtx.Message.Parts) != 1 || execCtx.Message.Parts[0].Data() == nil ||
+			execCtx.Message.Parts[0].MediaType != JSONMediaType {
 			yield(failedEvent(execCtx, "invalid_request"), nil)
 			return
 		}
@@ -114,7 +133,11 @@ func (e *investigationExecutor) Execute(ctx context.Context, execCtx *a2asrv.Exe
 			return
 		}
 		var correlation correlationDTO
-		if err := strictDecode(execCtx.Metadata[ExtensionURI], &correlation); err != nil || correlation.SchemaVersion != SchemaVersion || correlation.IdempotencyKey == "" || correlation.RequestHash == "" {
+		if err := strictDecode(
+			execCtx.Metadata[ExtensionURI],
+			&correlation,
+		); err != nil || correlation.SchemaVersion != SchemaVersion || correlation.IdempotencyKey == "" ||
+			correlation.RequestHash == "" {
 			e.logger.WarnContext(ctx, "rejected investigation correlation metadata", "error", err)
 			yield(failedEvent(execCtx, "invalid_correlation"), nil)
 			return
@@ -129,7 +152,16 @@ func (e *investigationExecutor) Execute(ctx context.Context, execCtx *a2asrv.Exe
 		request.OperationID = correlation.OperationID
 		request.TaskID = string(execCtx.TaskID)
 		request.TraceID = correlation.TraceID
-		ctx = ports.WithCorrelation(ctx, ports.Correlation{IncidentID: request.Incident.ID(), OperationID: request.OperationID, TaskID: request.TaskID, TraceID: request.TraceID, IdempotencyKey: request.IdempotencyKey})
+		ctx = ports.WithCorrelation(
+			ctx,
+			ports.Correlation{
+				IncidentID:     request.Incident.ID(),
+				OperationID:    request.OperationID,
+				TaskID:         request.TaskID,
+				TraceID:        request.TraceID,
+				IdempotencyKey: request.IdempotencyKey,
+			},
+		)
 		ctx, endSpan := e.tracer.StartSpan(ctx, "investigation.execute", request.TraceID)
 		var executeErr error
 		defer func() { endSpan(executeErr) }()
@@ -162,7 +194,14 @@ func (e *investigationExecutor) Execute(ctx context.Context, execCtx *a2asrv.Exe
 			yield(failedEvent(execCtx, "encoding_failed"), nil)
 			return
 		}
-		e.logger.InfoContext(ctx, "investigation task completed", "recommendation", result.Conclusion.Recommendation().String(), "strategy", result.Conclusion.Strategy().String())
+		e.logger.InfoContext(
+			ctx,
+			"investigation task completed",
+			"recommendation",
+			result.Conclusion.Recommendation().String(),
+			"strategy",
+			result.Conclusion.Strategy().String(),
+		)
 		part := a2a.NewDataPart(data)
 		part.MediaType = JSONMediaType
 		artifact := a2a.NewArtifactEvent(execCtx, part)

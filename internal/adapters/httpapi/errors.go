@@ -25,7 +25,16 @@ const (
 	codeInternal               = "internal_error"
 )
 
-var errorCodes = []string{codeValidation, codeInvalidJSON, codeUnauthenticated, codeForbidden, codeNotFound, codeConflict, codeRollbackOutcomeUnknown, codeInternal}
+var errorCodes = []string{
+	codeValidation,
+	codeInvalidJSON,
+	codeUnauthenticated,
+	codeForbidden,
+	codeNotFound,
+	codeConflict,
+	codeRollbackOutcomeUnknown,
+	codeInternal,
+}
 
 type errorDTO struct {
 	Error     string `json:"error"`

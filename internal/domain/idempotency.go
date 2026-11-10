@@ -52,11 +52,23 @@ type IdempotencyRecord struct {
 	completedAt time.Time
 }
 
-func NewPendingIdempotencyRecord(key IdempotencyKey, operation IdempotencyOperation, requestHash, resourceID string, startedAt time.Time) (IdempotencyRecord, error) {
+func NewPendingIdempotencyRecord(
+	key IdempotencyKey,
+	operation IdempotencyOperation,
+	requestHash, resourceID string,
+	startedAt time.Time,
+) (IdempotencyRecord, error) {
 	if key == "" || !operation.Valid() || requestHash == "" || resourceID == "" || startedAt.IsZero() {
 		return IdempotencyRecord{}, invalid("idempotency_record", "invalid pending record")
 	}
-	return IdempotencyRecord{key: key, operation: operation, requestHash: requestHash, resourceID: resourceID, state: IdempotencyPending, startedAt: startedAt.UTC()}, nil
+	return IdempotencyRecord{
+		key:         key,
+		operation:   operation,
+		requestHash: requestHash,
+		resourceID:  resourceID,
+		state:       IdempotencyPending,
+		startedAt:   startedAt.UTC(),
+	}, nil
 }
 
 func (r IdempotencyRecord) Complete(resultID ExecutionID, completedAt time.Time) (IdempotencyRecord, error) {

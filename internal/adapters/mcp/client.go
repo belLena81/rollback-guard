@@ -66,7 +66,11 @@ func Connect(ctx context.Context, endpoint string, httpClient *http.Client, clie
 		return nil, errors.New("MCP client name is required")
 	}
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: clientName, Version: buildinfo.Version}, nil)
-	session, err := client.Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
+	session, err := client.Connect(
+		ctx,
+		&mcpsdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient, MaxRetries: -1, DisableStandaloneSSE: true},
+		nil,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connect MCP client: %w", err)
 	}

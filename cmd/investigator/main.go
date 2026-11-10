@@ -184,7 +184,14 @@ func buildServices(cfg config.InvestigatorConfig, pool *pgxpool.Pool, clients mc
 }
 
 // buildHTTP assembles the A2A server with durable task storage.
-func buildHTTP(cfg config.InvestigatorConfig, investigator ports.Investigator, pool *pgxpool.Pool, ready httpserver.ReadyCheck, tel *telemetry.Provider, logger *slog.Logger) (http.Handler, error) {
+func buildHTTP(
+	cfg config.InvestigatorConfig,
+	investigator ports.Investigator,
+	pool *pgxpool.Pool,
+	ready httpserver.ReadyCheck,
+	tel *telemetry.Provider,
+	logger *slog.Logger,
+) (http.Handler, error) {
 	records, err := postgres.NewA2ATaskRecords(pool)
 	if err != nil {
 		return nil, err
@@ -210,7 +217,12 @@ func buildHTTP(cfg config.InvestigatorConfig, investigator ports.Investigator, p
 // newDiagnoser builds the configured strategy. The LLM is wrapped in retry
 // and a circuit breaker; an open breaker reads as an unavailable provider, so
 // the rule diagnoser stays in charge. observer may be nil.
-func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, providerHTTPClient *http.Client, observer resilience.Observer) (ports.Diagnoser, error) {
+func newDiagnoser(
+	cfg config.InvestigatorConfig,
+	ids ports.IDGenerator,
+	providerHTTPClient *http.Client,
+	observer resilience.Observer,
+) (ports.Diagnoser, error) {
 	rules, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: cfg.RuleCorrelationWindow})
 	if err != nil {
 		return nil, err

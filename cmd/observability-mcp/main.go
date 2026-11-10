@@ -90,7 +90,13 @@ func buildServices(cfg config.ObservabilityMCPConfig, api promv1.API, observer r
 
 // buildHTTP assembles the MCP server; readiness is bounded like any other
 // Prometheus request.
-func buildHTTP(cfg config.ObservabilityMCPConfig, backend observabilityserver.Backend, ready httpserver.ReadyCheck, tel *telemetry.Provider, logger *slog.Logger) (http.Handler, error) {
+func buildHTTP(
+	cfg config.ObservabilityMCPConfig,
+	backend observabilityserver.Backend,
+	ready httpserver.ReadyCheck,
+	tel *telemetry.Provider,
+	logger *slog.Logger,
+) (http.Handler, error) {
 	handler, err := observabilityserver.NewHTTPHandler(backend, ready, cfg.SessionTimeout, logger,
 		protocol.WithMetricsHandler(tel.MetricsHandler()),
 		protocol.WithToolObserver(protocol.ServerObservability, tel),

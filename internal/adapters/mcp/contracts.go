@@ -86,10 +86,10 @@ func Success[T any](data T) Response[T] {
 }
 
 type Target struct {
-	Cluster    string `json:"cluster" jsonschema:"cluster identifier"`
-	Namespace  string `json:"namespace" jsonschema:"Kubernetes namespace"`
+	Cluster    string `json:"cluster"    jsonschema:"cluster identifier"`
+	Namespace  string `json:"namespace"  jsonschema:"Kubernetes namespace"`
 	Deployment string `json:"deployment" jsonschema:"Kubernetes Deployment name"`
-	Service    string `json:"service" jsonschema:"service metric label"`
+	Service    string `json:"service"    jsonschema:"service metric label"`
 }
 
 func TargetFromDomain(target domain.DeploymentTarget) Target {

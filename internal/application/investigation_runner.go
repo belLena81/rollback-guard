@@ -17,7 +17,13 @@ type InvestigationRunner struct {
 	ids       ports.IDGenerator
 }
 
-func NewInvestigationRunner(inspector ports.DeploymentInspector, metrics ports.MetricsPort, diagnoser ports.Diagnoser, clock ports.Clock, ids ports.IDGenerator) (*InvestigationRunner, error) {
+func NewInvestigationRunner(
+	inspector ports.DeploymentInspector,
+	metrics ports.MetricsPort,
+	diagnoser ports.Diagnoser,
+	clock ports.Clock,
+	ids ports.IDGenerator,
+) (*InvestigationRunner, error) {
 	if inspector == nil || metrics == nil || diagnoser == nil || clock == nil || ids == nil {
 		return nil, errors.New("all investigation runner dependencies are required")
 	}
@@ -56,7 +62,10 @@ func (r *InvestigationRunner) Investigate(ctx context.Context, request ports.Inv
 	if err := reportInvestigationProgress(request.Progress, domain.InvestigationStageDiagnosis); err != nil {
 		return ports.InvestigationResult{}, err
 	}
-	conclusion, err := r.diagnoser.Diagnose(ctx, ports.InvestigationInput{Incident: incident, Deployment: deployment, Metric: metric, Evidence: evidence, Now: now})
+	conclusion, err := r.diagnoser.Diagnose(
+		ctx,
+		ports.InvestigationInput{Incident: incident, Deployment: deployment, Metric: metric, Evidence: evidence, Now: now},
+	)
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("diagnose incident: %w", err)
 	}

@@ -37,7 +37,13 @@ type investigationWatchResult struct {
 	err    error
 }
 
-func NewInvestigationCoordinator(uow ports.UnitOfWork, gateway ports.InvestigationGateway, investigations *InvestigationService, clock ports.Clock, config InvestigationCoordinatorConfig) (*InvestigationCoordinator, error) {
+func NewInvestigationCoordinator(
+	uow ports.UnitOfWork,
+	gateway ports.InvestigationGateway,
+	investigations *InvestigationService,
+	clock ports.Clock,
+	config InvestigationCoordinatorConfig,
+) (*InvestigationCoordinator, error) {
 	if uow == nil || gateway == nil || investigations == nil || clock == nil {
 		return nil, errors.New("all investigation coordinator dependencies are required")
 	}
@@ -89,7 +95,16 @@ func (c *InvestigationCoordinator) processNext(ctx context.Context) (context.Con
 	if err != nil {
 		return ctx, err
 	}
-	ctx = ports.WithCorrelation(ctx, ports.Correlation{IncidentID: dispatch.IncidentID, OperationID: dispatch.OperationID, TaskID: dispatch.Ref.TaskID, TraceID: dispatch.TraceID, IdempotencyKey: dispatch.IdempotencyKey})
+	ctx = ports.WithCorrelation(
+		ctx,
+		ports.Correlation{
+			IncidentID:     dispatch.IncidentID,
+			OperationID:    dispatch.OperationID,
+			TaskID:         dispatch.Ref.TaskID,
+			TraceID:        dispatch.TraceID,
+			IdempotencyKey: dispatch.IdempotencyKey,
+		},
+	)
 	ctx, end := c.config.Tracer.StartSpan(ctx, "investigation.dispatch", dispatch.TraceID)
 	err = c.drive(ctx, dispatch, incident)
 	end(err)
@@ -145,14 +160,28 @@ func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch domain.In
 // task on the dispatch. done reports that the drive is over, with err as its
 // outcome: the submission failed (and was retried or failed for good) or the
 // dispatch was canceled meanwhile. Otherwise it returns the updated dispatch.
-func (c *InvestigationCoordinator) submit(ctx, taskCtx context.Context, dispatch domain.InvestigationDispatch, incident domain.Incident) (domain.InvestigationDispatch, bool, error) {
+func (c *InvestigationCoordinator) submit(
+	ctx, taskCtx context.Context,
+	dispatch domain.InvestigationDispatch,
+	incident domain.Incident,
+) (domain.InvestigationDispatch, bool, error) {
 	// Hand the Investigator the trace context of this dispatch span so a
 	// detached task execution still joins the incident's trace.
 	traceID := c.config.Tracer.TraceCarrier(ctx)
 	if traceID == "" {
 		traceID = dispatch.TraceID
 	}
-	ref, err := c.gateway.Submit(taskCtx, ports.InvestigationSubmission{Incident: incident, OperationID: dispatch.OperationID, IdempotencyKey: dispatch.IdempotencyKey, MessageID: dispatch.MessageID, TraceID: traceID, RequestHash: dispatch.RequestHash})
+	ref, err := c.gateway.Submit(
+		taskCtx,
+		ports.InvestigationSubmission{
+			Incident:       incident,
+			OperationID:    dispatch.OperationID,
+			IdempotencyKey: dispatch.IdempotencyKey,
+			MessageID:      dispatch.MessageID,
+			TraceID:        traceID,
+			RequestHash:    dispatch.RequestHash,
+		},
+	)
 	if err != nil {
 		if dispatch.Attempts < c.config.MaxAttempts {
 			return dispatch, true, c.retryOrCancel(ctx, dispatch, ref, false, err)
@@ -172,7 +201,13 @@ func (c *InvestigationCoordinator) submit(ctx, taskCtx context.Context, dispatch
 
 // retryOrCancel schedules another attempt and returns cause. If cancellation
 // was requested meanwhile it cancels the investigation instead.
-func (c *InvestigationCoordinator) retryOrCancel(ctx context.Context, dispatch domain.InvestigationDispatch, ref domain.InvestigationTaskRef, submitted bool, cause error) error {
+func (c *InvestigationCoordinator) retryOrCancel(
+	ctx context.Context,
+	dispatch domain.InvestigationDispatch,
+	ref domain.InvestigationTaskRef,
+	submitted bool,
+	cause error,
+) error {
 	retryErr := c.retry(ctx, dispatch.IncidentID, submitted)
 	if errors.Is(retryErr, domain.ErrInvestigationCancellationRequested) {
 		return c.cancelLatestInvestigation(ctx, dispatch, ref)
@@ -186,7 +221,12 @@ func (c *InvestigationCoordinator) retryOrCancel(ctx context.Context, dispatch d
 // handleWatchFailure decides what a failed watch means: shutdown, a
 // cancellation requested meanwhile, another attempt, or a failed
 // investigation (after canceling the remote task).
-func (c *InvestigationCoordinator) handleWatchFailure(ctx, taskCtx context.Context, dispatch domain.InvestigationDispatch, ref domain.InvestigationTaskRef, watchErr error) error {
+func (c *InvestigationCoordinator) handleWatchFailure(
+	ctx, taskCtx context.Context,
+	dispatch domain.InvestigationDispatch,
+	ref domain.InvestigationTaskRef,
+	watchErr error,
+) error {
 	if errors.Is(ctx.Err(), context.Canceled) && errors.Is(taskCtx.Err(), context.Canceled) {
 		return ctx.Err()
 	}
@@ -224,7 +264,12 @@ func (c *InvestigationCoordinator) finish(ctx context.Context, dispatch domain.I
 	return c.fail(ctx, dispatch.IncidentID, "invalid_investigation_result", err)
 }
 
-func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskCtx context.Context, dispatch domain.InvestigationDispatch, ref domain.InvestigationTaskRef) (ports.InvestigationResult, bool, error) {
+func (c *InvestigationCoordinator) watchInvestigation(
+	ctx context.Context,
+	taskCtx context.Context,
+	dispatch domain.InvestigationDispatch,
+	ref domain.InvestigationTaskRef,
+) (ports.InvestigationResult, bool, error) {
 	watchCtx, cancelWatch := context.WithCancel(taskCtx)
 	defer cancelWatch()
 	completed := make(chan investigationWatchResult, 1)
@@ -274,7 +319,11 @@ func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskC
 	}
 }
 
-func (c *InvestigationCoordinator) attachTaskRef(ctx context.Context, incidentID domain.IncidentID, ref domain.InvestigationTaskRef) (domain.InvestigationDispatch, error) {
+func (c *InvestigationCoordinator) attachTaskRef(
+	ctx context.Context,
+	incidentID domain.IncidentID,
+	ref domain.InvestigationTaskRef,
+) (domain.InvestigationDispatch, error) {
 	for {
 		var updated domain.InvestigationDispatch
 		err := c.update(ctx, incidentID, func(task *domain.InvestigationDispatch, now time.Time) error {
@@ -307,7 +356,11 @@ func (c *InvestigationCoordinator) loadDispatch(ctx context.Context, incidentID 
 	return dispatch, err
 }
 
-func (c *InvestigationCoordinator) cancelLatestInvestigation(ctx context.Context, fallback domain.InvestigationDispatch, ref domain.InvestigationTaskRef) error {
+func (c *InvestigationCoordinator) cancelLatestInvestigation(
+	ctx context.Context,
+	fallback domain.InvestigationDispatch,
+	ref domain.InvestigationTaskRef,
+) error {
 	latest, err := c.loadDispatch(ctx, fallback.IncidentID)
 	if err != nil {
 		fallback.Ref = ref
@@ -353,7 +406,11 @@ func (c *InvestigationCoordinator) retry(ctx context.Context, incidentID domain.
 // updateActive applies a transition that the dispatch refuses once
 // cancellation was requested. A version conflict is resolved by looking at
 // the latest dispatch: if cancellation won the race, that is reported instead.
-func (c *InvestigationCoordinator) updateActive(ctx context.Context, incidentID domain.IncidentID, transition func(*domain.InvestigationDispatch, time.Time) error) error {
+func (c *InvestigationCoordinator) updateActive(
+	ctx context.Context,
+	incidentID domain.IncidentID,
+	transition func(*domain.InvestigationDispatch, time.Time) error,
+) error {
 	err := c.update(ctx, incidentID, transition)
 	if !errors.Is(err, domain.ErrVersionConflict) {
 		return err
@@ -367,7 +424,11 @@ func (c *InvestigationCoordinator) updateActive(ctx context.Context, incidentID 
 
 // update loads the dispatch, applies transition, and persists it with the
 // version it loaded.
-func (c *InvestigationCoordinator) update(ctx context.Context, incidentID domain.IncidentID, transition func(*domain.InvestigationDispatch, time.Time) error) error {
+func (c *InvestigationCoordinator) update(
+	ctx context.Context,
+	incidentID domain.IncidentID,
+	transition func(*domain.InvestigationDispatch, time.Time) error,
+) error {
 	now := c.clock.Now()
 	return c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		task, err := repositories.InvestigationTasks().GetByIncident(incidentID)

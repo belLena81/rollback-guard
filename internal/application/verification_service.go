@@ -31,7 +31,12 @@ type VerificationService struct {
 // so the wait continues. If the last allowed check also fails to read, or the
 // context ends, that error is returned. Nothing is persisted here, so on an
 // error the incident stays verifying and a retry of the approval resumes it.
-func (s *VerificationService) awaitRecovery(ctx context.Context, incident domain.Incident, proposal domain.RollbackProposal, execution domain.RollbackExecution) (domain.RecoveryVerification, error) {
+func (s *VerificationService) awaitRecovery(
+	ctx context.Context,
+	incident domain.Incident,
+	proposal domain.RollbackProposal,
+	execution domain.RollbackExecution,
+) (domain.RecoveryVerification, error) {
 	checks := 1
 	if s.recoveryTimeout > 0 {
 		checks += int(s.recoveryTimeout / s.recoveryPollInterval)
@@ -54,7 +59,12 @@ func (s *VerificationService) awaitRecovery(ctx context.Context, incident domain
 
 // checkRecovery reads the deployment and the recovery metric once and
 // evaluates them against the proposal's target revision.
-func (s *VerificationService) checkRecovery(ctx context.Context, incident domain.Incident, proposal domain.RollbackProposal, execution domain.RollbackExecution) (domain.RecoveryVerification, error) {
+func (s *VerificationService) checkRecovery(
+	ctx context.Context,
+	incident domain.Incident,
+	proposal domain.RollbackProposal,
+	execution domain.RollbackExecution,
+) (domain.RecoveryVerification, error) {
 	deployment, err := s.inspector.InspectDeployment(ctx, incident.Target())
 	if err != nil {
 		return domain.RecoveryVerification{}, fmt.Errorf("inspect recovery deployment: %w", err)
@@ -63,7 +73,16 @@ func (s *VerificationService) checkRecovery(ctx context.Context, incident domain
 	if err != nil {
 		return domain.RecoveryVerification{}, fmt.Errorf("observe recovery metric: %w", err)
 	}
-	return domain.EvaluateRecovery(incident.Target(), proposal.TargetRevision(), deployment, metric, incident.Symptom(), incident.ID(), execution.ID(), s.clock.Now())
+	return domain.EvaluateRecovery(
+		incident.Target(),
+		proposal.TargetRevision(),
+		deployment,
+		metric,
+		incident.Symptom(),
+		incident.ID(),
+		execution.ID(),
+		s.clock.Now(),
+	)
 }
 
 // waitFor blocks for d or until ctx ends, whichever comes first.
@@ -118,13 +137,27 @@ func (s *VerificationService) Verify(ctx context.Context, incidentID domain.Inci
 		if err := repositories.Verifications().Save(verification); err != nil {
 			return err
 		}
-		if err := s.appendEvents(repositories, incidentID, now, s.systemEvent(domain.EventVerificationCompleted, domain.VerificationCompletedDetail{Passed: verification.Passed(), Revision: verification.Revision()})); err != nil {
+		if err := s.appendEvents(
+			repositories,
+			incidentID,
+			now,
+			s.systemEvent(
+				domain.EventVerificationCompleted,
+				domain.VerificationCompletedDetail{Passed: verification.Passed(), Revision: verification.Revision()},
+			),
+		); err != nil {
 			return err
 		}
 		if verification.Passed() {
 			_, err = s.transition(repositories, fresh, now, (*domain.Incident).Resolve, statusChanged(s.systemActor))
 		} else {
-			_, err = s.transition(repositories, fresh, now, (*domain.Incident).Fail, terminated(s.systemActor, domain.EventIncidentFailed, verification.FailureReason()))
+			_, err = s.transition(
+				repositories,
+				fresh,
+				now,
+				(*domain.Incident).Fail,
+				terminated(s.systemActor, domain.EventIncidentFailed, verification.FailureReason()),
+			)
 		}
 		return err
 	})

@@ -259,7 +259,16 @@ type InvestigationConclusion struct {
 	createdAt      time.Time
 }
 
-func NewInvestigationConclusion(id ConclusionID, incidentID IncidentID, strategy DiagnosisStrategy, hypothesis string, confidence float64, evidenceIDs []EvidenceID, recommendation Recommendation, now time.Time) (InvestigationConclusion, error) {
+func NewInvestigationConclusion(
+	id ConclusionID,
+	incidentID IncidentID,
+	strategy DiagnosisStrategy,
+	hypothesis string,
+	confidence float64,
+	evidenceIDs []EvidenceID,
+	recommendation Recommendation,
+	now time.Time,
+) (InvestigationConclusion, error) {
 	return NewInvestigationConclusionWithProvenance(
 		id,
 		incidentID,
@@ -273,7 +282,17 @@ func NewInvestigationConclusion(id ConclusionID, incidentID IncidentID, strategy
 	)
 }
 
-func NewInvestigationConclusionWithProvenance(id ConclusionID, incidentID IncidentID, strategy DiagnosisStrategy, hypothesis string, confidence float64, evidenceIDs []EvidenceID, recommendation Recommendation, provenance DiagnosisProvenance, now time.Time) (InvestigationConclusion, error) {
+func NewInvestigationConclusionWithProvenance(
+	id ConclusionID,
+	incidentID IncidentID,
+	strategy DiagnosisStrategy,
+	hypothesis string,
+	confidence float64,
+	evidenceIDs []EvidenceID,
+	recommendation Recommendation,
+	provenance DiagnosisProvenance,
+	now time.Time,
+) (InvestigationConclusion, error) {
 	if id == "" || incidentID == "" || !strategy.Valid() || hypothesis == "" || now.IsZero() {
 		return InvestigationConclusion{}, invalid("conclusion", "required value is empty")
 	}
@@ -297,7 +316,17 @@ func NewInvestigationConclusionWithProvenance(id ConclusionID, incidentID Incide
 	if err := validateDiagnosisProvenance(strategy, provenance); err != nil {
 		return InvestigationConclusion{}, err
 	}
-	return InvestigationConclusion{id: id, incidentID: incidentID, strategy: strategy, hypothesis: hypothesis, confidence: confidence, evidenceIDs: ids, recommendation: recommendation, provenance: provenance, createdAt: now.UTC()}, nil
+	return InvestigationConclusion{
+		id:             id,
+		incidentID:     incidentID,
+		strategy:       strategy,
+		hypothesis:     hypothesis,
+		confidence:     confidence,
+		evidenceIDs:    ids,
+		recommendation: recommendation,
+		provenance:     provenance,
+		createdAt:      now.UTC(),
+	}, nil
 }
 
 func validateDiagnosisProvenance(effective DiagnosisStrategy, provenance DiagnosisProvenance) error {
@@ -310,7 +339,8 @@ func validateDiagnosisProvenance(effective DiagnosisStrategy, provenance Diagnos
 	model := strings.TrimSpace(provenance.Model)
 	promptVersion := strings.TrimSpace(provenance.PromptVersion)
 	if effective == StrategyRules && provenance.RequestedStrategy == StrategyRules {
-		if provenance.Model != "" || provenance.PromptVersion != "" || provenance.InputTokens != 0 || provenance.OutputTokens != 0 || provenance.FallbackReason != 0 {
+		if provenance.Model != "" || provenance.PromptVersion != "" || provenance.InputTokens != 0 || provenance.OutputTokens != 0 ||
+			provenance.FallbackReason != 0 {
 			return invalid("conclusion.provenance", "rule diagnosis must not contain model metadata")
 		}
 		return nil

@@ -44,7 +44,14 @@ func New(backend Backend, mode Mode) (*mcp.Server, error) {
 	return server, nil
 }
 
-func NewHTTPHandler(backend Backend, mode Mode, ready func(context.Context) error, sessionTimeout time.Duration, logger *slog.Logger, opts ...protocol.HandlerOption) (http.Handler, error) {
+func NewHTTPHandler(
+	backend Backend,
+	mode Mode,
+	ready func(context.Context) error,
+	sessionTimeout time.Duration,
+	logger *slog.Logger,
+	opts ...protocol.HandlerOption,
+) (http.Handler, error) {
 	server, err := New(backend, mode)
 	if err != nil {
 		return nil, err
@@ -54,17 +61,53 @@ func NewHTTPHandler(backend Backend, mode Mode, ready func(context.Context) erro
 
 func registerReadonly(server *mcp.Server, backend Backend) {
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: new(false), IdempotentHint: true, OpenWorldHint: new(false)}
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetDeployment, Description: "Read one allowed Deployment summary", Annotations: readOnly}, getDeployment(backend))
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetReplicaSets, Description: "Read owned ReplicaSet summaries", Annotations: readOnly}, getReplicaSets(backend))
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolListPods, Description: "List bounded pod health summaries for one allowed Deployment", Annotations: readOnly}, listPods(backend))
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetPodEvents, Description: "Read bounded events for a pod owned by one allowed Deployment", Annotations: readOnly}, getPodEvents(backend))
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetRolloutStatus, Description: "Read rollout status for one allowed Deployment", Annotations: readOnly}, getRolloutStatus(backend))
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolWatchRollout, Description: "Wait a bounded time for one expected Deployment template revision", Annotations: readOnly}, watchRollout(backend))
+	mcp.AddTool(
+		server,
+		&mcp.Tool{Name: protocol.ToolGetDeployment, Description: "Read one allowed Deployment summary", Annotations: readOnly},
+		getDeployment(backend),
+	)
+	mcp.AddTool(
+		server,
+		&mcp.Tool{Name: protocol.ToolGetReplicaSets, Description: "Read owned ReplicaSet summaries", Annotations: readOnly},
+		getReplicaSets(backend),
+	)
+	mcp.AddTool(
+		server,
+		&mcp.Tool{Name: protocol.ToolListPods, Description: "List bounded pod health summaries for one allowed Deployment", Annotations: readOnly},
+		listPods(backend),
+	)
+	mcp.AddTool(
+		server,
+		&mcp.Tool{Name: protocol.ToolGetPodEvents, Description: "Read bounded events for a pod owned by one allowed Deployment", Annotations: readOnly},
+		getPodEvents(backend),
+	)
+	mcp.AddTool(
+		server,
+		&mcp.Tool{Name: protocol.ToolGetRolloutStatus, Description: "Read rollout status for one allowed Deployment", Annotations: readOnly},
+		getRolloutStatus(backend),
+	)
+	mcp.AddTool(
+		server,
+		&mcp.Tool{Name: protocol.ToolWatchRollout, Description: "Wait a bounded time for one expected Deployment template revision", Annotations: readOnly},
+		watchRollout(backend),
+	)
 }
 
 func registerRollback(server *mcp.Server, backend Backend) {
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: new(false), IdempotentHint: true, OpenWorldHint: new(false)}
 	mutating := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: new(true), IdempotentHint: true, OpenWorldHint: new(false)}
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolPrepareRollback, Description: "Validate an immutable rollback proposal without mutation", Annotations: readOnly}, prepareRollback(backend))
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolExecuteApprovedRollback, Description: "Execute one exactly approved rollback against an allowed Deployment", Annotations: mutating}, executeRollback(backend))
+	mcp.AddTool(
+		server,
+		&mcp.Tool{Name: protocol.ToolPrepareRollback, Description: "Validate an immutable rollback proposal without mutation", Annotations: readOnly},
+		prepareRollback(backend),
+	)
+	mcp.AddTool(
+		server,
+		&mcp.Tool{
+			Name:        protocol.ToolExecuteApprovedRollback,
+			Description: "Execute one exactly approved rollback against an allowed Deployment",
+			Annotations: mutating,
+		},
+		executeRollback(backend),
+	)
 }

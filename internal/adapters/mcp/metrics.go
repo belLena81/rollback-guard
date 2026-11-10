@@ -29,7 +29,12 @@ func (a *MetricsAdapter) Observe(ctx context.Context, target domain.DeploymentTa
 	case domain.SymptomHTTPErrorRate:
 		output, err = callTool[MetricInput, MetricOutput](ctx, a.caller, ToolGetHTTPErrorRate, input)
 	case domain.SymptomRequestLatency:
-		output, err = callTool[LatencyInput, MetricOutput](ctx, a.caller, ToolGetRequestLatency, LatencyInput{Target: input.Target, WindowSeconds: input.WindowSeconds, Threshold: input.Threshold, Percentile: "p95"})
+		output, err = callTool[LatencyInput, MetricOutput](
+			ctx,
+			a.caller,
+			ToolGetRequestLatency,
+			LatencyInput{Target: input.Target, WindowSeconds: input.WindowSeconds, Threshold: input.Threshold, Percentile: "p95"},
+		)
 	case domain.SymptomPodCPUUsage:
 		output, err = callTool[MetricInput, MetricOutput](ctx, a.caller, ToolGetPodCPUUsage, input)
 	case domain.SymptomPodMemoryUsage:
@@ -43,5 +48,11 @@ func (a *MetricsAdapter) Observe(ctx context.Context, target domain.DeploymentTa
 	if output.Name != symptom.Kind().String() || output.Unit != symptom.Unit() || output.ObservedAt.IsZero() {
 		return domain.MetricEvidence{}, errors.New("metrics MCP returned inconsistent evidence")
 	}
-	return domain.MetricEvidence{Name: output.Name, Value: output.Value, Threshold: symptom.Threshold(), Unit: output.Unit, ObservedAt: output.ObservedAt.UTC()}, nil
+	return domain.MetricEvidence{
+		Name:       output.Name,
+		Value:      output.Value,
+		Threshold:  symptom.Threshold(),
+		Unit:       output.Unit,
+		ObservedAt: output.ObservedAt.UTC(),
+	}, nil
 }

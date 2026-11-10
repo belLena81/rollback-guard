@@ -79,7 +79,12 @@ func (s *ApproveAndExecuteService) Run(ctx context.Context, command ApprovalComm
 // committedOrError returns the incident summary with a nil error when cause
 // has already been committed as the incident's terminal outcome, and cause
 // otherwise. A summary that cannot be read leaves cause as the answer.
-func (s *ApproveAndExecuteService) committedOrError(ctx context.Context, incidentID domain.IncidentID, cause error, committed func(IncidentSummary) bool) (IncidentSummary, error) {
+func (s *ApproveAndExecuteService) committedOrError(
+	ctx context.Context,
+	incidentID domain.IncidentID,
+	cause error,
+	committed func(IncidentSummary) bool,
+) (IncidentSummary, error) {
 	summary, err := s.queries.GetIncidentSummary(ctx, incidentID)
 	if err != nil || !committed(summary) {
 		return IncidentSummary{}, cause

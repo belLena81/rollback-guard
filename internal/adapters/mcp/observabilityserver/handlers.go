@@ -21,7 +21,11 @@ func metricHandler(backend Backend, kind domain.SymptomKind) mcp.ToolHandlerFor[
 		if err != nil {
 			return protocol.MetricOutput{}, err
 		}
-		sample, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: kind, Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: 0.95})
+		sample, err := backend.QueryMetric(
+			ctx,
+			target,
+			metricsprom.QueryRequest{Kind: kind, Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: 0.95},
+		)
 		if err != nil {
 			return protocol.MetricOutput{}, err
 		}
@@ -31,18 +35,31 @@ func metricHandler(backend Backend, kind domain.SymptomKind) mcp.ToolHandlerFor[
 
 func compareWindows(backend Backend) mcp.ToolHandlerFor[protocol.CompareWindowsInput, protocol.Response[protocol.CompareWindowsOutput]] {
 	return protocol.Handle(func(ctx context.Context, input protocol.CompareWindowsInput) (protocol.CompareWindowsOutput, error) {
-		if !validWindow(input.CurrentWindowSeconds) || !validWindow(input.BaselineWindowSeconds) || input.BaselineOffsetSeconds < 0 || input.BaselineOffsetSeconds > 86400 {
+		if !validWindow(input.CurrentWindowSeconds) || !validWindow(input.BaselineWindowSeconds) || input.BaselineOffsetSeconds < 0 ||
+			input.BaselineOffsetSeconds > 86400 {
 			return protocol.CompareWindowsOutput{}, &domain.ValidationError{Field: "metric_windows", Reason: "window or offset is invalid"}
 		}
 		target, err := input.Target.Domain()
 		if err != nil {
 			return protocol.CompareWindowsOutput{}, err
 		}
-		current, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: domain.SymptomHTTPErrorRate, Window: time.Duration(input.CurrentWindowSeconds) * time.Second})
+		current, err := backend.QueryMetric(
+			ctx,
+			target,
+			metricsprom.QueryRequest{Kind: domain.SymptomHTTPErrorRate, Window: time.Duration(input.CurrentWindowSeconds) * time.Second},
+		)
 		if err != nil {
 			return protocol.CompareWindowsOutput{}, err
 		}
-		baseline, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: domain.SymptomHTTPErrorRate, Window: time.Duration(input.BaselineWindowSeconds) * time.Second, Offset: time.Duration(input.BaselineOffsetSeconds) * time.Second})
+		baseline, err := backend.QueryMetric(
+			ctx,
+			target,
+			metricsprom.QueryRequest{
+				Kind:   domain.SymptomHTTPErrorRate,
+				Window: time.Duration(input.BaselineWindowSeconds) * time.Second,
+				Offset: time.Duration(input.BaselineOffsetSeconds) * time.Second,
+			},
+		)
 		if err != nil {
 			return protocol.CompareWindowsOutput{}, err
 		}
@@ -63,7 +80,11 @@ func latency(backend Backend) mcp.ToolHandlerFor[protocol.LatencyInput, protocol
 		if err != nil {
 			return protocol.MetricOutput{}, err
 		}
-		sample, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: domain.SymptomRequestLatency, Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: percentile})
+		sample, err := backend.QueryMetric(
+			ctx,
+			target,
+			metricsprom.QueryRequest{Kind: domain.SymptomRequestLatency, Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: percentile},
+		)
 		if err != nil {
 			return protocol.MetricOutput{}, err
 		}
@@ -73,7 +94,10 @@ func latency(backend Backend) mcp.ToolHandlerFor[protocol.LatencyInput, protocol
 
 func evaluateRecovery(backend Backend) mcp.ToolHandlerFor[protocol.RecoveryInput, protocol.Response[protocol.RecoveryOutput]] {
 	return protocol.Handle(func(ctx context.Context, input protocol.RecoveryInput) (protocol.RecoveryOutput, error) {
-		if !validWindow(input.WindowSeconds) || input.Threshold <= 0 || math.IsNaN(input.Threshold) || math.IsInf(input.Threshold, 0) || input.DesiredReplicas < 0 || input.ReadyReplicas < 0 || input.AvailableReplicas < 0 {
+		if !validWindow(input.WindowSeconds) || input.Threshold <= 0 || math.IsNaN(input.Threshold) || math.IsInf(input.Threshold, 0) ||
+			input.DesiredReplicas < 0 ||
+			input.ReadyReplicas < 0 ||
+			input.AvailableReplicas < 0 {
 			return protocol.RecoveryOutput{}, &domain.ValidationError{Field: "recovery", Reason: "recovery bounds are invalid"}
 		}
 		if strings.TrimSpace(input.ExpectedRevision) == "" || strings.TrimSpace(input.ObservedRevision) == "" {
@@ -83,15 +107,26 @@ func evaluateRecovery(backend Backend) mcp.ToolHandlerFor[protocol.RecoveryInput
 		if err != nil {
 			return protocol.RecoveryOutput{}, err
 		}
-		sample, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: domain.SymptomKind(input.MetricKind), Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: 0.95})
+		sample, err := backend.QueryMetric(
+			ctx,
+			target,
+			metricsprom.QueryRequest{Kind: domain.SymptomKind(input.MetricKind), Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: 0.95},
+		)
 		if err != nil {
 			return protocol.RecoveryOutput{}, err
 		}
 		if sample.Unit != input.Unit || input.Threshold <= 0 {
 			return protocol.RecoveryOutput{}, &domain.ValidationError{Field: "recovery.metric", Reason: "unit or threshold is invalid"}
 		}
-		complete := input.Healthy && input.ExpectedRevision == input.ObservedRevision && input.DesiredReplicas == input.ReadyReplicas && input.DesiredReplicas == input.AvailableReplicas
-		rollout := protocol.RolloutOutput{Revision: input.ObservedRevision, DesiredReplicas: input.DesiredReplicas, ReadyReplicas: input.ReadyReplicas, AvailableReplicas: input.AvailableReplicas, Complete: complete}
+		complete := input.Healthy && input.ExpectedRevision == input.ObservedRevision && input.DesiredReplicas == input.ReadyReplicas &&
+			input.DesiredReplicas == input.AvailableReplicas
+		rollout := protocol.RolloutOutput{
+			Revision:          input.ObservedRevision,
+			DesiredReplicas:   input.DesiredReplicas,
+			ReadyReplicas:     input.ReadyReplicas,
+			AvailableReplicas: input.AvailableReplicas,
+			Complete:          complete,
+		}
 		return protocol.RecoveryOutput{Passed: complete && sample.Value < input.Threshold, Rollout: rollout, Metric: metricOutput(sample)}, nil
 	})
 }

@@ -239,7 +239,14 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 // buildCoordinator connects the investigator over A2A and builds the
 // background worker that delegates investigations to it. The returned
 // function closes the A2A client.
-func buildCoordinator(ctx context.Context, cfg config.Config, uow ports.UnitOfWork, services application.Services, tel *telemetry.Provider, logger *slog.Logger) (*application.InvestigationCoordinator, func(), error) {
+func buildCoordinator(
+	ctx context.Context,
+	cfg config.Config,
+	uow ports.UnitOfWork,
+	services application.Services,
+	tel *telemetry.Provider,
+	logger *slog.Logger,
+) (*application.InvestigationCoordinator, func(), error) {
 	connectCtx, cancel := context.WithTimeout(ctx, cfg.A2AConnectTimeout)
 	defer cancel()
 	a2aGateway, err := a2aadapter.NewGateway(connectCtx, cfg.InvestigatorURL, tel.HTTPClient(cfg.A2ATaskTimeout+cfg.A2ACancelTimeout))
@@ -267,18 +274,24 @@ func buildCoordinator(ctx context.Context, cfg config.Config, uow ports.UnitOfWo
 		closeGateway()
 		return nil, nil, err
 	}
-	coordinator, err := application.NewInvestigationCoordinator(uow, gateway, services.Investigations, runtime.Clock{}, application.InvestigationCoordinatorConfig{
-		WorkerID:      cfg.A2AWorkerID,
-		TaskTimeout:   cfg.A2ATaskTimeout,
-		CancelTimeout: cfg.A2ACancelTimeout,
-		PollInterval:  cfg.A2APollInterval,
-		LeaseTTL:      cfg.A2ALeaseTTL,
-		MaxAttempts:   cfg.A2AMaxAttempts,
-		Tracer:        tel,
-		ReportError: func(ctx context.Context, err error) {
-			logger.ErrorContext(ctx, "investigation coordinator iteration failed", "error", err)
+	coordinator, err := application.NewInvestigationCoordinator(
+		uow,
+		gateway,
+		services.Investigations,
+		runtime.Clock{},
+		application.InvestigationCoordinatorConfig{
+			WorkerID:      cfg.A2AWorkerID,
+			TaskTimeout:   cfg.A2ATaskTimeout,
+			CancelTimeout: cfg.A2ACancelTimeout,
+			PollInterval:  cfg.A2APollInterval,
+			LeaseTTL:      cfg.A2ALeaseTTL,
+			MaxAttempts:   cfg.A2AMaxAttempts,
+			Tracer:        tel,
+			ReportError: func(ctx context.Context, err error) {
+				logger.ErrorContext(ctx, "investigation coordinator iteration failed", "error", err)
+			},
 		},
-	})
+	)
 	if err != nil {
 		closeGateway()
 		return nil, nil, err
@@ -287,7 +300,13 @@ func buildCoordinator(ctx context.Context, cfg config.Config, uow ports.UnitOfWo
 }
 
 // buildHTTP assembles the REST API behind local authentication.
-func buildHTTP(cfg config.Config, services application.Services, ready httpserver.ReadyCheck, tel *telemetry.Provider, logger *slog.Logger) (http.Handler, error) {
+func buildHTTP(
+	cfg config.Config,
+	services application.Services,
+	ready httpserver.ReadyCheck,
+	tel *telemetry.Provider,
+	logger *slog.Logger,
+) (http.Handler, error) {
 	localActor, err := domain.NewActor(cfg.LocalActorID, domain.ActorHuman)
 	if err != nil {
 		return nil, err

@@ -454,7 +454,13 @@ func loadWorkflow() (workflowSettings, error) {
 	if err != nil {
 		return workflowSettings{}, err
 	}
-	return workflowSettings{proposalTTL: proposalTTL, approvalTTL: approvalTTL, cleanupTimeout: cleanupTimeout, ruleCorrelationWindow: ruleWindow, ruleMinimumConfidence: confidence}, nil
+	return workflowSettings{
+		proposalTTL:           proposalTTL,
+		approvalTTL:           approvalTTL,
+		cleanupTimeout:        cleanupTimeout,
+		ruleCorrelationWindow: ruleWindow,
+		ruleMinimumConfidence: confidence,
+	}, nil
 }
 
 type a2aClientSettings struct {
@@ -492,13 +498,24 @@ func loadA2AClient(mcpConnectTimeout time.Duration) (a2aClientSettings, error) {
 		return a2aClientSettings{}, err
 	}
 	if leaseTTL < minimumLease {
-		return a2aClientSettings{}, fmt.Errorf("A2A_LEASE_TTL must be at least A2A_TASK_TIMEOUT plus A2A_CANCEL_TIMEOUT (%s), got %s", formatDuration(minimumLease), formatDuration(leaseTTL))
+		return a2aClientSettings{}, fmt.Errorf(
+			"A2A_LEASE_TTL must be at least A2A_TASK_TIMEOUT plus A2A_CANCEL_TIMEOUT (%s), got %s",
+			formatDuration(minimumLease),
+			formatDuration(leaseTTL),
+		)
 	}
 	maxAttempts, err := intEnv("A2A_MAX_ATTEMPTS", defaultA2AMaxAttempts)
 	if err != nil {
 		return a2aClientSettings{}, err
 	}
-	return a2aClientSettings{connectTimeout: connectTimeout, taskTimeout: taskTimeout, cancelTimeout: cancelTimeout, pollInterval: pollInterval, leaseTTL: leaseTTL, maxAttempts: maxAttempts}, nil
+	return a2aClientSettings{
+		connectTimeout: connectTimeout,
+		taskTimeout:    taskTimeout,
+		cancelTimeout:  cancelTimeout,
+		pollInterval:   pollInterval,
+		leaseTTL:       leaseTTL,
+		maxAttempts:    maxAttempts,
+	}, nil
 }
 
 type llmSettings struct {

@@ -57,7 +57,14 @@ func NewHybridDiagnoser(reasoner ports.Reasoner, rules ports.Diagnoser, ids port
 	return &HybridDiagnoser{model: model}, nil
 }
 
-func newModelDiagnoser(reasoner ports.Reasoner, rules ports.Diagnoser, ids ports.IDGenerator, config ModelDiagnoserConfig, strategy domain.DiagnosisStrategy, includeRules bool) (modelDiagnoser, error) {
+func newModelDiagnoser(
+	reasoner ports.Reasoner,
+	rules ports.Diagnoser,
+	ids ports.IDGenerator,
+	config ModelDiagnoserConfig,
+	strategy domain.DiagnosisStrategy,
+	includeRules bool,
+) (modelDiagnoser, error) {
 	if reasoner == nil || rules == nil || ids == nil {
 		return modelDiagnoser{}, errors.New("reasoner, rule diagnoser, and id generator are required")
 	}
@@ -128,7 +135,14 @@ func (d modelDiagnoser) diagnose(ctx context.Context, input ports.InvestigationI
 	)
 }
 
-func (d modelDiagnoser) fallback(ctx context.Context, input ports.InvestigationInput, existing *domain.InvestigationConclusion, reason domain.DiagnosisFallbackReason, usage ports.TokenUsage, initiatingErr error) (domain.InvestigationConclusion, error) {
+func (d modelDiagnoser) fallback(
+	ctx context.Context,
+	input ports.InvestigationInput,
+	existing *domain.InvestigationConclusion,
+	reason domain.DiagnosisFallbackReason,
+	usage ports.TokenUsage,
+	initiatingErr error,
+) (domain.InvestigationConclusion, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.InvestigationConclusion{}, err
 	}
@@ -226,7 +240,8 @@ func validateReasoningResult(input ports.InvestigationInput, result ports.Reason
 	if hypothesis == "" || len(hypothesis) > maximumHypothesisBytes {
 		return 0, errors.New("model hypothesis is invalid")
 	}
-	if math.IsNaN(result.Candidate.Confidence) || math.IsInf(result.Candidate.Confidence, 0) || result.Candidate.Confidence < 0 || result.Candidate.Confidence > 1 {
+	if math.IsNaN(result.Candidate.Confidence) || math.IsInf(result.Candidate.Confidence, 0) || result.Candidate.Confidence < 0 ||
+		result.Candidate.Confidence > 1 {
 		return 0, errors.New("model confidence is invalid")
 	}
 	if strings.TrimSpace(result.Model) == "" || result.Usage.InputTokens < 0 || result.Usage.OutputTokens < 0 {

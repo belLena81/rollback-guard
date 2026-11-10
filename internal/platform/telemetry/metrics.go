@@ -63,8 +63,11 @@ func newMetrics(registerer prometheus.Registerer) (*metrics, error) {
 			Help: "MCP tool calls handled by this server, by server, tool, and outcome."}, []string{"server", "tool", "outcome"}),
 		mcpToolDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: namespace, Name: "mcp_tool_request_duration_seconds",
 			Help: "MCP tool handling time on the server, by server, tool, and outcome.", Buckets: latencyBuckets}, []string{"server", "tool", "outcome"}),
-		diagnoses: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "diagnoses_total",
-			Help: "Diagnoses produced, by requested strategy, effective strategy, and fallback reason."}, []string{"requested_strategy", "effective_strategy", "fallback_reason"}),
+		diagnoses: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "diagnoses_total",
+			Help:      "Diagnoses produced, by requested strategy, effective strategy, and fallback reason.",
+		}, []string{"requested_strategy", "effective_strategy", "fallback_reason"}),
 		rollbackExecutions: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "rollback_executions_total",
 			Help: "Rollback executions completed (committed), by outcome."}, []string{"outcome"}),
 		recoveryVerifications: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "recovery_verifications_total",

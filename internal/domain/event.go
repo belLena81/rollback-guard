@@ -24,7 +24,22 @@ const (
 )
 
 func (k EventKind) String() string {
-	names := [...]string{unknownName, "incident.created", "incident.status_changed", "investigation.evidence_collected", "investigation.diagnosis_completed", "policy.evaluated", "rollback.proposal_created", "rollback.approved", "rollback.rejected", "rollback.execution_completed", "rollback.verification_completed", "incident.failed", "incident.expired", "incident.canceled"}
+	names := [...]string{
+		unknownName,
+		"incident.created",
+		"incident.status_changed",
+		"investigation.evidence_collected",
+		"investigation.diagnosis_completed",
+		"policy.evaluated",
+		"rollback.proposal_created",
+		"rollback.approved",
+		"rollback.rejected",
+		"rollback.execution_completed",
+		"rollback.verification_completed",
+		"incident.failed",
+		"incident.expired",
+		"incident.canceled",
+	}
 	if int(k) >= len(names) {
 		return names[0]
 	}
@@ -68,7 +83,8 @@ type DiagnosisCompletedDetail struct {
 }
 
 func (value DiagnosisCompletedDetail) validFor(kind EventKind, _ Actor) bool {
-	return kind == EventDiagnosisCompleted && value.ConclusionID != "" && (value.Recommendation == RecommendRollback || value.Recommendation == RecommendNoAction)
+	return kind == EventDiagnosisCompleted && value.ConclusionID != "" &&
+		(value.Recommendation == RecommendRollback || value.Recommendation == RecommendNoAction)
 }
 
 type PolicyEvaluatedDetail struct {
@@ -141,8 +157,17 @@ type OperationEvent struct {
 	detail     EventDetail
 }
 
-func NewOperationEvent(id EventID, incidentID IncidentID, sequence uint64, kind EventKind, occurredAt time.Time, actor Actor, detail EventDetail) (OperationEvent, error) {
-	if id == "" || incidentID == "" || sequence == 0 || kind < EventIncidentCreated || kind > EventIncidentCanceled || occurredAt.IsZero() || !actor.Valid() || detail == nil {
+func NewOperationEvent(
+	id EventID,
+	incidentID IncidentID,
+	sequence uint64,
+	kind EventKind,
+	occurredAt time.Time,
+	actor Actor,
+	detail EventDetail,
+) (OperationEvent, error) {
+	if id == "" || incidentID == "" || sequence == 0 || kind < EventIncidentCreated || kind > EventIncidentCanceled || occurredAt.IsZero() || !actor.Valid() ||
+		detail == nil {
 		return OperationEvent{}, invalid("event", "invalid event")
 	}
 	if err := validateEventDetail(kind, actor, detail); err != nil {

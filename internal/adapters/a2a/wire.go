@@ -154,15 +154,36 @@ func decodeRequest(value any) (ports.InvestigationRequest, error) {
 	if wire.Incident.Status != domain.StatusInvestigating.String() {
 		return ports.InvestigationRequest{}, errors.New("incident must be investigating")
 	}
-	target, err := domain.NewDeploymentTarget(wire.Incident.Target.Cluster, wire.Incident.Target.Namespace, wire.Incident.Target.Deployment, wire.Incident.Target.Service)
+	target, err := domain.NewDeploymentTarget(
+		wire.Incident.Target.Cluster,
+		wire.Incident.Target.Namespace,
+		wire.Incident.Target.Deployment,
+		wire.Incident.Target.Service,
+	)
 	if err != nil {
 		return ports.InvestigationRequest{}, err
 	}
-	symptom, err := domain.NewSymptom(domain.SymptomKind(wire.Incident.Symptom.Kind), wire.Incident.Symptom.Observed, wire.Incident.Symptom.Threshold, wire.Incident.Symptom.Unit, wire.Incident.Symptom.StartedAt)
+	symptom, err := domain.NewSymptom(
+		domain.SymptomKind(wire.Incident.Symptom.Kind),
+		wire.Incident.Symptom.Observed,
+		wire.Incident.Symptom.Threshold,
+		wire.Incident.Symptom.Unit,
+		wire.Incident.Symptom.StartedAt,
+	)
 	if err != nil {
 		return ports.InvestigationRequest{}, err
 	}
-	incident, err := domain.RehydrateIncident(domain.IncidentSnapshot{ID: domain.IncidentID(wire.Incident.ID), Target: target, Symptom: symptom, Status: domain.StatusInvestigating, Version: wire.Incident.Version, CreatedAt: wire.Incident.CreatedAt, UpdatedAt: wire.Incident.UpdatedAt})
+	incident, err := domain.RehydrateIncident(
+		domain.IncidentSnapshot{
+			ID:        domain.IncidentID(wire.Incident.ID),
+			Target:    target,
+			Symptom:   symptom,
+			Status:    domain.StatusInvestigating,
+			Version:   wire.Incident.Version,
+			CreatedAt: wire.Incident.CreatedAt,
+			UpdatedAt: wire.Incident.UpdatedAt,
+		},
+	)
 	return ports.InvestigationRequest{Incident: incident}, err
 }
 
@@ -187,8 +208,23 @@ func encodeResult(incidentID domain.IncidentID, result ports.InvestigationResult
 			provenance.FallbackReason = c.Provenance.FallbackReason.String()
 		}
 	}
-	return resultDTO{SchemaVersion: SchemaVersion, IncidentID: string(incidentID), Deployment: encodeDeployment(result.Deployment), Evidence: evidence,
-		Conclusion: conclusionDTO{ID: string(c.ID), IncidentID: string(c.IncidentID), Strategy: c.Strategy.String(), Hypothesis: c.Hypothesis, Confidence: c.Confidence, EvidenceIDs: ids, Recommendation: c.Recommendation.String(), Provenance: provenance, CreatedAt: c.CreatedAt}}
+	return resultDTO{
+		SchemaVersion: SchemaVersion,
+		IncidentID:    string(incidentID),
+		Deployment:    encodeDeployment(result.Deployment),
+		Evidence:      evidence,
+		Conclusion: conclusionDTO{
+			ID:             string(c.ID),
+			IncidentID:     string(c.IncidentID),
+			Strategy:       c.Strategy.String(),
+			Hypothesis:     c.Hypothesis,
+			Confidence:     c.Confidence,
+			EvidenceIDs:    ids,
+			Recommendation: c.Recommendation.String(),
+			Provenance:     provenance,
+			CreatedAt:      c.CreatedAt,
+		},
+	}
 }
 
 func decodeResult(value any) (ports.InvestigationResult, error) {
@@ -233,7 +269,16 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 		if strategy != domain.StrategyRules {
 			return ports.InvestigationResult{}, errors.New("model diagnosis provenance is required")
 		}
-		conclusion, err = domain.NewInvestigationConclusion(domain.ConclusionID(wire.Conclusion.ID), domain.IncidentID(wire.Conclusion.IncidentID), strategy, wire.Conclusion.Hypothesis, wire.Conclusion.Confidence, ids, recommendation, wire.Conclusion.CreatedAt)
+		conclusion, err = domain.NewInvestigationConclusion(
+			domain.ConclusionID(wire.Conclusion.ID),
+			domain.IncidentID(wire.Conclusion.IncidentID),
+			strategy,
+			wire.Conclusion.Hypothesis,
+			wire.Conclusion.Confidence,
+			ids,
+			recommendation,
+			wire.Conclusion.CreatedAt,
+		)
 	} else {
 		requestedStrategy, strategyErr := domain.ParseDiagnosisStrategy(wire.Conclusion.Provenance.RequestedStrategy)
 		if strategyErr != nil {
@@ -278,14 +323,32 @@ func encodeSymptom(v domain.Symptom) symptomDTO {
 	return symptomDTO{v.Kind().String(), v.Observed(), v.Threshold(), v.Unit(), v.StartedAt()}
 }
 func encodeDeployment(v domain.DeploymentEvidence) deploymentDTO {
-	return deploymentDTO{encodeTarget(v.Target), string(v.CurrentRevision), string(v.PreviousStableRevision), v.DesiredReplicas, v.ReadyReplicas, v.AvailableReplicas, v.Healthy, v.RolloutAt}
+	return deploymentDTO{
+		encodeTarget(v.Target),
+		string(v.CurrentRevision),
+		string(v.PreviousStableRevision),
+		v.DesiredReplicas,
+		v.ReadyReplicas,
+		v.AvailableReplicas,
+		v.Healthy,
+		v.RolloutAt,
+	}
 }
 func decodeDeployment(v deploymentDTO) (domain.DeploymentEvidence, error) {
 	target, err := domain.NewDeploymentTarget(v.Target.Cluster, v.Target.Namespace, v.Target.Deployment, v.Target.Service)
 	if err != nil {
 		return domain.DeploymentEvidence{}, err
 	}
-	return domain.DeploymentEvidence{Target: target, CurrentRevision: domain.Revision(v.CurrentRevision), PreviousStableRevision: domain.Revision(v.PreviousStableRevision), DesiredReplicas: v.DesiredReplicas, ReadyReplicas: v.ReadyReplicas, AvailableReplicas: v.AvailableReplicas, Healthy: v.Healthy, RolloutAt: v.RolloutAt}, nil
+	return domain.DeploymentEvidence{
+		Target:                 target,
+		CurrentRevision:        domain.Revision(v.CurrentRevision),
+		PreviousStableRevision: domain.Revision(v.PreviousStableRevision),
+		DesiredReplicas:        v.DesiredReplicas,
+		ReadyReplicas:          v.ReadyReplicas,
+		AvailableReplicas:      v.AvailableReplicas,
+		Healthy:                v.Healthy,
+		RolloutAt:              v.RolloutAt,
+	}, nil
 }
 
 func encodeEvidence(v domain.Evidence) evidenceDTO {
@@ -326,17 +389,38 @@ func decodeEvidence(v evidenceDTO) (domain.Evidence, error) {
 		if v.Metric == nil {
 			return domain.Evidence{}, errors.New("metric evidence payload is required")
 		}
-		return domain.NewMetricEvidence(id, incidentID, domain.MetricEvidence{Name: v.Metric.Name, Value: v.Metric.Value, Threshold: v.Metric.Threshold, Unit: v.Metric.Unit, ObservedAt: v.Metric.ObservedAt}, v.CollectedAt)
+		return domain.NewMetricEvidence(
+			id,
+			incidentID,
+			domain.MetricEvidence{
+				Name:       v.Metric.Name,
+				Value:      v.Metric.Value,
+				Threshold:  v.Metric.Threshold,
+				Unit:       v.Metric.Unit,
+				ObservedAt: v.Metric.ObservedAt,
+			},
+			v.CollectedAt,
+		)
 	case domain.EvidencePod.String():
 		if v.Pod == nil {
 			return domain.Evidence{}, errors.New("pod evidence payload is required")
 		}
-		return domain.NewPodEvidence(id, incidentID, domain.PodEvidence{Pod: v.Pod.Pod, CrashLoop: v.Pod.CrashLoop, Restarts: v.Pod.Restarts, ObservedAt: v.Pod.ObservedAt}, v.CollectedAt)
+		return domain.NewPodEvidence(
+			id,
+			incidentID,
+			domain.PodEvidence{Pod: v.Pod.Pod, CrashLoop: v.Pod.CrashLoop, Restarts: v.Pod.Restarts, ObservedAt: v.Pod.ObservedAt},
+			v.CollectedAt,
+		)
 	case domain.EvidenceKubernetesEvent.String():
 		if v.KubernetesEvent == nil {
 			return domain.Evidence{}, errors.New("kubernetes event evidence payload is required")
 		}
-		return domain.NewKubernetesEventEvidence(id, incidentID, domain.KubernetesEventEvidence{Reason: v.KubernetesEvent.Reason, Message: v.KubernetesEvent.Message, ObservedAt: v.KubernetesEvent.ObservedAt}, v.CollectedAt)
+		return domain.NewKubernetesEventEvidence(
+			id,
+			incidentID,
+			domain.KubernetesEventEvidence{Reason: v.KubernetesEvent.Reason, Message: v.KubernetesEvent.Message, ObservedAt: v.KubernetesEvent.ObservedAt},
+			v.CollectedAt,
+		)
 	default:
 		return domain.Evidence{}, fmt.Errorf("unknown evidence kind %q", v.Kind)
 	}

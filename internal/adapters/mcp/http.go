@@ -42,7 +42,14 @@ func WithToolObserver(serverName string, observer ToolObserver) HandlerOption {
 	}
 }
 
-func HTTPHandler(server *mcpsdk.Server, ready func(context.Context) error, maxBytes int64, sessionTimeout time.Duration, logger *slog.Logger, opts ...HandlerOption) http.Handler {
+func HTTPHandler(
+	server *mcpsdk.Server,
+	ready func(context.Context) error,
+	maxBytes int64,
+	sessionTimeout time.Duration,
+	logger *slog.Logger,
+	opts ...HandlerOption,
+) http.Handler {
 	var o handlerOptions
 	for _, opt := range opts {
 		opt(&o)
@@ -56,7 +63,10 @@ func HTTPHandler(server *mcpsdk.Server, ready func(context.Context) error, maxBy
 	if maxBytes <= 0 {
 		maxBytes = DefaultMaxRequestBytes
 	}
-	mcpHandler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, &mcpsdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true, Logger: logger, SessionTimeout: sessionTimeout})
+	mcpHandler := mcpsdk.NewStreamableHTTPHandler(
+		func(*http.Request) *mcpsdk.Server { return server },
+		&mcpsdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true, Logger: logger, SessionTimeout: sessionTimeout},
+	)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(limitBody(mcpHandler, maxBytes)))
 	httpserver.NewHealth(ready, o.readyTimeout, logger).Register(mux)

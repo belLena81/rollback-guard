@@ -86,14 +86,31 @@ func (s *InvestigationService) complete(ctx context.Context, incident domain.Inc
 
 // evaluate validates the untrusted investigation result against the incident
 // and runs the rollback policy on it. Any failure fails the incident.
-func (s *InvestigationService) evaluate(ctx context.Context, incident domain.Incident, result ports.InvestigationResult, now time.Time) (domain.PolicyDecision, error) {
+func (s *InvestigationService) evaluate(
+	ctx context.Context,
+	incident domain.Incident,
+	result ports.InvestigationResult,
+	now time.Time,
+) (domain.PolicyDecision, error) {
 	if !result.Deployment.Target.Equal(incident.Target()) {
-		return domain.PolicyDecision{}, s.failAfterExternalError(ctx, incident.ID(), &domain.ValidationError{Field: "investigation.deployment.target", Reason: "must match incident target"})
+		return domain.PolicyDecision{}, s.failAfterExternalError(
+			ctx,
+			incident.ID(),
+			&domain.ValidationError{Field: "investigation.deployment.target", Reason: "must match incident target"},
+		)
 	}
 	if err := validateEvidenceReferences(incident.ID(), result.Conclusion, result.Evidence); err != nil {
 		return domain.PolicyDecision{}, s.failAfterExternalError(ctx, incident.ID(), err)
 	}
-	decision, err := s.rollbackPolicy.Evaluate(domain.EligibilityCandidate{DecisionID: domain.PolicyDecisionID(s.ids.NewID("policy")), Incident: incident, Conclusion: result.Conclusion, Evidence: result.Evidence, Now: now})
+	decision, err := s.rollbackPolicy.Evaluate(
+		domain.EligibilityCandidate{
+			DecisionID: domain.PolicyDecisionID(s.ids.NewID("policy")),
+			Incident:   incident,
+			Conclusion: result.Conclusion,
+			Evidence:   result.Evidence,
+			Now:        now,
+		},
+	)
 	if err != nil {
 		return domain.PolicyDecision{}, s.failAfterExternalError(ctx, incident.ID(), fmt.Errorf("evaluate rollback policy: %w", err))
 	}
@@ -102,12 +119,23 @@ func (s *InvestigationService) evaluate(ctx context.Context, incident domain.Inc
 
 // recordFindings stores the evidence, the conclusion, and the policy decision
 // with an audit event for each.
-func (s *InvestigationService) recordFindings(repositories ports.Repositories, incidentID domain.IncidentID, result ports.InvestigationResult, decision domain.PolicyDecision, now time.Time) error {
+func (s *InvestigationService) recordFindings(
+	repositories ports.Repositories,
+	incidentID domain.IncidentID,
+	result ports.InvestigationResult,
+	decision domain.PolicyDecision,
+	now time.Time,
+) error {
 	for _, item := range result.Evidence {
 		if err := repositories.Evidence().Add(item); err != nil {
 			return err
 		}
-		if err := s.appendEvents(repositories, incidentID, now, s.systemEvent(domain.EventEvidenceCollected, domain.EvidenceCollectedDetail{EvidenceID: item.ID(), Kind: item.Kind()})); err != nil {
+		if err := s.appendEvents(
+			repositories,
+			incidentID,
+			now,
+			s.systemEvent(domain.EventEvidenceCollected, domain.EvidenceCollectedDetail{EvidenceID: item.ID(), Kind: item.Kind()}),
+		); err != nil {
 			return err
 		}
 	}
@@ -115,19 +143,38 @@ func (s *InvestigationService) recordFindings(repositories ports.Repositories, i
 	if err := repositories.Conclusions().Save(conclusion); err != nil {
 		return err
 	}
-	if err := s.appendEvents(repositories, incidentID, now, s.systemEvent(domain.EventDiagnosisCompleted, domain.DiagnosisCompletedDetail{ConclusionID: conclusion.ID(), Recommendation: conclusion.Recommendation()})); err != nil {
+	if err := s.appendEvents(
+		repositories,
+		incidentID,
+		now,
+		s.systemEvent(
+			domain.EventDiagnosisCompleted,
+			domain.DiagnosisCompletedDetail{ConclusionID: conclusion.ID(), Recommendation: conclusion.Recommendation()},
+		),
+	); err != nil {
 		return err
 	}
 	if err := repositories.PolicyDecisions().Save(decision); err != nil {
 		return err
 	}
-	return s.appendEvents(repositories, incidentID, now, s.systemEvent(domain.EventPolicyEvaluated, domain.PolicyEvaluatedDetail{DecisionID: decision.ID(), Allowed: decision.Allowed()}))
+	return s.appendEvents(
+		repositories,
+		incidentID,
+		now,
+		s.systemEvent(domain.EventPolicyEvaluated, domain.PolicyEvaluatedDetail{DecisionID: decision.ID(), Allowed: decision.Allowed()}),
+	)
 }
 
 // conclude moves the investigating incident on: declined when policy denied
 // the rollback, otherwise awaiting approval of a new proposal. Either way the
 // investigation dispatch completes in the same transaction.
-func (s *InvestigationService) conclude(repositories ports.Repositories, incident domain.Incident, deployment domain.DeploymentEvidence, decision domain.PolicyDecision, now time.Time) (domain.Incident, error) {
+func (s *InvestigationService) conclude(
+	repositories ports.Repositories,
+	incident domain.Incident,
+	deployment domain.DeploymentEvidence,
+	decision domain.PolicyDecision,
+	now time.Time,
+) (domain.Incident, error) {
 	if !decision.Allowed() {
 		return s.moveAndCompleteDispatch(repositories, incident, (*domain.Incident).Decline, now)
 	}
@@ -146,13 +193,23 @@ func (s *InvestigationService) conclude(repositories ports.Repositories, inciden
 	if err := repositories.Proposals().Save(proposal); err != nil {
 		return domain.Incident{}, err
 	}
-	if err := s.appendEvents(repositories, incident.ID(), now, s.systemEvent(domain.EventProposalCreated, domain.ProposalCreatedDetail{ActionID: proposal.ActionID(), ProposalHash: proposal.Hash()})); err != nil {
+	if err := s.appendEvents(
+		repositories,
+		incident.ID(),
+		now,
+		s.systemEvent(domain.EventProposalCreated, domain.ProposalCreatedDetail{ActionID: proposal.ActionID(), ProposalHash: proposal.Hash()}),
+	); err != nil {
 		return domain.Incident{}, err
 	}
 	return s.moveAndCompleteDispatch(repositories, incident, (*domain.Incident).AwaitApproval, now)
 }
 
-func (s *InvestigationService) moveAndCompleteDispatch(repositories ports.Repositories, incident domain.Incident, apply func(*domain.Incident, time.Time) error, now time.Time) (domain.Incident, error) {
+func (s *InvestigationService) moveAndCompleteDispatch(
+	repositories ports.Repositories,
+	incident domain.Incident,
+	apply func(*domain.Incident, time.Time) error,
+	now time.Time,
+) (domain.Incident, error) {
 	moved, err := s.transition(repositories, incident, now, apply, statusChanged(s.systemActor))
 	if err != nil {
 		return domain.Incident{}, err
@@ -184,7 +241,13 @@ func (s *InvestigationService) Fail(ctx context.Context, incidentID domain.Incid
 			return nil
 		}
 		if incident.Status() != domain.StatusFailed {
-			if _, err := s.transition(repositories, incident, now, (*domain.Incident).Fail, terminated(s.systemActor, domain.EventIncidentFailed, code)); err != nil {
+			if _, err := s.transition(
+				repositories,
+				incident,
+				now,
+				(*domain.Incident).Fail,
+				terminated(s.systemActor, domain.EventIncidentFailed, code),
+			); err != nil {
 				return err
 			}
 		}

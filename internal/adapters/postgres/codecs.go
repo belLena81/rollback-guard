@@ -118,7 +118,13 @@ func marshalEvidencePayload(evidence domain.Evidence) ([]byte, error) {
 	return nil, errors.New("evidence has no payload")
 }
 
-func unmarshalEvidencePayload(id domain.EvidenceID, incidentID domain.IncidentID, kind domain.EvidenceKind, collectedAt time.Time, data []byte) (domain.Evidence, error) {
+func unmarshalEvidencePayload(
+	id domain.EvidenceID,
+	incidentID domain.IncidentID,
+	kind domain.EvidenceKind,
+	collectedAt time.Time,
+	data []byte,
+) (domain.Evidence, error) {
 	var payload evidencePayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return domain.Evidence{}, err
@@ -141,7 +147,13 @@ func unmarshalEvidencePayload(id domain.EvidenceID, incidentID domain.IncidentID
 		}
 		return domain.RehydrateEvidence(domain.EvidenceSnapshot{ID: id, IncidentID: incidentID, Kind: kind, CollectedAt: collectedAt, Deployment: &value})
 	case domain.EvidenceMetric:
-		value := domain.MetricEvidence{Name: payload.Name, Value: payload.Value, Threshold: payload.Threshold, Unit: payload.Unit, ObservedAt: payload.ObservedAt}
+		value := domain.MetricEvidence{
+			Name:       payload.Name,
+			Value:      payload.Value,
+			Threshold:  payload.Threshold,
+			Unit:       payload.Unit,
+			ObservedAt: payload.ObservedAt,
+		}
 		return domain.RehydrateEvidence(domain.EvidenceSnapshot{ID: id, IncidentID: incidentID, Kind: kind, CollectedAt: collectedAt, Metric: &value})
 	case domain.EvidencePod:
 		value := domain.PodEvidence{Pod: payload.Pod, CrashLoop: payload.CrashLoop, Restarts: payload.Restarts, ObservedAt: payload.ObservedAt}

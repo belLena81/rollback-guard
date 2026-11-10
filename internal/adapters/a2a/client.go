@@ -27,7 +27,15 @@ func NewGateway(ctx context.Context, discoveryURL string, httpClient *http.Clien
 	if err := validateAgentCard(card); err != nil {
 		return nil, err
 	}
-	client, err := a2aclient.NewFromCard(ctx, card, a2aclient.WithDefaultsDisabled(), a2aclient.WithRESTTransport(httpClient), a2aclient.WithConfig(a2aclient.Config{PreferredTransports: []a2a.TransportProtocol{a2a.TransportProtocolHTTPJSON}, AcceptedOutputModes: []string{JSONMediaType}}))
+	client, err := a2aclient.NewFromCard(
+		ctx,
+		card,
+		a2aclient.WithDefaultsDisabled(),
+		a2aclient.WithRESTTransport(httpClient),
+		a2aclient.WithConfig(
+			a2aclient.Config{PreferredTransports: []a2a.TransportProtocol{a2a.TransportProtocolHTTPJSON}, AcceptedOutputModes: []string{JSONMediaType}},
+		),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create investigator A2A client: %w", err)
 	}
@@ -64,7 +72,16 @@ func (g *Gateway) Submit(ctx context.Context, submission ports.InvestigationSubm
 	message.ID = submission.MessageID
 	message.Extensions = []string{ExtensionURI}
 	request := &a2a.SendMessageRequest{Message: message, Config: &a2a.SendMessageConfig{AcceptedOutputModes: []string{JSONMediaType}, ReturnImmediately: true}}
-	request.SetMeta(ExtensionURI, correlationDTO{SchemaVersion: SchemaVersion, OperationID: submission.OperationID, IdempotencyKey: submission.IdempotencyKey, TraceID: submission.TraceID, RequestHash: submission.RequestHash})
+	request.SetMeta(
+		ExtensionURI,
+		correlationDTO{
+			SchemaVersion:  SchemaVersion,
+			OperationID:    submission.OperationID,
+			IdempotencyKey: submission.IdempotencyKey,
+			TraceID:        submission.TraceID,
+			RequestHash:    submission.RequestHash,
+		},
+	)
 	response, err := g.client.SendMessage(extensionContext(ctx), request)
 	if err != nil {
 		return domain.InvestigationTaskRef{}, fmt.Errorf("submit investigation task: %w", err)
@@ -79,7 +96,11 @@ func (g *Gateway) Submit(ctx context.Context, submission ports.InvestigationSubm
 	return domain.InvestigationTaskRef{TaskID: string(task.ID), ContextID: task.ContextID}, nil
 }
 
-func (g *Gateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, progress func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g *Gateway) Watch(
+	ctx context.Context,
+	ref domain.InvestigationTaskRef,
+	progress func(domain.InvestigationStage) error,
+) (ports.InvestigationResult, error) {
 	task, err := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("get investigation task: %w", err)

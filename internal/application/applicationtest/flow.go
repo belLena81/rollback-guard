@@ -101,7 +101,14 @@ func (f Flow) beginOrResume(ctx context.Context, incidentID domain.IncidentID) (
 			return err
 		}
 		result = incident
-		return f.appendEvent(repositories, incidentID, domain.EventStatusChanged, f.SystemActor, domain.StatusChangedDetail{From: domain.StatusCreated, To: domain.StatusInvestigating}, now)
+		return f.appendEvent(
+			repositories,
+			incidentID,
+			domain.EventStatusChanged,
+			f.SystemActor,
+			domain.StatusChangedDetail{From: domain.StatusCreated, To: domain.StatusInvestigating},
+			now,
+		)
 	})
 	if err != nil {
 		return domain.Incident{}, fmt.Errorf("begin investigation: %w", err)
@@ -127,7 +134,14 @@ func (f Flow) failAfter(ctx context.Context, incidentID domain.IncidentID, cause
 		if err := repositories.Incidents().Update(incident, expected); err != nil {
 			return err
 		}
-		return f.appendEvent(repositories, incidentID, domain.EventIncidentFailed, f.SystemActor, domain.TerminalDetail{Reason: investigationFailureReason}, now)
+		return f.appendEvent(
+			repositories,
+			incidentID,
+			domain.EventIncidentFailed,
+			f.SystemActor,
+			domain.TerminalDetail{Reason: investigationFailureReason},
+			now,
+		)
 	})
 	if err != nil {
 		return errors.Join(cause, err)
@@ -135,7 +149,14 @@ func (f Flow) failAfter(ctx context.Context, incidentID domain.IncidentID, cause
 	return cause
 }
 
-func (f Flow) appendEvent(repositories ports.Repositories, incidentID domain.IncidentID, kind domain.EventKind, actor domain.Actor, detail domain.EventDetail, now time.Time) error {
+func (f Flow) appendEvent(
+	repositories ports.Repositories,
+	incidentID domain.IncidentID,
+	kind domain.EventKind,
+	actor domain.Actor,
+	detail domain.EventDetail,
+	now time.Time,
+) error {
 	sequence, err := repositories.Events().NextSequence(incidentID)
 	if err != nil {
 		return fmt.Errorf("get next event sequence: %w", err)

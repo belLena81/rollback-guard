@@ -72,7 +72,13 @@ type RollbackMutationSnapshot struct {
 	AlreadyApplied bool
 }
 
-func NewPendingRollbackMutation(key IdempotencyKey, proposalHash ProposalHash, executionID ExecutionID, fromRevision, toRevision Revision, startedAt time.Time) (RollbackMutation, error) {
+func NewPendingRollbackMutation(
+	key IdempotencyKey,
+	proposalHash ProposalHash,
+	executionID ExecutionID,
+	fromRevision, toRevision Revision,
+	startedAt time.Time,
+) (RollbackMutation, error) {
 	return RehydrateRollbackMutation(RollbackMutationSnapshot{
 		Key:          key,
 		ProposalHash: proposalHash,
@@ -85,7 +91,8 @@ func NewPendingRollbackMutation(key IdempotencyKey, proposalHash ProposalHash, e
 }
 
 func RehydrateRollbackMutation(snapshot RollbackMutationSnapshot) (RollbackMutation, error) {
-	if snapshot.Key == "" || snapshot.ProposalHash == "" || snapshot.ExecutionID == "" || snapshot.FromRevision == "" || snapshot.ToRevision == "" || snapshot.StartedAt.IsZero() {
+	if snapshot.Key == "" || snapshot.ProposalHash == "" || snapshot.ExecutionID == "" || snapshot.FromRevision == "" || snapshot.ToRevision == "" ||
+		snapshot.StartedAt.IsZero() {
 		return RollbackMutation{}, invalid("rollback_mutation", "required value is empty")
 	}
 	if snapshot.FromRevision == snapshot.ToRevision {

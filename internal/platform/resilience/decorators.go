@@ -125,7 +125,11 @@ func (g gateway) Submit(ctx context.Context, submission ports.InvestigationSubmi
 	})
 }
 
-func (g gateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, progress func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g gateway) Watch(
+	ctx context.Context,
+	ref domain.InvestigationTaskRef,
+	progress func(domain.InvestigationStage) error,
+) (ports.InvestigationResult, error) {
 	return CallOnce(ctx, g.protector, func(ctx context.Context) (ports.InvestigationResult, error) {
 		return g.next.Watch(ctx, ref, progress)
 	})

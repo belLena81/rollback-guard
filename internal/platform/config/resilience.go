@@ -74,7 +74,13 @@ func resilienceEnv() (ResilienceConfig, error) {
 		return ResilienceConfig{}, err
 	}
 	if maxDelay < baseDelay {
-		return ResilienceConfig{}, fmt.Errorf("%s (%s) must be at least %s (%s)", retryMaxDelayEnvName, formatDuration(maxDelay), retryBaseDelayEnvName, formatDuration(baseDelay))
+		return ResilienceConfig{}, fmt.Errorf(
+			"%s (%s) must be at least %s (%s)",
+			retryMaxDelayEnvName,
+			formatDuration(maxDelay),
+			retryBaseDelayEnvName,
+			formatDuration(baseDelay),
+		)
 	}
 	threshold, err := boundedIntEnv("RESILIENCE_BREAKER_FAILURE_THRESHOLD", defaultBreakerFailureThreshold, minBreakerThreshold, maxBreakerThreshold)
 	if err != nil {

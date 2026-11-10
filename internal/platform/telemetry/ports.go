@@ -34,7 +34,11 @@ func (g observedGateway) Submit(ctx context.Context, submission ports.Investigat
 	return ref, err
 }
 
-func (g observedGateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, progress func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g observedGateway) Watch(
+	ctx context.Context,
+	ref domain.InvestigationTaskRef,
+	progress func(domain.InvestigationStage) error,
+) (ports.InvestigationResult, error) {
 	ctx, finish := g.provider.observeA2A(ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID}), "watch")
 	result, err := g.next.Watch(ctx, ref, progress)
 	finish(ctx, err)

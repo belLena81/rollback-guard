@@ -79,7 +79,13 @@ func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentComm
 		if err != nil {
 			return err
 		}
-		incident, err = s.transition(repositories, incident, now, (*domain.Incident).Cancel, terminated(command.Actor, domain.EventIncidentCanceled, command.Reason))
+		incident, err = s.transition(
+			repositories,
+			incident,
+			now,
+			(*domain.Incident).Cancel,
+			terminated(command.Actor, domain.EventIncidentCanceled, command.Reason),
+		)
 		if err != nil {
 			return err
 		}

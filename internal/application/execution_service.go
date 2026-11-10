@@ -117,7 +117,8 @@ func (s *ExecutionService) readAttempt(repositories ports.Repositories, loaded *
 		return false, err
 	}
 	loaded.record = record
-	if record.Operation() != domain.IdempotencyOperationExecuteRollback || record.RequestHash() != string(loaded.proposal.Hash()) || record.ResourceID() != string(loaded.incident.ID()) {
+	if record.Operation() != domain.IdempotencyOperationExecuteRollback || record.RequestHash() != string(loaded.proposal.Hash()) ||
+		record.ResourceID() != string(loaded.incident.ID()) {
 		return false, &domain.IdempotencyConflictError{Key: key}
 	}
 	switch record.State() {
@@ -163,13 +164,33 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 		// incident whose rollback is in flight or applied.
 		var cleanupErr error
 		if errors.Is(err, domain.ErrExpired) {
-			cleanupErr = s.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Expire, domain.EventIncidentExpired, authorizationExpiredAuditReason)
+			cleanupErr = s.terminateIfUnchanged(
+				cleanupCtx,
+				loaded.incident.ID(),
+				loaded.incident.Version(),
+				(*domain.Incident).Expire,
+				domain.EventIncidentExpired,
+				authorizationExpiredAuditReason,
+			)
 		} else {
-			cleanupErr = s.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Fail, domain.EventIncidentFailed, authorizationFailureAuditReason)
+			cleanupErr = s.terminateIfUnchanged(
+				cleanupCtx,
+				loaded.incident.ID(),
+				loaded.incident.Version(),
+				(*domain.Incident).Fail,
+				domain.EventIncidentFailed,
+				authorizationFailureAuditReason,
+			)
 		}
 		return executionPreparation{}, errors.Join(err, cleanupErr)
 	}
-	record, err := domain.NewPendingIdempotencyRecord(key, domain.IdempotencyOperationExecuteRollback, string(loaded.proposal.Hash()), string(loaded.incident.ID()), startedAt)
+	record, err := domain.NewPendingIdempotencyRecord(
+		key,
+		domain.IdempotencyOperationExecuteRollback,
+		string(loaded.proposal.Hash()),
+		string(loaded.incident.ID()),
+		startedAt,
+	)
 	if err != nil {
 		return executionPreparation{}, fmt.Errorf("create idempotency attempt: %w", err)
 	}
@@ -231,7 +252,12 @@ func deploymentRecovered(deployment domain.DeploymentEvidence) bool {
 		deployment.DesiredReplicas == deployment.AvailableReplicas
 }
 
-func (s *ExecutionService) completePendingRevalidationFailure(ctx context.Context, loaded loadedExecution, startedAt time.Time, cause error) executionPreparation {
+func (s *ExecutionService) completePendingRevalidationFailure(
+	ctx context.Context,
+	loaded loadedExecution,
+	startedAt time.Time,
+	cause error,
+) executionPreparation {
 	execution, createErr := s.newFailedExecution(loaded.proposal, loaded.record, startedAt)
 	if createErr != nil {
 		return executionPreparation{executionErr: errors.Join(cause, createErr), completed: true}
@@ -246,7 +272,13 @@ func (s *ExecutionService) completePendingRevalidationFailure(ctx context.Contex
 	}
 }
 
-func (s *ExecutionService) invokeExecutor(ctx context.Context, approved domain.ApprovedRollback, proposal domain.RollbackProposal, record domain.IdempotencyRecord, startedAt time.Time) (domain.RollbackExecution, error) {
+func (s *ExecutionService) invokeExecutor(
+	ctx context.Context,
+	approved domain.ApprovedRollback,
+	proposal domain.RollbackProposal,
+	record domain.IdempotencyRecord,
+	startedAt time.Time,
+) (domain.RollbackExecution, error) {
 	execution, executeErr := s.executor.ExecuteApprovedRollback(ctx, approved, record.Key())
 	if errors.Is(executeErr, ports.ErrRollbackOutcomeUnknown) {
 		return domain.RollbackExecution{}, fmt.Errorf("execute approved rollback: %w", executeErr)
@@ -264,7 +296,11 @@ func (s *ExecutionService) invokeExecutor(ctx context.Context, approved domain.A
 	return execution, nil
 }
 
-func (s *ExecutionService) newFailedExecution(proposal domain.RollbackProposal, record domain.IdempotencyRecord, startedAt time.Time) (domain.RollbackExecution, error) {
+func (s *ExecutionService) newFailedExecution(
+	proposal domain.RollbackProposal,
+	record domain.IdempotencyRecord,
+	startedAt time.Time,
+) (domain.RollbackExecution, error) {
 	return domain.NewRollbackExecution(
 		domain.ExecutionID(s.ids.NewID("execution")),
 		proposal.IncidentID(),
@@ -285,7 +321,12 @@ func executionOutcomeError(execution domain.RollbackExecution) error {
 	return fmt.Errorf("rollback execution failed: %s", execution.FailureReason())
 }
 
-func (s *ExecutionService) completeExecution(ctx context.Context, proposal domain.RollbackProposal, record domain.IdempotencyRecord, execution domain.RollbackExecution) error {
+func (s *ExecutionService) completeExecution(
+	ctx context.Context,
+	proposal domain.RollbackProposal,
+	record domain.IdempotencyRecord,
+	execution domain.RollbackExecution,
+) error {
 	completedAt := s.clock.Now()
 	completedRecord, err := record.Complete(execution.ID(), completedAt)
 	if err != nil {
@@ -347,7 +388,14 @@ func validateExecutionResult(execution domain.RollbackExecution, proposal domain
 // one transaction, but only while the incident is still at version. When the
 // incident has changed since then it writes nothing and returns nil: the
 // caller's failure belongs to a superseded view and the newer state wins.
-func (s *ExecutionService) terminateIfUnchanged(ctx context.Context, incidentID domain.IncidentID, version uint64, apply func(*domain.Incident, time.Time) error, kind domain.EventKind, reason string) error {
+func (s *ExecutionService) terminateIfUnchanged(
+	ctx context.Context,
+	incidentID domain.IncidentID,
+	version uint64,
+	apply func(*domain.Incident, time.Time) error,
+	kind domain.EventKind,
+	reason string,
+) error {
 	now := s.clock.Now()
 	return s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		incident, err := repositories.Incidents().Get(incidentID)

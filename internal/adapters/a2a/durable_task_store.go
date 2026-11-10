@@ -75,7 +75,16 @@ func (s *DurableTaskStore) Update(ctx context.Context, request *taskstore.Update
 		expected = stored.Version
 	}
 	next := expected + 1
-	updated, exists, err := s.records.Update(ctx, string(request.Task.ID), request.Task.ContextID, request.Task.Status.State.String(), int64(expected), int64(next), snapshot, s.clock.Now().UTC())
+	updated, exists, err := s.records.Update(
+		ctx,
+		string(request.Task.ID),
+		request.Task.ContextID,
+		request.Task.Status.State.String(),
+		int64(expected),
+		int64(next),
+		snapshot,
+		s.clock.Now().UTC(),
+	)
 	if err != nil {
 		return 0, fmt.Errorf("update A2A task: %w", err)
 	}

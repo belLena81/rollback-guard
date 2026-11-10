@@ -164,11 +164,36 @@ func RolloutRecent(rolloutAt, now time.Time, window time.Duration) bool {
 	return !rolloutAt.IsZero() && age >= -RolloutClockSkew && age <= window
 }
 
-func EvaluateRecovery(target DeploymentTarget, targetRevision Revision, deployment DeploymentEvidence, metric MetricEvidence, symptom Symptom, incidentID IncidentID, executionID ExecutionID, now time.Time) (RecoveryVerification, error) {
-	passed := deployment.Target.Equal(target) && deployment.CurrentRevision == targetRevision && deployment.Healthy && deployment.DesiredReplicas == deployment.ReadyReplicas && deployment.DesiredReplicas == deployment.AvailableReplicas && metric.Name == symptom.Kind().String() && metric.Unit == symptom.Unit() && metric.Value < symptom.Threshold()
+func EvaluateRecovery(
+	target DeploymentTarget,
+	targetRevision Revision,
+	deployment DeploymentEvidence,
+	metric MetricEvidence,
+	symptom Symptom,
+	incidentID IncidentID,
+	executionID ExecutionID,
+	now time.Time,
+) (RecoveryVerification, error) {
+	passed := deployment.Target.Equal(target) && deployment.CurrentRevision == targetRevision && deployment.Healthy &&
+		deployment.DesiredReplicas == deployment.ReadyReplicas &&
+		deployment.DesiredReplicas == deployment.AvailableReplicas &&
+		metric.Name == symptom.Kind().String() &&
+		metric.Unit == symptom.Unit() &&
+		metric.Value < symptom.Threshold()
 	reason := ""
 	if !passed {
 		reason = "revision, replicas, rollout health, or recovery metric did not recover"
 	}
-	return NewRecoveryVerification(incidentID, executionID, passed, deployment.CurrentRevision, deployment.DesiredReplicas, deployment.ReadyReplicas, deployment.AvailableReplicas, metric.Value, now, reason)
+	return NewRecoveryVerification(
+		incidentID,
+		executionID,
+		passed,
+		deployment.CurrentRevision,
+		deployment.DesiredReplicas,
+		deployment.ReadyReplicas,
+		deployment.AvailableReplicas,
+		metric.Value,
+		now,
+		reason,
+	)
 }

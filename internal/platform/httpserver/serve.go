@@ -97,7 +97,12 @@ func serve(ctx context.Context, listener net.Listener, name string, handler http
 		if !loopbackOnly(listener.Addr()) {
 			// Nothing is authenticated before Phase 7, so an operator who
 			// set HTTP_ADDR beyond loopback should see what that exposes.
-			logger.WarnContext(ctx, name+" is reachable beyond loopback and has no authentication; keep it on a trusted network", "addr", listener.Addr().String())
+			logger.WarnContext(
+				ctx,
+				name+" is reachable beyond loopback and has no authentication; keep it on a trusted network",
+				"addr",
+				listener.Addr().String(),
+			)
 		}
 		errCh <- server.Serve(listener)
 	}()

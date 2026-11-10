@@ -25,7 +25,11 @@ func NewRollbackExecutor(rollback, readonly Caller, timeout time.Duration, clock
 	return &RollbackExecutor{rollback: rollback, readonly: readonly, timeout: timeout, clock: clock}, nil
 }
 
-func (a *RollbackExecutor) ExecuteApprovedRollback(ctx context.Context, approved domain.ApprovedRollback, key domain.IdempotencyKey) (domain.RollbackExecution, error) {
+func (a *RollbackExecutor) ExecuteApprovedRollback(
+	ctx context.Context,
+	approved domain.ApprovedRollback,
+	key domain.IdempotencyKey,
+) (domain.RollbackExecution, error) {
 	proposal := approved.Proposal()
 	current, inspectErr := a.inspect(ctx, proposal.Target())
 	if inspectErr != nil && ambiguousToolError(inspectErr) {
@@ -140,17 +144,42 @@ func (a *RollbackExecutor) executeMutation(ctx context.Context, input ExecuteRol
 	return mutation, nil
 }
 
-func (a *RollbackExecutor) waitAndBuild(ctx context.Context, approved domain.ApprovedRollback, key domain.IdempotencyKey, startedAt time.Time, mutationCompletedAt time.Time) (domain.RollbackExecution, error) {
+func (a *RollbackExecutor) waitAndBuild(
+	ctx context.Context,
+	approved domain.ApprovedRollback,
+	key domain.IdempotencyKey,
+	startedAt time.Time,
+	mutationCompletedAt time.Time,
+) (domain.RollbackExecution, error) {
 	proposal := approved.Proposal()
 	watchCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
-	output, err := callTool[WatchRolloutInput, RolloutOutput](watchCtx, a.readonly, ToolWatchRollout, WatchRolloutInput{Target: TargetFromDomain(proposal.Target()), ExpectedRevision: string(proposal.TargetRevision()), TimeoutSeconds: int(a.timeout / time.Second)})
+	output, err := callTool[WatchRolloutInput, RolloutOutput](
+		watchCtx,
+		a.readonly,
+		ToolWatchRollout,
+		WatchRolloutInput{
+			Target:           TargetFromDomain(proposal.Target()),
+			ExpectedRevision: string(proposal.TargetRevision()),
+			TimeoutSeconds:   int(a.timeout / time.Second),
+		},
+	)
 	if err != nil || !output.Complete {
 		return domain.RollbackExecution{}, fmt.Errorf("watch approved rollback: %w", ports.ErrRollbackOutcomeUnknown)
 	}
 	executionID := domain.DeterministicExecutionID(key, proposal.Hash())
 	completedAt := rollbackExecutionCompletedAt(startedAt, mutationCompletedAt, a.clock.Now())
-	return domain.NewRollbackExecution(executionID, proposal.IncidentID(), key, proposal.CurrentRevision(), proposal.TargetRevision(), domain.ExecutionSucceeded, startedAt, completedAt, "")
+	return domain.NewRollbackExecution(
+		executionID,
+		proposal.IncidentID(),
+		key,
+		proposal.CurrentRevision(),
+		proposal.TargetRevision(),
+		domain.ExecutionSucceeded,
+		startedAt,
+		completedAt,
+		"",
+	)
 }
 
 func (a *RollbackExecutor) inspect(ctx context.Context, target domain.DeploymentTarget) (domain.DeploymentEvidence, error) {

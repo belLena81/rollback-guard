@@ -406,7 +406,8 @@ func (r IdempotencyRecord) Snapshot() IdempotencyRecordSnapshot {
 }
 
 func RehydrateIdempotencyRecord(snapshot IdempotencyRecordSnapshot) (IdempotencyRecord, error) {
-	if snapshot.Key == "" || !snapshot.Operation.Valid() || strings.TrimSpace(snapshot.RequestHash) == "" || strings.TrimSpace(snapshot.ResourceID) == "" || snapshot.StartedAt.IsZero() {
+	if snapshot.Key == "" || !snapshot.Operation.Valid() || strings.TrimSpace(snapshot.RequestHash) == "" || strings.TrimSpace(snapshot.ResourceID) == "" ||
+		snapshot.StartedAt.IsZero() {
 		return IdempotencyRecord{}, invalid("idempotency_record", "invalid record")
 	}
 	switch snapshot.State {

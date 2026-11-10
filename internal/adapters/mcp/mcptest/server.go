@@ -56,14 +56,18 @@ func NewSlowServer(t *testing.T, delay time.Duration, tools ...string) *Server {
 	recorded := &Server{}
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "mcptest", Version: "v0"}, nil)
 	for _, name := range tools {
-		mcpsdk.AddTool(server, &mcpsdk.Tool{Name: name, Description: "test tool"}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, _ input) (*mcpsdk.CallToolResult, output, error) {
-			select {
-			case <-ctx.Done():
-				return nil, output{}, ctx.Err()
-			case <-time.After(delay):
-				return nil, output{OK: true}, nil
-			}
-		})
+		mcpsdk.AddTool(
+			server,
+			&mcpsdk.Tool{Name: name, Description: "test tool"},
+			func(ctx context.Context, _ *mcpsdk.CallToolRequest, _ input) (*mcpsdk.CallToolResult, output, error) {
+				select {
+				case <-ctx.Done():
+					return nil, output{}, ctx.Err()
+				case <-time.After(delay):
+					return nil, output{OK: true}, nil
+				}
+			},
+		)
 	}
 	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		return func(ctx context.Context, method string, request mcpsdk.Request) (mcpsdk.Result, error) {

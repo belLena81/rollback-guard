@@ -308,7 +308,10 @@ func (r executionRepo) Save(v domain.RollbackExecution) error {
 	}
 	proposal, proposalExists := r.d.proposals[v.IncidentID()]
 	record, recordExists := r.d.idempotency[v.IdempotencyKey()]
-	if !proposalExists || !recordExists || record.State() != domain.IdempotencyPending || record.ResourceID() != string(v.IncidentID()) || record.RequestHash() != string(proposal.Hash()) || v.FromRevision() != proposal.CurrentRevision() || v.ToRevision() != proposal.TargetRevision() {
+	if !proposalExists || !recordExists || record.State() != domain.IdempotencyPending || record.ResourceID() != string(v.IncidentID()) ||
+		record.RequestHash() != string(proposal.Hash()) ||
+		v.FromRevision() != proposal.CurrentRevision() ||
+		v.ToRevision() != proposal.TargetRevision() {
 		return &domain.ValidationError{Field: "execution", Reason: "does not match pending approved rollback"}
 	}
 	r.d.executions[v.IncidentID()] = v
@@ -381,7 +384,8 @@ func (r idempotencyRepo) Update(v domain.IdempotencyRecord, expected domain.Idem
 	if !ok {
 		return &domain.NotFoundError{Resource: "idempotency key", ID: string(v.Key())}
 	}
-	if old.State() != expected || old.Operation() != v.Operation() || old.RequestHash() != v.RequestHash() || old.ResourceID() != v.ResourceID() || old.StartedAt() != v.StartedAt() {
+	if old.State() != expected || old.Operation() != v.Operation() || old.RequestHash() != v.RequestHash() || old.ResourceID() != v.ResourceID() ||
+		old.StartedAt() != v.StartedAt() {
 		return &domain.IdempotencyConflictError{Key: v.Key()}
 	}
 	if expected != domain.IdempotencyPending || v.State() != domain.IdempotencyCompleted {
@@ -424,7 +428,10 @@ func (r investigationTaskRepo) GetByIncident(id domain.IncidentID) (domain.Inves
 
 func (r investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUntil time.Time) (domain.InvestigationDispatch, error) {
 	for id, task := range r.d.investigations {
-		staleActive := (task.State == domain.InvestigationTaskSubmitting || task.State == domain.InvestigationTaskSubmitted || task.State == domain.InvestigationTaskWorking) && !task.LeaseExpiresAt.After(now)
+		active := task.State == domain.InvestigationTaskSubmitting ||
+			task.State == domain.InvestigationTaskSubmitted ||
+			task.State == domain.InvestigationTaskWorking
+		staleActive := active && !task.LeaseExpiresAt.After(now)
 		claimableCancellation := task.State == domain.InvestigationTaskCancelRequested && !task.LeaseExpiresAt.After(now)
 		if task.State != domain.InvestigationTaskQueued && !claimableCancellation && !staleActive {
 			continue

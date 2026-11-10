@@ -26,7 +26,8 @@ func telemetryEnv(defaultServiceName string) (TelemetryConfig, error) {
 	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if endpoint != "" {
 		parsed, err := url.Parse(endpoint)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" ||
+			parsed.Fragment != "" {
 			// The value may carry credentials, so neither it nor the parse
 			// error is reported.
 			return TelemetryConfig{}, errors.New("OTEL_EXPORTER_OTLP_ENDPOINT must be an http(s) URL without credentials, query, or fragment")

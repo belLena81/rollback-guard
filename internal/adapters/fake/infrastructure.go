@@ -59,7 +59,11 @@ func (f *Infrastructure) Observe(ctx context.Context, target domain.DeploymentTa
 	return f.Metric, nil
 }
 
-func (f *Infrastructure) ExecuteApprovedRollback(ctx context.Context, approved domain.ApprovedRollback, key domain.IdempotencyKey) (domain.RollbackExecution, error) {
+func (f *Infrastructure) ExecuteApprovedRollback(
+	ctx context.Context,
+	approved domain.ApprovedRollback,
+	key domain.IdempotencyKey,
+) (domain.RollbackExecution, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.RollbackExecution{}, err
 	}

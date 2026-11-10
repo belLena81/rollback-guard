@@ -49,7 +49,12 @@ type decisionOutcome struct {
 	expired  bool
 }
 
-func (s *ApprovalService) recordDecision(ctx context.Context, command ApprovalCommand, decision domain.ApprovalDecision, reason string) (domain.Approval, error) {
+func (s *ApprovalService) recordDecision(
+	ctx context.Context,
+	command ApprovalCommand,
+	decision domain.ApprovalDecision,
+	reason string,
+) (domain.Approval, error) {
 	now := s.clock.Now()
 	var outcome decisionOutcome
 	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
@@ -66,7 +71,13 @@ func (s *ApprovalService) recordDecision(ctx context.Context, command ApprovalCo
 	return outcome.approval, nil
 }
 
-func (s *ApprovalService) decide(repositories ports.Repositories, command ApprovalCommand, decision domain.ApprovalDecision, reason string, now time.Time) (decisionOutcome, error) {
+func (s *ApprovalService) decide(
+	repositories ports.Repositories,
+	command ApprovalCommand,
+	decision domain.ApprovalDecision,
+	reason string,
+	now time.Time,
+) (decisionOutcome, error) {
 	incident, err := repositories.Incidents().Get(command.IncidentID)
 	if err != nil {
 		return decisionOutcome{}, err
@@ -88,7 +99,16 @@ func (s *ApprovalService) decide(repositories ports.Repositories, command Approv
 	if proposal.ExpiresAt().Before(expiresAt) {
 		expiresAt = proposal.ExpiresAt()
 	}
-	approval, err := domain.NewApproval(domain.ApprovalID(s.ids.NewID("approval")), command.Actor, decision, command.ActionID, command.ProposalHash, now, expiresAt, reason)
+	approval, err := domain.NewApproval(
+		domain.ApprovalID(s.ids.NewID("approval")),
+		command.Actor,
+		decision,
+		command.ActionID,
+		command.ProposalHash,
+		now,
+		expiresAt,
+		reason,
+	)
 	if err != nil {
 		return decisionOutcome{}, err
 	}
@@ -108,7 +128,12 @@ func (s *ApprovalService) decide(repositories ports.Repositories, command Approv
 
 // existingDecision reports a decision already recorded for the incident.
 // Replaying the same decision returns it; any other is a mismatch.
-func (s *ApprovalService) existingDecision(repositories ports.Repositories, command ApprovalCommand, decision domain.ApprovalDecision, reason string) (domain.Approval, bool, error) {
+func (s *ApprovalService) existingDecision(
+	repositories ports.Repositories,
+	command ApprovalCommand,
+	decision domain.ApprovalDecision,
+	reason string,
+) (domain.Approval, bool, error) {
 	existing, err := repositories.Approvals().GetByIncident(command.IncidentID)
 	if errors.Is(err, domain.ErrNotFound) {
 		return domain.Approval{}, false, nil
@@ -116,7 +141,9 @@ func (s *ApprovalService) existingDecision(repositories ports.Repositories, comm
 	if err != nil {
 		return domain.Approval{}, true, err
 	}
-	if existing.Actor() == command.Actor && existing.Decision() == decision && existing.ActionID() == command.ActionID && existing.ProposalHash() == command.ProposalHash && existing.RejectionReason() == reason {
+	if existing.Actor() == command.Actor && existing.Decision() == decision && existing.ActionID() == command.ActionID &&
+		existing.ProposalHash() == command.ProposalHash &&
+		existing.RejectionReason() == reason {
 		return existing, true, nil
 	}
 	return domain.Approval{}, true, &domain.ApprovalMismatchError{Reason: "a different approval decision is already recorded"}

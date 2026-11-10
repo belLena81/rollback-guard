@@ -28,7 +28,12 @@ func NewRollbackMutationGuard(pool *pgxpool.Pool) (*RollbackMutationGuard, error
 	return &RollbackMutationGuard{pool: pool, locks: make(map[domain.IdempotencyKey]*rollbackMutationLock)}, nil
 }
 
-func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.IdempotencyKey, hash domain.ProposalHash, startedAt time.Time) (_ ports.RollbackMutationAttempt, resultErr error) {
+func (g *RollbackMutationGuard) Begin(
+	ctx context.Context,
+	key domain.IdempotencyKey,
+	hash domain.ProposalHash,
+	startedAt time.Time,
+) (_ ports.RollbackMutationAttempt, resultErr error) {
 	if key == "" || hash == "" || startedAt.IsZero() {
 		return ports.RollbackMutationAttempt{}, &domain.ValidationError{Field: "rollback_mutation", Reason: "invalid key, hash, or start time"}
 	}
@@ -143,7 +148,14 @@ func authorizeTrustedExecution(ctx context.Context, tx pgx.Tx, key domain.Idempo
 	return trustedExecution{approved: approved, proposal: proposal, record: record}, nil
 }
 
-func authorizeOrResume(proposal domain.RollbackProposal, decision domain.PolicyDecision, approval domain.Approval, record domain.IdempotencyRecord, key domain.IdempotencyKey, resume bool) (domain.ApprovedRollback, error) {
+func authorizeOrResume(
+	proposal domain.RollbackProposal,
+	decision domain.PolicyDecision,
+	approval domain.Approval,
+	record domain.IdempotencyRecord,
+	key domain.IdempotencyKey,
+	resume bool,
+) (domain.ApprovedRollback, error) {
 	if resume {
 		return domain.ResumeApprovedRollback(proposal, decision, approval, record, key)
 	}
@@ -156,8 +168,21 @@ func authorizeOrResume(proposal domain.RollbackProposal, decision domain.PolicyD
 	)
 }
 
-func insertPendingRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.IdempotencyKey, hash domain.ProposalHash, trusted trustedExecution) (domain.RollbackMutation, error) {
-	pending, err := domain.NewPendingRollbackMutation(key, hash, domain.DeterministicExecutionID(key, hash), trusted.proposal.CurrentRevision(), trusted.proposal.TargetRevision(), trusted.record.StartedAt())
+func insertPendingRollbackMutation(
+	ctx context.Context,
+	tx pgx.Tx,
+	key domain.IdempotencyKey,
+	hash domain.ProposalHash,
+	trusted trustedExecution,
+) (domain.RollbackMutation, error) {
+	pending, err := domain.NewPendingRollbackMutation(
+		key,
+		hash,
+		domain.DeterministicExecutionID(key, hash),
+		trusted.proposal.CurrentRevision(),
+		trusted.proposal.TargetRevision(),
+		trusted.record.StartedAt(),
+	)
 	if err != nil {
 		return domain.RollbackMutation{}, err
 	}
@@ -167,7 +192,8 @@ func insertPendingRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.Id
 			idempotency_key, proposal_hash, execution_id, from_revision, to_revision,
 			state, started_at, completed_at, already_applied
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,NULL)
-	`, snapshot.Key, snapshot.ProposalHash, snapshot.ExecutionID, snapshot.FromRevision, snapshot.ToRevision, rollbackMutationStateText(snapshot.State), snapshot.StartedAt); err != nil {
+	`, snapshot.Key, snapshot.ProposalHash, snapshot.ExecutionID, snapshot.FromRevision, snapshot.ToRevision,
+		rollbackMutationStateText(snapshot.State), snapshot.StartedAt); err != nil {
 		return domain.RollbackMutation{}, fmt.Errorf("insert rollback mutation: %w", err)
 	}
 	return pending, nil
@@ -176,7 +202,12 @@ func insertPendingRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.Id
 // Complete records the attempt's mutation as completed while the attempt's
 // lease still holds the per-key lock, then releases that lock. An attempt
 // whose lease is not held writes nothing.
-func (g *RollbackMutationGuard) Complete(ctx context.Context, attempt ports.RollbackMutationAttempt, alreadyApplied bool, completedAt time.Time) (_ domain.RollbackMutation, resultErr error) {
+func (g *RollbackMutationGuard) Complete(
+	ctx context.Context,
+	attempt ports.RollbackMutationAttempt,
+	alreadyApplied bool,
+	completedAt time.Time,
+) (_ domain.RollbackMutation, resultErr error) {
 	pending := attempt.Mutation
 	lock := g.takeRollbackMutationLock(pending.Key(), attempt.Lease)
 	if lock == nil {
@@ -284,10 +315,13 @@ func (g *RollbackMutationGuard) retainRollbackMutationLock(ctx context.Context, 
 	g.locks[key] = lock
 	g.mu.Unlock()
 	if previous != nil {
-		// Detached on purpose, as in Release. Begin has already committed by the time a lock is retained, so a failure to
-		// unlock the stale, replaced lock must not fail the new attempt. On unlock
-		// failure release closes the session, which drops its advisory lock.
-		_ = previous.release(context.WithoutCancel(ctx)) //nolint:errcheck // intentional: see comment above; covered by TestRetainRollbackMutationLockIgnoresReplacedLockReleaseFailure
+		// Detached on purpose, as in Release. Begin has already committed by the
+		// time a lock is retained, so a failure to unlock the stale, replaced lock
+		// must not fail the new attempt. On unlock failure release closes the
+		// session, which drops its advisory lock. Covered by
+		// TestRetainRollbackMutationLockIgnoresReplacedLockReleaseFailure.
+		detached := context.WithoutCancel(ctx)
+		_ = previous.release(detached) //nolint:errcheck // intentional: see comment above
 	}
 }
 
@@ -344,7 +378,8 @@ func loadRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.Idempotency
 		SELECT idempotency_key, proposal_hash, execution_id, from_revision, to_revision,
 			state, started_at, completed_at, already_applied
 		FROM rollback_mutations WHERE idempotency_key = $1
-	`, key).Scan(&snapshot.Key, &snapshot.ProposalHash, &snapshot.ExecutionID, &snapshot.FromRevision, &snapshot.ToRevision, &state, &snapshot.StartedAt, &completedAt, &alreadyApplied)
+	`, key).Scan(&snapshot.Key, &snapshot.ProposalHash, &snapshot.ExecutionID, &snapshot.FromRevision, &snapshot.ToRevision,
+		&state, &snapshot.StartedAt, &completedAt, &alreadyApplied)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RollbackMutation{}, false, nil
 	}

@@ -105,7 +105,10 @@ func buildServices(cfg config.KubernetesMCPConfig, clientset kubernetes.Interfac
 		}
 		mutationGuard = guard
 	}
-	return kubernetesadapter.NewService(clientset, kubernetesadapter.Config{ClusterID: cfg.ClusterID, AllowedTargets: cfg.AllowedTargets, MutationGuard: mutationGuard})
+	return kubernetesadapter.NewService(
+		clientset,
+		kubernetesadapter.Config{ClusterID: cfg.ClusterID, AllowedTargets: cfg.AllowedTargets, MutationGuard: mutationGuard},
+	)
 }
 
 // protectBackend retries transient Kubernetes API failures on the read tools
@@ -135,7 +138,13 @@ func readiness(cfg config.KubernetesMCPConfig, clientset kubernetes.Interface, p
 }
 
 // buildHTTP assembles the MCP server for the configured mode.
-func buildHTTP(cfg config.KubernetesMCPConfig, backend kubernetesserver.Backend, ready httpserver.ReadyCheck, tel *telemetry.Provider, logger *slog.Logger) (http.Handler, error) {
+func buildHTTP(
+	cfg config.KubernetesMCPConfig,
+	backend kubernetesserver.Backend,
+	ready httpserver.ReadyCheck,
+	tel *telemetry.Provider,
+	logger *slog.Logger,
+) (http.Handler, error) {
 	mode := kubernetesserver.Mode(cfg.Mode)
 	serverName := protocol.ServerKubernetesReadonly
 	if mode == kubernetesserver.ModeRollback {

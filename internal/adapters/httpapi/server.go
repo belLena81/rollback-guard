@@ -44,7 +44,10 @@ func WithMetricsHandler(handler http.Handler) Option {
 }
 
 func NewServer(services application.Services, logger *slog.Logger, opts ...Option) (*Server, error) {
-	if services.Incidents == nil || services.Investigations == nil || services.Approvals == nil || services.Executions == nil || services.Verifications == nil || services.Queries == nil || services.ApproveAndExecute == nil {
+	if services.Incidents == nil || services.Investigations == nil || services.Approvals == nil || services.Executions == nil ||
+		services.Verifications == nil ||
+		services.Queries == nil ||
+		services.ApproveAndExecute == nil {
 		return nil, errors.New("all application services are required")
 	}
 	if logger == nil {
@@ -164,7 +167,10 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 	}
 	logAttrs := []any{"status", incident.Status().String()}
 	if summary.Investigation != nil {
-		ctx = ports.WithCorrelation(ctx, ports.Correlation{OperationID: summary.Investigation.OperationID, IdempotencyKey: summary.Investigation.IdempotencyKey})
+		ctx = ports.WithCorrelation(
+			ctx,
+			ports.Correlation{OperationID: summary.Investigation.OperationID, IdempotencyKey: summary.Investigation.IdempotencyKey},
+		)
 	}
 	s.logger.InfoContext(ctx, "incident created", logAttrs...)
 	w.Header().Set("Location", "/v1/incidents/"+string(incident.ID()))
@@ -263,7 +269,10 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	incidentID := domain.IncidentID(r.PathValue("incidentId"))
-	if _, err := s.services.Incidents.Cancel(r.Context(), application.CancelIncidentCommand{IncidentID: incidentID, Actor: actor, Reason: request.Reason}); err != nil {
+	if _, err := s.services.Incidents.Cancel(
+		r.Context(),
+		application.CancelIncidentCommand{IncidentID: incidentID, Actor: actor, Reason: request.Reason},
+	); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -294,7 +303,11 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeJSON(w, http.StatusBadRequest, errorDTO{Error: codeInvalidJSON, Message: "request body must contain exactly one JSON value", RequestID: requestID(r)})
+		writeJSON(
+			w,
+			http.StatusBadRequest,
+			errorDTO{Error: codeInvalidJSON, Message: "request body must contain exactly one JSON value", RequestID: requestID(r)},
+		)
 		return false
 	}
 	return true

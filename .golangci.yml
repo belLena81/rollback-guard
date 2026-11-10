@@ -12,6 +12,7 @@ linters:
     - gocognit
     - contextcheck
     - gocritic
+    - lll
     - gocyclo
     - gosec
     - govet
@@ -28,6 +29,8 @@ linters:
     - unused
     - usestdlibvars
   settings:
+    lll:
+      line-length: 160
     gocognit:
       min-complexity: 30
     gocyclo:
@@ -45,10 +48,12 @@ linters:
           - mnd
         path-except: ^(cmd|internal/platform)/
       # Test fixtures carry fake credentials, loopback requests and repo-local
-      # files on purpose (G101, G304, G704); contextcheck cannot follow test helpers.
+      # files on purpose (G101, G304, G704);
+      # contextcheck cannot follow test helpers; table-driven fixtures are long (lll).
       - linters:
           - gosec
           - contextcheck
+          - lll
         path: _test\.go$
       # The R4 ratchet (complexity, duplication, unused parameters) holds
       # production code. Table-driven tests and scenario fixtures are long
