@@ -50,7 +50,7 @@ func TestGitHubLoginOnPostgres(t *testing.T) {
 	login, err := application.NewLoginService(application.LoginDependencies{
 		Sessions: sessions, UnitOfWork: fixture.uow, Clock: clock, IDGenerator: ids, Random: runtime.RandomSource{}, Provider: provider,
 	}, application.LoginPolicy{
-		AllowedOrganization: "acme", BootstrapAdmins: []string{"PG-ADMIN"}, StateKey: []byte(strings.Repeat("k", application.MinLoginStateKeyBytes)),
+		AllowedOrganization: "acme", BootstrapAdmins: []domain.BootstrapAdmin{{Login: "PG-ADMIN", GitHubID: 7001}}, StateKey: []byte(strings.Repeat("k", application.MinLoginStateKeyBytes)),
 	})
 	if err != nil {
 		t.Fatal(err)

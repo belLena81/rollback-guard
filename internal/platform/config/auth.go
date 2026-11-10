@@ -91,9 +91,9 @@ type GitHubAuthConfig struct {
 	// AllowedOrganization is the one GitHub organization whose members may
 	// sign in (case-insensitive).
 	AllowedOrganization string
-	// BootstrapAdmins are GitHub logins created as administrators on their
-	// first login.
-	BootstrapAdmins []string
+	// BootstrapAdmins are GitHub accounts, matched by numeric ID only,
+	// created as administrators on their first login.
+	BootstrapAdmins []domain.BootstrapAdmin
 	// StateSecret keys the HMAC of the login state cookie.
 	StateSecret Secret
 	BaseURL     string
@@ -169,22 +169,22 @@ func githubAuthEnv() (GitHubAuthConfig, error) {
 	}, nil
 }
 
-func bootstrapAdminsEnv() ([]string, error) {
+func bootstrapAdminsEnv() ([]domain.BootstrapAdmin, error) {
 	value := strings.TrimSpace(os.Getenv("AUTH_BOOTSTRAP_ADMINS"))
 	if value == "" {
 		return nil, errors.New("AUTH_BOOTSTRAP_ADMINS is required in github mode")
 	}
 	parts := strings.Split(value, ",")
 	if len(parts) > maxBootstrapAdmins {
-		return nil, fmt.Errorf("AUTH_BOOTSTRAP_ADMINS must list at most %d logins", maxBootstrapAdmins)
+		return nil, fmt.Errorf("AUTH_BOOTSTRAP_ADMINS must list at most %d accounts", maxBootstrapAdmins)
 	}
-	admins := make([]string, 0, len(parts))
+	admins := make([]domain.BootstrapAdmin, 0, len(parts))
 	for _, part := range parts {
-		login := strings.TrimSpace(part)
-		if !domain.IsGitHubLogin(login) {
-			return nil, errors.New("AUTH_BOOTSTRAP_ADMINS must be a comma-separated list of GitHub logins")
+		admin, err := domain.ParseBootstrapAdmin(part)
+		if err != nil {
+			return nil, errors.New("AUTH_BOOTSTRAP_ADMINS must be a comma-separated list of login:githubID entries")
 		}
-		admins = append(admins, login)
+		admins = append(admins, admin)
 	}
 	return admins, nil
 }

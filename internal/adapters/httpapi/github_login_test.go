@@ -70,7 +70,7 @@ func newLoginHarness(t *testing.T, cookieSecure bool, timeout time.Duration) *lo
 	stateKey := strings.Repeat("s", application.MinLoginStateKeyBytes)
 	login, err := application.NewLoginService(application.LoginDependencies{
 		Sessions: h.sessions, UnitOfWork: h.store, Clock: h.clock, IDGenerator: ids, Random: random, Provider: provider,
-	}, application.LoginPolicy{AllowedOrganization: loginOrg, BootstrapAdmins: []string{"root"}, StateKey: []byte(stateKey)})
+	}, application.LoginPolicy{AllowedOrganization: loginOrg, BootstrapAdmins: []domain.BootstrapAdmin{{Login: "root", GitHubID: 1}}, StateKey: []byte(stateKey)})
 	if err != nil {
 		t.Fatal(err)
 	}

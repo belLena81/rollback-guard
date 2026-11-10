@@ -67,8 +67,9 @@ type LoginPolicy struct {
 	// AllowedOrganization is the one GitHub organization whose members may
 	// sign in, compared case-insensitively.
 	AllowedOrganization string
-	// BootstrapAdmins are logins created as administrator on first login.
-	BootstrapAdmins []string
+	// BootstrapAdmins are accounts created as administrator on first login.
+	// Only the numeric GitHub ID is matched; the login is a label.
+	BootstrapAdmins []domain.BootstrapAdmin
 	// StateKey authenticates the login state cookie (HMAC-SHA256).
 	StateKey []byte
 }
@@ -102,7 +103,7 @@ type LoginService struct {
 	random          ports.RandomSource
 	provider        ports.IdentityProvider
 	allowedOrg      string
-	bootstrapAdmins map[string]struct{}
+	bootstrapAdmins map[int64]struct{}
 	stateKey        []byte
 }
 
@@ -114,12 +115,12 @@ func NewLoginService(dependencies LoginDependencies, policy LoginPolicy) (*Login
 	if !domain.IsGitHubLogin(policy.AllowedOrganization) {
 		return nil, &domain.ValidationError{Field: "allowed_organization", Reason: "must be a GitHub organization login"}
 	}
-	admins := make(map[string]struct{}, len(policy.BootstrapAdmins))
-	for _, login := range policy.BootstrapAdmins {
-		if !domain.IsGitHubLogin(login) {
-			return nil, &domain.ValidationError{Field: "bootstrap_admins", Reason: "each must be a GitHub login"}
+	admins := make(map[int64]struct{}, len(policy.BootstrapAdmins))
+	for _, admin := range policy.BootstrapAdmins {
+		if !domain.IsGitHubLogin(admin.Login) || admin.GitHubID <= 0 {
+			return nil, &domain.ValidationError{Field: "bootstrap_admins", Reason: "each must be a GitHub login and a positive GitHub ID"}
 		}
-		admins[strings.ToLower(login)] = struct{}{}
+		admins[admin.GitHubID] = struct{}{}
 	}
 	if len(policy.StateKey) < MinLoginStateKeyBytes {
 		return nil, &domain.ValidationError{Field: "state_key", Reason: fmt.Sprintf("must be at least %d bytes", MinLoginStateKeyBytes)}
@@ -251,7 +252,7 @@ func (s *LoginService) upsertUser(repos ports.AuthRepositories, identity ports.G
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
 		role := domain.RoleViewer
-		if _, ok := s.bootstrapAdmins[strings.ToLower(identity.Login)]; ok {
+		if _, ok := s.bootstrapAdmins[identity.GitHubID]; ok {
 			role = domain.RoleAdministrator
 		}
 		user, err = domain.NewUser(domain.UserID(s.ids.NewID("user")), identity.GitHubID, identity.Login, identity.Email, identity.Organizations, role, now)

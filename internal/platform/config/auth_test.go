@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/belLena81/rollback-guard/internal/domain"
 )
 
 const (
@@ -24,7 +26,7 @@ func githubEnv() map[string]string {
 		"AUTH_GITHUB_CLIENT_SECRET": testClientSecret,
 		"AUTH_GITHUB_REDIRECT_URL":  "https://guardian.example.com/v1/auth/github/callback",
 		"AUTH_GITHUB_ALLOWED_ORG":   "acme",
-		"AUTH_BOOTSTRAP_ADMINS":     "alice, Bob-1",
+		"AUTH_BOOTSTRAP_ADMINS":     "alice:101, Bob-1:202",
 		"AUTH_STATE_SECRET":         testStateSecret,
 	}
 }
@@ -35,7 +37,7 @@ func validGitHubConfig() GitHubAuthConfig {
 		ClientSecret:        NewSecret(testClientSecret),
 		RedirectURL:         "https://guardian.example.com/v1/auth/github/callback",
 		AllowedOrganization: "acme",
-		BootstrapAdmins:     []string{"alice", "Bob-1"},
+		BootstrapAdmins:     []domain.BootstrapAdmin{{Login: "alice", GitHubID: 101}, {Login: "Bob-1", GitHubID: 202}},
 		StateSecret:         NewSecret(testStateSecret),
 		BaseURL:             DefaultGitHubBaseURL,
 		APIURL:              DefaultGitHubAPIURL,
@@ -89,9 +91,13 @@ func TestLoadAuthConfig(t *testing.T) {
 		{name: "missing org", env: map[string]string{"AUTH_GITHUB_ALLOWED_ORG": ""}, wantErr: "AUTH_GITHUB_ALLOWED_ORG is required"},
 		{name: "bad org", env: map[string]string{"AUTH_GITHUB_ALLOWED_ORG": "acme/evil"}, wantErr: "AUTH_GITHUB_ALLOWED_ORG"},
 		{name: "missing admins", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": ""}, wantErr: "AUTH_BOOTSTRAP_ADMINS is required"},
-		{name: "bad admin login", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": "alice,bob smith"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
-		{name: "empty admin entry", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": "alice,,bob"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
-		{name: "too many admins", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": strings.Repeat("a,", 32) + "a"}, wantErr: "at most 32"},
+		{name: "bad admin login", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": "alice:1,bob smith:2"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
+		{name: "admin login without id", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": "alice:1,bob"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
+		{name: "admin non-numeric id", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": "alice:x1"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
+		{name: "admin zero id", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": "alice:0"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
+		{name: "admin id without login", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": ":5"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
+		{name: "empty admin entry", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": "alice:1,,bob:2"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
+		{name: "too many admins", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": strings.Repeat("a:1,", 32) + "a:1"}, wantErr: "at most 32"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

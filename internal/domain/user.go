@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -238,6 +239,30 @@ func (u User) changed(now time.Time, apply func(*User)) (User, error) {
 	next.updatedAt = now.UTC()
 	next.version++
 	return next, nil
+}
+
+// BootstrapAdmin is one AUTH_BOOTSTRAP_ADMINS entry: a GitHub account created
+// as administrator on its first login. Only GitHubID is matched; Login is a
+// human-readable label and is never trusted, because a GitHub login can be
+// renamed and then taken by a different account.
+type BootstrapAdmin struct {
+	Login    string
+	GitHubID int64
+}
+
+// ParseBootstrapAdmin parses "login:githubID". Both parts are required: the
+// login must be a GitHub login and the ID a canonical positive decimal.
+func ParseBootstrapAdmin(value string) (BootstrapAdmin, error) {
+	login, id, ok := strings.Cut(strings.TrimSpace(value), ":")
+	login, id = strings.TrimSpace(login), strings.TrimSpace(id)
+	if !ok || !validGitHubLogin(login) {
+		return BootstrapAdmin{}, invalid("bootstrap_admin", "must be login:githubID with a GitHub login")
+	}
+	githubID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || githubID <= 0 || strconv.FormatInt(githubID, 10) != id {
+		return BootstrapAdmin{}, invalid("bootstrap_admin", "must be login:githubID with a positive numeric GitHub ID")
+	}
+	return BootstrapAdmin{Login: login, GitHubID: githubID}, nil
 }
 
 // ActorFor returns the human Actor that attributes u's actions in the audit

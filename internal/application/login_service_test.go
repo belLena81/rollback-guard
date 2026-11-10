@@ -94,7 +94,7 @@ func newLoginFixture(t *testing.T) *loginFixture {
 	}
 	f.login, err = application.NewLoginService(application.LoginDependencies{
 		Sessions: f.sessions, UnitOfWork: f.store, Clock: f.clock, IDGenerator: ids, Random: random, Provider: f.provider,
-	}, application.LoginPolicy{AllowedOrganization: "acme", BootstrapAdmins: []string{"Root-Admin"}, StateKey: loginStateKey})
+	}, application.LoginPolicy{AllowedOrganization: "acme", BootstrapAdmins: []domain.BootstrapAdmin{{Login: "Root-Admin", GitHubID: 99}}, StateKey: loginStateKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,6 +316,34 @@ func TestLoginBootstrapAdminOnlyAtCreation(t *testing.T) {
 	}
 }
 
+// TestLoginBootstrapAdminMatchesGitHubIDNotLogin: a different account that
+// took over a listed login does not become administrator, and the listed
+// account is elevated whatever login it signs in with.
+func TestLoginBootstrapAdminMatchesGitHubIDNotLogin(t *testing.T) {
+	tests := []struct {
+		name     string
+		identity ports.GitHubIdentity
+		want     domain.Role
+	}{
+		{name: "listed login, other account", identity: member(100, "Root-Admin"), want: domain.RoleViewer},
+		{name: "listed login, other case, other account", identity: member(101, "root-admin"), want: domain.RoleViewer},
+		{name: "listed account, renamed login", identity: member(99, "renamed-root"), want: domain.RoleAdministrator},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newLoginFixture(t)
+			f.provider.setIdentity(tt.identity)
+			result, err := f.signIn(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.User.Role() != tt.want {
+				t.Fatalf("role = %v, want %v", result.User.Role(), tt.want)
+			}
+		})
+	}
+}
+
 func TestLoginRefreshesProfileAndKeepsRole(t *testing.T) {
 	f := newLoginFixture(t)
 	first, err := f.signIn(t)
@@ -399,7 +427,7 @@ func TestNewLoginServiceValidates(t *testing.T) {
 	deps := application.LoginDependencies{
 		Sessions: f.sessions, UnitOfWork: f.store, Clock: f.clock, IDGenerator: &sessionIDs{}, Random: &fake.RandomSource{}, Provider: f.provider,
 	}
-	valid := application.LoginPolicy{AllowedOrganization: "acme", BootstrapAdmins: []string{"root"}, StateKey: loginStateKey}
+	valid := application.LoginPolicy{AllowedOrganization: "acme", BootstrapAdmins: []domain.BootstrapAdmin{{Login: "root", GitHubID: 99}}, StateKey: loginStateKey}
 	tests := map[string]func(*application.LoginDependencies, *application.LoginPolicy){
 		"no provider": func(d *application.LoginDependencies, _ *application.LoginPolicy) { d.Provider = nil },
 		"no sessions": func(d *application.LoginDependencies, _ *application.LoginPolicy) { d.Sessions = nil },
@@ -407,7 +435,7 @@ func TestNewLoginServiceValidates(t *testing.T) {
 		"no org":      func(_ *application.LoginDependencies, p *application.LoginPolicy) { p.AllowedOrganization = "" },
 		"bad org":     func(_ *application.LoginDependencies, p *application.LoginPolicy) { p.AllowedOrganization = "a/b" },
 		"bad bootstrap admin": func(_ *application.LoginDependencies, p *application.LoginPolicy) {
-			p.BootstrapAdmins = []string{"a b"}
+			p.BootstrapAdmins = []domain.BootstrapAdmin{{Login: "a b", GitHubID: 1}}
 		},
 		"short key": func(_ *application.LoginDependencies, p *application.LoginPolicy) {
 			p.StateKey = loginStateKey[:application.MinLoginStateKeyBytes-1]

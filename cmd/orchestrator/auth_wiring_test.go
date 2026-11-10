@@ -14,6 +14,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/httpapi"
 	"github.com/belLena81/rollback-guard/internal/adapters/mcp/mcptest"
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
+	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 )
@@ -82,7 +83,7 @@ func TestBuildHTTPGitHubModeRequiresSessions(t *testing.T) {
 			ClientSecret:        config.NewSecret(wiringClientSecret),
 			RedirectURL:         "http://127.0.0.1:8080/v1/auth/github/callback",
 			AllowedOrganization: "acme",
-			BootstrapAdmins:     []string{"root"},
+			BootstrapAdmins:     []domain.BootstrapAdmin{{Login: "root", GitHubID: 1}},
 			StateSecret:         config.NewSecret(wiringStateSecret),
 			BaseURL:             github.URL(),
 			APIURL:              github.URL(),

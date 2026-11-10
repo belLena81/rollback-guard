@@ -14,7 +14,7 @@ servers stay network-trusted.
 
 1. **Roles are DB-assigned.** `users.role` is `viewer`, `operator` or `administrator`. A
    member of the allowed GitHub organization is created as `viewer`. Logins listed in
-   `AUTH_BOOTSTRAP_ADMINS` become `administrator` on first login. Administrators change roles
+   `AUTH_BOOTSTRAP_ADMINS` (`login:githubID`, matched by the numeric ID) become `administrator` on first login. Administrators change roles
    afterwards (`PATCH /v1/users/{userId}/role`).
 2. **One opaque session token, two carriers.** After the OAuth callback (authorization code,
    `state`, PKCE) the server issues a random token, accepted as an `HttpOnly` cookie or as

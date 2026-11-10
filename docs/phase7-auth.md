@@ -4,7 +4,7 @@ Contract: `DEVELOPMENT_PLAN.md` "Phase 7", `.agents/07-auth-identity-agent.md`. 
 
 ## Decisions (2026-11-10)
 
-1. **Roles are DB-assigned.** `users.role` is `viewer`, `operator` or `administrator`. A user in the allowed GitHub organization is created as `viewer`. Logins in `AUTH_BOOTSTRAP_ADMINS` become `administrator` on first login. Administrators change roles afterwards.
+1. **Roles are DB-assigned.** `users.role` is `viewer`, `operator` or `administrator`. A user in the allowed GitHub organization is created as `viewer`. Accounts in `AUTH_BOOTSTRAP_ADMINS` (matched by numeric GitHub ID) become `administrator` on first login. Administrators change roles afterwards.
 2. **One session, two carriers.** After the OAuth callback the server issues an opaque session token. It is accepted as an `HttpOnly` cookie (browser) or `Authorization: Bearer` (curl, scripts). Only the SHA-256 of the token is stored.
 3. **E2E uses a fake GitHub.** A small in-test stub serves the token, user and org endpoints behind a configurable GitHub base URL. The real callback, org check, session and role path run; only GitHub is faked.
 
@@ -45,14 +45,14 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
   2. Exchange the code with the verifier. A rejected or expired code returns `400`.
   3. Read `/user` and `/user/orgs`, then discard the access token.
   4. Check membership in `AUTH_GITHUB_ALLOWED_ORG` (case-insensitive). A non-member gets `403`, and no user row or session is written.
-  5. In one transaction, upsert the user and issue the session. A new user is `viewer`, or `administrator` when the login is in `AUTH_BOOTSTRAP_ADMINS`; that elevation applies only at creation. An existing user has login, email and organizations refreshed under an optimistic lock with bounded retry, and keeps the role. A disabled user gets `403`.
+  5. In one transaction, upsert the user and issue the session. A new user is `viewer`, or `administrator` when its numeric GitHub ID is in `AUTH_BOOTSTRAP_ADMINS`; that elevation applies only at creation. An existing user has login, email and organizations refreshed under an optimistic lock with bounded retry, and keeps the role. A disabled user gets `403`.
   6. Respond `200` with the session body and session cookie, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
 - **Failures.** Response bodies are fixed per class and never say which check failed. Only the class is logged: never the code, state, cookie, token, client secret or provider body. Any GitHub failure, including a timeout or an unexpected response, returns `502 bad_gateway`.
 - **Bounds.** Each GitHub request is limited by a 10 s timeout (`config.GitHubHTTPTimeout`) and a 1 MiB response limit; redirects are not followed. Organizations are read 100 per page for at most 5 pages. A member whose allowed organization is not within the first 500 is denied (fail closed).
 - **Resilience.** The token exchange is not retried, because an authorization code is single-use. A failed login is retried by the user starting again.
 - **Leaving the organization.** Membership is checked only at login. A known user who is denied at login because they left the organization has all open sessions revoked; the user row is kept, so re-admission restores access. Until that user tries to log in again, existing sessions stay valid up to `SESSION_TTL`. An administrator disables the user (7.5) to cut access at once.
 - **Login collisions.** Users are keyed by GitHub ID. If a GitHub login was renamed and then taken by another account, the new account gets `409 conflict` until the old account signs in again (which refreshes its stored login).
-- **Accepted risks.** The email is the public profile field and is display-only; it never feeds an authorization decision. Bootstrap admins are matched by login at first creation, so list only logins that sign in promptly. The state cookie is not bound to a browser session: an attacker able to plant cookies for the host (for example from a sibling subdomain) could perform a login CSRF into their own account. Serve the orchestrator from a host without untrusted sibling subdomains.
+- **Accepted risks.** The email is the public profile field and is display-only; it never feeds an authorization decision. Bootstrap admins are matched by numeric GitHub ID, never by login (a renamed login can be taken by another account); the login in each entry is only a readable label. The state cookie is not bound to a browser session: an attacker able to plant cookies for the host (for example from a sibling subdomain) could perform a login CSRF into their own account. Serve the orchestrator from a host without untrusted sibling subdomains.
 - **Gap: rate limiting.** The login and callback endpoints are not rate-limited. Put them behind a proxy rate limit in any exposed deployment.
 - **Fake GitHub.** `internal/adapters/githuboauth/githubfake` serves the authorize, token, user and org endpoints for tests (7.6 reuses it).
 
@@ -63,7 +63,7 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 | `AUTH_GITHUB_CLIENT_SECRET` | none | required; never logged or rendered |
 | `AUTH_GITHUB_REDIRECT_URL` | none | required, absolute, HTTPS unless loopback, no credentials, query or fragment; must match the OAuth app |
 | `AUTH_GITHUB_ALLOWED_ORG` | none | required, GitHub organization name |
-| `AUTH_BOOTSTRAP_ADMINS` | none | required, comma-separated GitHub logins (at most 32) |
+| `AUTH_BOOTSTRAP_ADMINS` | none | required, comma-separated `login:githubID` entries (at most 32); both parts validated, only the numeric ID is matched |
 | `AUTH_STATE_SECRET` | none | required, at least 32 bytes; never logged or rendered |
 | `AUTH_GITHUB_BASE_URL` | `https://github.com` | HTTPS unless loopback |
 | `AUTH_GITHUB_API_URL` | `https://api.github.com` | HTTPS unless loopback |
