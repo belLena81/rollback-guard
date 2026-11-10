@@ -1,0 +1,13 @@
+# Default kind cluster for the local demo (`make kind-create`).
+# demo-api's NodePort 30080 is published on the Docker host so Prometheus and
+# `make generate-load` can reach it. Override with KIND_CONFIG=<file> when the
+# Docker daemon is remote (for example the agent sandbox).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: rollback-guard
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        listenAddress: "127.0.0.1"
