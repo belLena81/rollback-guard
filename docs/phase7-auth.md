@@ -83,6 +83,7 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 ### Known gaps
 
 - **Approver role at execution.** The rollback-mode Kubernetes MCP re-checks the pending execution, proposal, policy decision and approval record before mutating, but not the approver's current role. An approval authorized when it was made stays executable if the approver is demoted before execution (bounded by `APPROVAL_TTL`).
+- **Approval check and record are separate transactions.** `Approve` authorizes against the auth store, then records the approval in the incident store. An administrator demoted in the milliseconds between the two can still record one approval that the old role allowed. The two stores cannot share a lock today; closing this needs the same approver-role re-check as the MCP gap above.
 - **No disable endpoint.** There is no API to disable a user. `sessions:revoke` cuts access at once, but an organization member can sign in again; to keep them out, demote them to `viewer` or remove them from the organization.
 - **Audit reads.** There is no API to list auth audit rows; read the table directly.
 
