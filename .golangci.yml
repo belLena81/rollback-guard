@@ -4,6 +4,7 @@ linters:
   default: none
   enable:
     - bodyclose
+    - copyloopvar
     - errcheck
     - errorlint
     - exhaustive
@@ -13,10 +14,14 @@ linters:
     - gocyclo
     - govet
     - ineffassign
+    - intrange
     - mnd
+    - modernize
     - nestif
     - nilerr
+    - perfsprint
     - staticcheck
+    - unconvert
     - unparam
     - unused
     - usestdlibvars
