@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/buildinfo"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -45,7 +47,16 @@ func (c boundedCaller) CallTool(ctx context.Context, params *mcpsdk.CallToolPara
 	return c.next.CallTool(callCtx, params)
 }
 
-func Connect(ctx context.Context, endpoint string, httpClient *http.Client) (*Client, error) {
+// MCP client implementation names, one per process that connects to the MCP
+// servers.
+const (
+	ClientOrchestrator = "rollback-guardian-orchestrator"
+	ClientInvestigator = "rollback-guardian-investigator"
+)
+
+// Connect opens a session identifying itself as clientName, which the
+// composition root chooses (ClientOrchestrator or ClientInvestigator).
+func Connect(ctx context.Context, endpoint string, httpClient *http.Client, clientName string) (*Client, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, fmt.Errorf("invalid MCP endpoint")
@@ -53,7 +64,10 @@ func Connect(ctx context.Context, endpoint string, httpClient *http.Client) (*Cl
 	if httpClient == nil {
 		return nil, fmt.Errorf("MCP HTTP client is required")
 	}
-	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "rollback-guardian-orchestrator", Version: "v0.3.0"}, nil)
+	if strings.TrimSpace(clientName) == "" {
+		return nil, fmt.Errorf("MCP client name is required")
+	}
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: clientName, Version: buildinfo.Version}, nil)
 	session, err := client.Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("connect MCP client: %w", err)

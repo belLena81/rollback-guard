@@ -12,7 +12,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const terminalPersistenceTimeout = 5 * time.Second
+const (
+	terminalPersistenceTimeout = 5 * time.Second
+	// A duplicate request polls the owner's record about this many times
+	// per task timeout, within the bounds below.
+	resultPollsPerTask    = 100
+	minResultPollInterval = 10 * time.Millisecond
+	maxResultPollInterval = 100 * time.Millisecond
+)
 
 type IdempotentInvestigator struct {
 	pool         *pgxpool.Pool
@@ -21,11 +28,33 @@ type IdempotentInvestigator struct {
 	staleAfter   time.Duration
 }
 
-func NewIdempotentInvestigator(pool *pgxpool.Pool, next ports.Investigator) (*IdempotentInvestigator, error) {
+// NewIdempotentInvestigator deduplicates investigations by idempotency key.
+// taskTimeout is the deadline the caller puts on every Investigate call
+// (A2A_TASK_TIMEOUT); the reclaim and polling intervals follow from it.
+func NewIdempotentInvestigator(pool *pgxpool.Pool, next ports.Investigator, taskTimeout time.Duration) (*IdempotentInvestigator, error) {
 	if pool == nil || next == nil {
 		return nil, fmt.Errorf("PostgreSQL pool and investigator are required")
 	}
-	return &IdempotentInvestigator{pool: pool, next: next, pollInterval: 100 * time.Millisecond, staleAfter: 2 * time.Minute}, nil
+	if taskTimeout <= 0 {
+		return nil, fmt.Errorf("investigation task timeout must be positive")
+	}
+	pollInterval, staleAfter := idempotencyTimings(taskTimeout)
+	return &IdempotentInvestigator{pool: pool, next: next, pollInterval: pollInterval, staleAfter: staleAfter}, nil
+}
+
+// idempotencyTimings derives both intervals from the task timeout.
+//
+// staleAfter: an owner works for at most taskTimeout and then records the
+// terminal state within terminalPersistenceTimeout, so a "working" record
+// older than their sum belongs to an owner that is gone and may be
+// reclaimed. Reclaiming is fenced by task_id, so a slow owner that loses
+// the record fails instead of overwriting the new owner's result.
+//
+// pollInterval: a fraction of the task timeout, clamped so short timeouts
+// still get several polls and long ones do not poll needlessly slowly.
+func idempotencyTimings(taskTimeout time.Duration) (pollInterval, staleAfter time.Duration) {
+	pollInterval = min(max(taskTimeout/resultPollsPerTask, minResultPollInterval), maxResultPollInterval)
+	return pollInterval, taskTimeout + terminalPersistenceTimeout
 }
 
 func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.InvestigationRequest) (ports.InvestigationResult, error) {

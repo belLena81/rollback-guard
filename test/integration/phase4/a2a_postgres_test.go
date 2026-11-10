@@ -4,6 +4,7 @@ package phase4
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +21,10 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	postgrescontainer "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
+
+// taskTimeout is the investigation deadline shared by the A2A server and the
+// idempotent investigator, as in cmd/investigator.
+const taskTimeout = 10 * time.Second
 
 func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -49,19 +54,36 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 	}
 
 	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
-	target, _ := domain.NewDeploymentTarget("local", "demo", "api", "api")
-	symptom, _ := domain.NewSymptom("error_rate", 0.2, 0.05, "ratio", now.Add(-time.Minute))
-	incident, _ := domain.NewIncident("incident-1", target, symptom, now)
-	_ = incident.StartInvestigation(now.Add(time.Second))
+	target, err := domain.NewDeploymentTarget("local", "demo", "api", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	symptom, err := domain.NewSymptom("error_rate", 0.2, 0.05, "ratio", now.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	incident, err := domain.NewIncident("incident-1", target, symptom, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := incident.StartInvestigation(now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	deployment := domain.DeploymentEvidence{Target: target, CurrentRevision: "rev-2", PreviousStableRevision: "rev-1", DesiredReplicas: 3, ReadyReplicas: 1, AvailableReplicas: 1, RolloutAt: now.Add(-time.Minute)}
-	evidence, _ := domain.NewDeploymentEvidence("evidence-1", incident.ID(), deployment, now)
-	conclusion, _ := domain.NewInvestigationConclusion("conclusion-1", incident.ID(), domain.StrategyRules, "new revision unhealthy", .99, []domain.EvidenceID{"evidence-1"}, domain.RecommendRollback, now)
+	evidence, err := domain.NewDeploymentEvidence("evidence-1", incident.ID(), deployment, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conclusion, err := domain.NewInvestigationConclusion("conclusion-1", incident.ID(), domain.StrategyRules, "new revision unhealthy", .99, []domain.EvidenceID{"evidence-1"}, domain.RecommendRollback, now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var calls atomic.Int32
 	runner := investigatorFunc(func(context.Context, ports.InvestigationRequest) (ports.InvestigationResult, error) {
 		calls.Add(1)
 		return ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}, nil
 	})
-	idempotent, err := a2aadapter.NewIdempotentInvestigator(pool, runner)
+	idempotent, err := a2aadapter.NewIdempotentInvestigator(pool, runner, taskTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,18 +96,30 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	publicURL := "http://" + listener.Addr().String()
-	handler, err := a2aadapter.NewServerHandler(idempotent, store, nil, a2aadapter.ServerConfig{PublicURL: publicURL, TaskTimeout: 10 * time.Second})
+	handler, err := a2aadapter.NewServerHandler(idempotent, store, nil, a2aadapter.ServerConfig{PublicURL: publicURL, TaskTimeout: taskTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: time.Second}
-	go func() { _ = server.Serve(listener) }()
-	defer server.Shutdown(context.Background())
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(listener) }()
+	defer func() {
+		if err := server.Shutdown(context.WithoutCancel(ctx)); err != nil {
+			t.Errorf("shut down A2A server: %v", err)
+		}
+		if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("A2A server stopped with %v", err)
+		}
+	}()
 	gateway, err := a2aadapter.NewGateway(ctx, publicURL, http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer gateway.Close()
+	defer func() {
+		if err := gateway.Close(); err != nil {
+			t.Errorf("close A2A gateway: %v", err)
+		}
+	}()
 	requestHash := application.InvestigationRequestHash(incident)
 	for _, messageID := range []string{"message-1", "message-2"} {
 		ref, submitErr := gateway.Submit(ctx, ports.InvestigationSubmission{Incident: incident, OperationID: "operation-1", IdempotencyKey: "investigation:incident-1", MessageID: messageID, TraceID: "trace-1", RequestHash: requestHash})
@@ -124,7 +158,7 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 		cancelRequest()
 		return ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}, nil
 	})
-	cancelingInvestigator, err := a2aadapter.NewIdempotentInvestigator(pool, cancelingRunner)
+	cancelingInvestigator, err := a2aadapter.NewIdempotentInvestigator(pool, cancelingRunner, taskTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
