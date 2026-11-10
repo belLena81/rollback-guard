@@ -160,6 +160,10 @@ type ApprovalPolicy interface {
 type Clock interface{ Now() time.Time }
 type IDGenerator interface{ NewID(prefix string) string }
 
+// RandomSource fills b entirely with cryptographically secure random bytes,
+// or returns an error and the caller must not use b.
+type RandomSource interface{ Fill(b []byte) error }
+
 type IncidentRepository interface {
 	Create(domain.Incident) error
 	Get(domain.IncidentID) (domain.Incident, error)

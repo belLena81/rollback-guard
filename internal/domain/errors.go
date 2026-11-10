@@ -20,7 +20,21 @@ var (
 	ErrForbidden                = errors.New("forbidden")
 	ErrUserDisabled             = errors.New("user disabled")
 	ErrNoActiveSession          = errors.New("no active session")
+	ErrUnauthenticated          = errors.New("unauthenticated")
 )
+
+// UnauthenticatedError reports that a request presented no usable session.
+// Every reason (missing, malformed, unknown, expired or revoked token, or a
+// disabled user) yields the same value, so neither callers nor responses can
+// tell them apart. It carries no token material.
+type UnauthenticatedError struct{}
+
+func (*UnauthenticatedError) Error() string {
+	return "unauthenticated"
+}
+func (*UnauthenticatedError) Unwrap() error {
+	return ErrUnauthenticated
+}
 
 // NoActiveSessionError reports that a session token does not resolve to an
 // active session of an enabled user. It deliberately does not say which
