@@ -45,21 +45,37 @@ Delegated runs auto-accept file edits inside `/workspace` and may run only the a
 
 ## Model routing
 
-Pick the cheapest tier that can do the task safely. When in doubt between two tiers, take the higher one for anything on the approval, execution, or rollback path.
+Pick the cheapest tier that can do the task safely.
 
-| Tier | Model, effort | Use for |
+| Tier | Model, effort, budget cap | Use for |
 | --- | --- | --- |
-| `heavy` | Opus, high | Safety-critical design and code: approval/execution/rollback path, policy, MCP tool surface and RBAC, auth (Phase 7), concurrency and locking, the end-to-end exit gate, anything the refactoring plan marks as touching the safety chain (R3) |
-| `standard` | Sonnet, medium | Ordinary implementation and refactoring: R2, R4-R6, R8, resilience decorators, CI, manifests, telemetry follow-ups, test additions |
-| `light` | Haiku, low | Mechanical, verifiable work: R7 standard-library rewrites, lint auto-fixes, doc consistency passes, running gates and summarising output |
+| `heavy` | Opus, medium, $12 | Only code on the safety chain: approval, execution, rollback, policy, MCP tool surface and RBAC, locking, auth (Phase 7) |
+| `standard` | Sonnet, medium, $5 | Default. Ordinary implementation, refactoring stages R4-R6 and R8, CI, manifests, tests, CI failure fixes |
+| `light` | Haiku, low, $1 | Mechanical, verifiable work: R7, lint auto-fixes, doc passes, re-running gates, fetching a report |
 
-The same split applies inside a session:
+The budget is a hard cap (`--max-budget-usd`); override one call with `SANDBOX_BUDGET_USD=<n>`. Every run appends date, tier, session, cost, and turns to `.demo/ask-costs.tsv` on the host; tune tiers and caps from it.
 
-- Subagents in `.claude/agents/` pin their own model: `security-policy-reviewer` Opus/high, `sql-reviewer` Sonnet/high, `qa-test-reviewer` Sonnet/medium.
-- The `invariant-review` skill runs forked on Opus/high; `verify-gates` runs forked on Haiku/low, because it only executes the gates and reports their output.
-- Other skills inherit the session model, because a skill's `model` without `context: fork` would switch the rest of the turn.
+### Review policy
 
-Escalate rather than retry: if a `light` or `standard` run fails review twice, rerun it one tier up instead of iterating on the same tier.
+Reviews are the largest cost after implementation, so each task gets at most one reviewer, chosen by what the diff touches:
+
+| Diff touches | Reviewer |
+| --- | --- |
+| approval, execution, rollback, policy, MCP tools, RBAC, auth, secrets | `security-policy-reviewer` (Sonnet, high) |
+| `migrations/` or `internal/adapters/postgres` only | `sql-reviewer` (Sonnet, medium) |
+| behaviour change elsewhere | `qa-test-reviewer` (Sonnet, low) |
+| behaviour-preserving refactor, docs, mechanical changes | none; the gates are the review |
+
+`invariant-review` (Sonnet, medium, forked) runs once per stage or phase, before merge, not per task. `verify-gates` (Haiku, low, forked) runs the full gate once at the end of a task.
+
+### Cost rules for delegated runs
+
+- One task per run, scoped to one stage or one fix. Do not ask a run to also review, document, and re-verify unrelated work.
+- Ask for the final report in the run's last message, under a word limit. Never `--resume` a session only to re-read its report; read the branch and `git log` instead.
+- Run the full gate once, at the end. While iterating, run the affected packages only. Pipe long output through `tail`.
+- Escalate one tier after two failed attempts at the same task; never start a task on `heavy` "to be safe".
+
+The interactive lead session that delegates and reviews does not need Opus: routing, reading diffs, and merging run well on Sonnet at medium effort. Use `/compact` or start a new session between stages; `CLAUDE.md`, the plan, and the branch history carry the state.
 
 ## Getting work in and out
 
