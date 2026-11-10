@@ -14,6 +14,16 @@ import (
 	"github.com/prometheus/common/model"
 )
 
+// Series the adapter queries. internal/demoapi exports the first two, so
+// renaming one here renames what the demo service emits; the contract test in
+// test/contract ties both sides to the generated queries.
+const (
+	SeriesRequestsTotal   = "rollback_guardian_http_requests_total"
+	SeriesRequestDuration = "rollback_guardian_http_request_duration_seconds"
+	SeriesPodCPUUsage     = "rollback_guardian_pod_cpu_usage_cores"
+	SeriesPodMemoryUsage  = "rollback_guardian_pod_memory_usage_bytes"
+)
+
 var (
 	ErrTargetForbidden = errors.New("metrics target is not allowed")
 	ErrInvalidResult   = errors.New("invalid prometheus result")
@@ -143,8 +153,8 @@ func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (st
 	}
 	switch request.Kind {
 	case domain.SymptomHTTPErrorRate:
-		all := "rollback_guardian_http_requests_total{" + matchers + "}"
-		errorsOnly := "rollback_guardian_http_requests_total{" + matchers + ",code=~\"5..\"}"
+		all := SeriesRequestsTotal + "{" + matchers + "}"
+		errorsOnly := SeriesRequestsTotal + "{" + matchers + ",code=~\"5..\"}"
 		errorRate := fmt.Sprintf("sum(rate(%s[%s]%s))", errorsOnly, window, offset)
 		totalRate := fmt.Sprintf("sum(rate(%s[%s]%s))", all, window, offset)
 		// A healthy pod has no 5xx series, so the numerator falls back to
@@ -156,11 +166,11 @@ func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (st
 		if request.Percentile != 0.50 && request.Percentile != 0.95 && request.Percentile != 0.99 {
 			return "", "", &domain.ValidationError{Field: "percentile", Reason: "must be p50, p95, or p99"}
 		}
-		return fmt.Sprintf("histogram_quantile(%g, sum by (le) (rate(rollback_guardian_http_request_duration_seconds_bucket{%s}[%s]%s)))", request.Percentile, matchers, window, offset), "seconds", nil
+		return fmt.Sprintf("histogram_quantile(%g, sum by (le) (rate(%s_bucket{%s}[%s]%s)))", request.Percentile, SeriesRequestDuration, matchers, window, offset), "seconds", nil
 	case domain.SymptomPodCPUUsage:
-		return "sum(rollback_guardian_pod_cpu_usage_cores{" + matchers + "}" + offset + ")", "cores", nil
+		return "sum(" + SeriesPodCPUUsage + "{" + matchers + "}" + offset + ")", "cores", nil
 	case domain.SymptomPodMemoryUsage:
-		return "sum(rollback_guardian_pod_memory_usage_bytes{" + matchers + "}" + offset + ")", "bytes", nil
+		return "sum(" + SeriesPodMemoryUsage + "{" + matchers + "}" + offset + ")", "bytes", nil
 	default:
 		return "", "", fmt.Errorf("metric %q: %w", request.Kind, ErrUnsupportedKind)
 	}
@@ -170,13 +180,13 @@ func (c *Client) sourceFreshnessQuery(target domain.DeploymentTarget, kind domai
 	var metric string
 	switch kind {
 	case domain.SymptomHTTPErrorRate:
-		metric = "rollback_guardian_http_requests_total"
+		metric = SeriesRequestsTotal
 	case domain.SymptomRequestLatency:
-		metric = "rollback_guardian_http_request_duration_seconds_bucket"
+		metric = SeriesRequestDuration + "_bucket"
 	case domain.SymptomPodCPUUsage:
-		metric = "rollback_guardian_pod_cpu_usage_cores"
+		metric = SeriesPodCPUUsage
 	case domain.SymptomPodMemoryUsage:
-		metric = "rollback_guardian_pod_memory_usage_bytes"
+		metric = SeriesPodMemoryUsage
 	default:
 		return "", fmt.Errorf("metric %q: %w", kind, ErrUnsupportedKind)
 	}

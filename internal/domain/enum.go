@@ -2,6 +2,9 @@ package domain
 
 import "fmt"
 
+// unknownName is the String form of every enumeration value outside its range.
+const unknownName = "unknown"
+
 // enumValue is a closed, contiguous uint8 enumeration whose String form is its
 // canonical spelling. Zero is never a member.
 type enumValue interface {

@@ -9,16 +9,18 @@ import (
 	"net/http"
 	"time"
 
+	metricsprom "github.com/belLena81/rollback-guard/internal/adapters/prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Metric names queried by internal/adapters/prometheus. Renaming either one
-// breaks error-rate and latency evidence collection.
+// Metric names the demo service emits; they are the series that
+// internal/adapters/prometheus queries, so they are defined there. Renaming
+// either one breaks error-rate and latency evidence collection.
 const (
-	RequestsTotalMetric   = "rollback_guardian_http_requests_total"
-	RequestDurationMetric = "rollback_guardian_http_request_duration_seconds"
+	RequestsTotalMetric   = metricsprom.SeriesRequestsTotal
+	RequestDurationMetric = metricsprom.SeriesRequestDuration
 )
 
 // Deps are the injectable side effects of the handler.

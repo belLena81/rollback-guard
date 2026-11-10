@@ -24,7 +24,7 @@ const (
 )
 
 func (s InvestigationTaskState) String() string {
-	names := [...]string{"unknown", "queued", "submitting", "submitted", "working", "cancel_requested", "completed", "failed", "canceled"}
+	names := [...]string{unknownName, "queued", "submitting", "submitted", "working", "cancel_requested", "completed", "failed", "canceled"}
 	if int(s) >= len(names) {
 		return names[0]
 	}
@@ -54,7 +54,7 @@ const (
 )
 
 func (s InvestigationStage) String() string {
-	names := [...]string{"unknown", "queued", "deployment", "metrics", "diagnosis", "finalizing"}
+	names := [...]string{unknownName, "queued", "deployment", "metrics", "diagnosis", "finalizing"}
 	if int(s) >= len(names) {
 		return names[0]
 	}

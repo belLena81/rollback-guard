@@ -46,7 +46,7 @@ func (k ActorKind) String() string {
 	case ActorService:
 		return "service"
 	default:
-		return "unknown"
+		return unknownName
 	}
 }
 

@@ -36,7 +36,7 @@ func (s RollbackMutationState) String() string {
 	case RollbackMutationCompleted:
 		return "completed"
 	default:
-		return "unknown"
+		return unknownName
 	}
 }
 

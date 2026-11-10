@@ -12,6 +12,9 @@ import (
 
 const StableRevisionAnnotation = "rollback-guardian.io/stable"
 
+// stableAnnotationValue marks a ReplicaSet as the previous stable revision.
+const stableAnnotationValue = "true"
+
 func TemplateRevision(template corev1.PodTemplateSpec) (domain.Revision, error) {
 	normalized := normalizeTemplate(template)
 	encoded, err := json.Marshal(normalized)

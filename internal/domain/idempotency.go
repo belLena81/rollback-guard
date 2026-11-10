@@ -12,7 +12,7 @@ func (o IdempotencyOperation) String() string {
 	if o == IdempotencyOperationExecuteRollback {
 		return "execute_rollback"
 	}
-	return "unknown"
+	return unknownName
 }
 
 func ParseIdempotencyOperation(value string) (IdempotencyOperation, error) {
@@ -33,7 +33,7 @@ func (s IdempotencyState) String() string {
 	case IdempotencyCompleted:
 		return "completed"
 	default:
-		return "unknown"
+		return unknownName
 	}
 }
 

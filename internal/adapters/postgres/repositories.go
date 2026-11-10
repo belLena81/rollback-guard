@@ -420,7 +420,7 @@ func (repo executionRepo) Save(execution domain.RollbackExecution) error {
 	if err != nil {
 		return mapError(err, "execution", string(s.ID))
 	}
-	if state != "pending" || requestHash != proposalHash || resourceID != string(s.IncidentID) || currentRevision != string(s.FromRevision) || targetRevision != string(s.ToRevision) {
+	if state != domain.IdempotencyPending.String() || requestHash != proposalHash || resourceID != string(s.IncidentID) || currentRevision != string(s.FromRevision) || targetRevision != string(s.ToRevision) {
 		return &domain.ValidationError{Field: "execution", Reason: "does not match pending approved rollback"}
 	}
 	_, err = repo.r.tx.Exec(repo.r.ctx, `

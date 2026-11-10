@@ -24,7 +24,7 @@ const (
 )
 
 func (k EventKind) String() string {
-	names := [...]string{"unknown", "incident.created", "incident.status_changed", "investigation.evidence_collected", "investigation.diagnosis_completed", "policy.evaluated", "rollback.proposal_created", "rollback.approved", "rollback.rejected", "rollback.execution_completed", "rollback.verification_completed", "incident.failed", "incident.expired", "incident.canceled"}
+	names := [...]string{unknownName, "incident.created", "incident.status_changed", "investigation.evidence_collected", "investigation.diagnosis_completed", "policy.evaluated", "rollback.proposal_created", "rollback.approved", "rollback.rejected", "rollback.execution_completed", "rollback.verification_completed", "incident.failed", "incident.expired", "incident.canceled"}
 	if int(k) >= len(names) {
 		return names[0]
 	}

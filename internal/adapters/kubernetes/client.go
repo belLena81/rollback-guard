@@ -147,7 +147,7 @@ func (s *Service) InspectDeployment(ctx context.Context, target domain.Deploymen
 			copyValue := replicaSets[index]
 			current = &copyValue
 		}
-		if replicaSets[index].Annotations[StableRevisionAnnotation] == "true" {
+		if replicaSets[index].Annotations[StableRevisionAnnotation] == stableAnnotationValue {
 			stableCount++
 			stableRevision = revision
 		}
@@ -182,7 +182,7 @@ func (s *Service) ReplicaSets(ctx context.Context, target domain.DeploymentTarge
 		if digestErr != nil {
 			return nil, digestErr
 		}
-		result = append(result, ReplicaSetSummary{Name: replicaSet.Name, UID: string(replicaSet.UID), Revision: revision, Stable: replicaSet.Annotations[StableRevisionAnnotation] == "true", DesiredReplicas: int(replicaSet.Status.Replicas), ReadyReplicas: int(replicaSet.Status.ReadyReplicas), AvailableReplicas: int(replicaSet.Status.AvailableReplicas), CreatedAt: replicaSet.CreationTimestamp.UTC()})
+		result = append(result, ReplicaSetSummary{Name: replicaSet.Name, UID: string(replicaSet.UID), Revision: revision, Stable: replicaSet.Annotations[StableRevisionAnnotation] == stableAnnotationValue, DesiredReplicas: int(replicaSet.Status.Replicas), ReadyReplicas: int(replicaSet.Status.ReadyReplicas), AvailableReplicas: int(replicaSet.Status.AvailableReplicas), CreatedAt: replicaSet.CreationTimestamp.UTC()})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
@@ -482,7 +482,7 @@ func stableReplicaSet(replicaSets []appsv1.ReplicaSet, wanted domain.Revision) (
 	var result *appsv1.ReplicaSet
 	stableCount := 0
 	for index := range replicaSets {
-		if replicaSets[index].Annotations[StableRevisionAnnotation] != "true" {
+		if replicaSets[index].Annotations[StableRevisionAnnotation] != stableAnnotationValue {
 			continue
 		}
 		stableCount++

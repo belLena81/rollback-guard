@@ -20,7 +20,7 @@ const (
 )
 
 func (s Status) String() string {
-	names := [...]string{"unknown", "created", "investigating", "awaiting_approval", "approved", "executing", "verifying", "resolved", "canceled", "declined", "rejected", "expired", "failed"}
+	names := [...]string{unknownName, "created", "investigating", "awaiting_approval", "approved", "executing", "verifying", "resolved", "canceled", "declined", "rejected", "expired", "failed"}
 	if int(s) >= len(names) {
 		return names[0]
 	}

@@ -165,7 +165,7 @@ func (d ApprovalDecision) String() string {
 	if d == ApprovalRejected {
 		return "rejected"
 	}
-	return "unknown"
+	return unknownName
 }
 
 func ParseApprovalDecision(value string) (ApprovalDecision, error) {
@@ -317,7 +317,7 @@ func (o ExecutionOutcome) String() string {
 	if o == ExecutionFailed {
 		return "failed"
 	}
-	return "unknown"
+	return unknownName
 }
 
 func ParseExecutionOutcome(value string) (ExecutionOutcome, error) {

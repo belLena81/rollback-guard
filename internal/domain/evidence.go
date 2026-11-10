@@ -16,7 +16,7 @@ const (
 )
 
 func (k EvidenceKind) String() string {
-	names := [...]string{"unknown", "deployment", "metric", "pod", "kubernetes_event"}
+	names := [...]string{unknownName, "deployment", "metric", "pod", "kubernetes_event"}
 	if int(k) >= len(names) {
 		return names[0]
 	}
@@ -179,7 +179,7 @@ func (r Recommendation) String() string {
 	if r == RecommendNoAction {
 		return "no_action"
 	}
-	return "unknown"
+	return unknownName
 }
 
 func ParseRecommendation(value string) (Recommendation, error) {
@@ -195,7 +195,7 @@ const (
 )
 
 func (s DiagnosisStrategy) String() string {
-	names := [...]string{"unknown", "rules", "llm", "hybrid"}
+	names := [...]string{unknownName, "rules", "llm", "hybrid"}
 	if int(s) >= len(names) {
 		return names[0]
 	}
@@ -224,7 +224,7 @@ const (
 func (r DiagnosisFallbackReason) String() string {
 	names := [...]string{"", "provider_error", "provider_timeout", "provider_refusal", "invalid_output"}
 	if int(r) >= len(names) {
-		return "unknown"
+		return unknownName
 	}
 	return names[r]
 }
