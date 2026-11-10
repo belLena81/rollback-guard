@@ -122,9 +122,9 @@ func (s *VerificationService) Verify(ctx context.Context, incidentID domain.Inci
 			return err
 		}
 		if verification.Passed() {
-			_, err = s.transition(ctx, repositories, fresh, now, (*domain.Incident).Resolve, statusChanged(s.systemActor))
+			_, err = s.transition(repositories, fresh, now, (*domain.Incident).Resolve, statusChanged(s.systemActor))
 		} else {
-			_, err = s.transition(ctx, repositories, fresh, now, (*domain.Incident).Fail, terminated(s.systemActor, domain.EventIncidentFailed, verification.FailureReason()))
+			_, err = s.transition(repositories, fresh, now, (*domain.Incident).Fail, terminated(s.systemActor, domain.EventIncidentFailed, verification.FailureReason()))
 		}
 		return err
 	})

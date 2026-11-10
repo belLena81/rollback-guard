@@ -1,7 +1,6 @@
 package application
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -73,7 +72,7 @@ func terminated(actor domain.Actor, kind domain.EventKind, reason string) events
 // The incident write comes first: a concurrent request that already moved the
 // incident on fails here with a version conflict, before the caller writes
 // anything else that could collide with the winner's rows.
-func (a audit) transition(ctx context.Context, repositories ports.Repositories, incident domain.Incident, now time.Time, apply func(*domain.Incident, time.Time) error, events eventsFor) (domain.Incident, error) {
+func (a audit) transition(repositories ports.Repositories, incident domain.Incident, now time.Time, apply func(*domain.Incident, time.Time) error, events eventsFor) (domain.Incident, error) {
 	expected, from := incident.Version(), incident.Status()
 	if err := apply(&incident, now); err != nil {
 		return domain.Incident{}, err

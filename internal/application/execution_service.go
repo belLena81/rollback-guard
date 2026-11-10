@@ -181,7 +181,7 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 		if fresh.Version() != loaded.incident.Version() {
 			return &domain.VersionConflictError{Expected: loaded.incident.Version(), Actual: fresh.Version()}
 		}
-		if _, err := s.transition(ctx, repositories, fresh, startedAt, (*domain.Incident).StartExecution, statusChanged(s.systemActor)); err != nil {
+		if _, err := s.transition(repositories, fresh, startedAt, (*domain.Incident).StartExecution, statusChanged(s.systemActor)); err != nil {
 			return err
 		}
 		return repositories.Idempotency().Create(record)
@@ -304,7 +304,7 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 		if execution.Outcome() != domain.ExecutionSucceeded {
 			apply = (*domain.Incident).Fail
 		}
-		if _, err := s.transition(ctx, repositories, fresh, completedAt, apply, s.executionEvents(execution)); err != nil {
+		if _, err := s.transition(repositories, fresh, completedAt, apply, s.executionEvents(execution)); err != nil {
 			return err
 		}
 		if err := repositories.Executions().Save(execution); err != nil {
@@ -357,7 +357,7 @@ func (s *ExecutionService) terminateIfUnchanged(ctx context.Context, incidentID 
 		if incident.Version() != version {
 			return nil
 		}
-		_, err = s.transition(ctx, repositories, incident, now, apply, terminated(s.systemActor, kind, reason))
+		_, err = s.transition(repositories, incident, now, apply, terminated(s.systemActor, kind, reason))
 		return err
 	})
 }

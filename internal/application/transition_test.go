@@ -52,7 +52,7 @@ func TestTransitionPersistsIncidentAndAuditEventTogether(t *testing.T) {
 	later := now.Add(time.Minute)
 
 	err := uow.WithinTransaction(context.Background(), func(r ports.Repositories) error {
-		moved, err := w.transition(context.Background(), r, incident, later, (*domain.Incident).Decline, statusChanged(w.systemActor))
+		moved, err := w.transition(r, incident, later, (*domain.Incident).Decline, statusChanged(w.systemActor))
 		if err == nil && moved.Status() != domain.StatusDeclined {
 			t.Errorf("returned status = %s", moved.Status())
 		}
@@ -84,7 +84,7 @@ func TestTransitionRejectsStaleIncidentAndWritesNoEvent(t *testing.T) {
 	w, uow, incident, now := newTransitionFixture(t)
 	// Another request moves the incident on first.
 	err := uow.WithinTransaction(context.Background(), func(r ports.Repositories) error {
-		_, err := w.transition(context.Background(), r, incident, now, (*domain.Incident).Fail, terminated(w.systemActor, domain.EventIncidentFailed, "first"))
+		_, err := w.transition(r, incident, now, (*domain.Incident).Fail, terminated(w.systemActor, domain.EventIncidentFailed, "first"))
 		return err
 	})
 	if err != nil {
@@ -92,7 +92,7 @@ func TestTransitionRejectsStaleIncidentAndWritesNoEvent(t *testing.T) {
 	}
 
 	err = uow.WithinTransaction(context.Background(), func(r ports.Repositories) error {
-		_, err := w.transition(context.Background(), r, incident, now, (*domain.Incident).Decline, statusChanged(w.systemActor))
+		_, err := w.transition(r, incident, now, (*domain.Incident).Decline, statusChanged(w.systemActor))
 		return err
 	})
 	if !errors.Is(err, domain.ErrVersionConflict) {
@@ -107,7 +107,7 @@ func TestTransitionRefusesIllegalMoveBeforeWriting(t *testing.T) {
 	t.Parallel()
 	w, uow, incident, now := newTransitionFixture(t)
 	err := uow.WithinTransaction(context.Background(), func(r ports.Repositories) error {
-		_, err := w.transition(context.Background(), r, incident, now, (*domain.Incident).Resolve, statusChanged(w.systemActor))
+		_, err := w.transition(r, incident, now, (*domain.Incident).Resolve, statusChanged(w.systemActor))
 		return err
 	})
 	if !errors.Is(err, domain.ErrIllegalTransition) {
