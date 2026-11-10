@@ -387,6 +387,10 @@ func TestSessionAuthMiddlewarePublicPathsAreExactMatch(t *testing.T) {
 				if response.Code != http.StatusOK || !h.last.called || h.last.actorOK || resolver.calls != 0 {
 					t.Fatalf("public path: status %d called %v actor %v resolver %d", response.Code, h.last.called, h.last.actorOK, resolver.calls)
 				}
+				h.do(http.MethodGet, tt.path, bearer("secret-token"), cookie("secret-token"), header("Cookie", "theme=dark"))
+				if h.last.authorization != "" || strings.Contains(h.last.cookie, "secret-token") || !strings.Contains(h.last.cookie, "theme=dark") {
+					t.Fatalf("public handler saw credentials: %q %q", h.last.authorization, h.last.cookie)
+				}
 				return
 			}
 			assertUnauthenticated(t, h, response)
@@ -439,6 +443,16 @@ func TestSessionAuthMiddlewareCSRF(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSessionAuthMiddlewareRejectsCrossSiteBeforeResolving(t *testing.T) {
+	h := newAuthHarness(t)
+	resolver := &countingResolver{}
+	h.handler = h.wrap(t, resolver)
+	response := h.do(http.MethodPost, "/v1/incidents", cookie("any-token"), header("Origin", "https://evil.example"))
+	if response.Code != http.StatusForbidden || resolver.calls != 0 {
+		t.Fatalf("status %d, resolver calls %d", response.Code, resolver.calls)
 	}
 }
 

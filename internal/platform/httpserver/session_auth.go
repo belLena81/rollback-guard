@@ -110,12 +110,21 @@ func (c tokenCarrier) String() string {
 func (m SessionAuthMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if IsPublicPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
+			// Public handlers (login, callback) need no session; they never
+			// see one either, so none can log or echo it.
+			next.ServeHTTP(w, withoutCredentials(r))
 			return
 		}
 		token, carrier := sessionToken(r)
 		if carrier == carrierNone {
 			m.unauthenticated(w, r, carrier)
+			return
+		}
+		// Before resolving: a cross-site request costs no lookup and learns
+		// nothing about whether its cookie is valid.
+		if carrier == carrierCookie && unsafeMethod(r.Method) && !sameOrigin(r) {
+			m.logger.WarnContext(r.Context(), "cross-site request rejected", "method", r.Method)
+			writeAuthError(w, http.StatusForbidden, codeForbidden, messageCrossSite)
 			return
 		}
 		principal, err := m.resolver.Resolve(r.Context(), token)
@@ -129,11 +138,6 @@ func (m SessionAuthMiddleware) Wrap(next http.Handler) http.Handler {
 			// detail, so only a fixed classification is logged.
 			m.logger.ErrorContext(r.Context(), "session resolution failed", "cause", "internal")
 			writeAuthError(w, http.StatusInternalServerError, codeInternal, messageInternal)
-			return
-		}
-		if carrier == carrierCookie && unsafeMethod(r.Method) && !sameOrigin(r) {
-			m.logger.WarnContext(r.Context(), "cross-site request rejected", "method", r.Method)
-			writeAuthError(w, http.StatusForbidden, codeForbidden, messageCrossSite)
 			return
 		}
 		ctx := context.WithValue(r.Context(), actorContextKey{}, principal.Actor())
