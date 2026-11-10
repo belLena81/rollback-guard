@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -593,7 +592,7 @@ type eventRepo struct {
 	r *repositories
 }
 
-func (repo eventRepo) NextSequence(_ context.Context, id domain.IncidentID) (uint64, error) {
+func (repo eventRepo) NextSequence(id domain.IncidentID) (uint64, error) {
 	var exists string
 	if err := repo.r.tx.QueryRow(repo.r.ctx, `SELECT id FROM incidents WHERE id = $1 FOR UPDATE`, id).Scan(&exists); err != nil {
 		return 0, mapError(err, "incident", string(id))

@@ -118,7 +118,7 @@ func (s *VerificationService) Verify(ctx context.Context, incidentID domain.Inci
 		if err := repositories.Verifications().Save(verification); err != nil {
 			return err
 		}
-		if err := s.appendEvents(ctx, repositories, incidentID, now, s.systemEvent(domain.EventVerificationCompleted, domain.VerificationCompletedDetail{Passed: verification.Passed(), Revision: verification.Revision()})); err != nil {
+		if err := s.appendEvents(repositories, incidentID, now, s.systemEvent(domain.EventVerificationCompleted, domain.VerificationCompletedDetail{Passed: verification.Passed(), Revision: verification.Revision()})); err != nil {
 			return err
 		}
 		if verification.Passed() {

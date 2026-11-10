@@ -91,7 +91,7 @@ func appendWhileFirstWriterHoldsSequence(ctx context.Context, t *testing.T, obse
 				appendErr := second.Events().Append(secondEvent)
 				// The transaction must stay usable whatever Append reported.
 				var sequenceErr error
-				sequenceAfterAppend, sequenceErr = second.Events().NextSequence(ctx, incidentID)
+				sequenceAfterAppend, sequenceErr = second.Events().NextSequence(incidentID)
 				if sequenceErr != nil {
 					return fmt.Errorf("next sequence after append: %w (append error: %w)", sequenceErr, appendErr)
 				}

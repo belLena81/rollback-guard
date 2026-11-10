@@ -455,10 +455,7 @@ func (r investigationTaskRepo) Update(v domain.InvestigationDispatch, expected u
 	return nil
 }
 
-func (r eventRepo) NextSequence(ctx context.Context, id domain.IncidentID) (uint64, error) {
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
+func (r eventRepo) NextSequence(id domain.IncidentID) (uint64, error) {
 	return uint64(len(r.d.events[id]) + 1), nil
 }
 func (r eventRepo) Append(v domain.OperationEvent) error {

@@ -107,7 +107,7 @@ func (s *InvestigationService) recordFindings(ctx context.Context, repositories 
 		if err := repositories.Evidence().Add(item); err != nil {
 			return err
 		}
-		if err := s.appendEvents(ctx, repositories, incidentID, now, s.systemEvent(domain.EventEvidenceCollected, domain.EvidenceCollectedDetail{EvidenceID: item.ID(), Kind: item.Kind()})); err != nil {
+		if err := s.appendEvents(repositories, incidentID, now, s.systemEvent(domain.EventEvidenceCollected, domain.EvidenceCollectedDetail{EvidenceID: item.ID(), Kind: item.Kind()})); err != nil {
 			return err
 		}
 	}
@@ -115,13 +115,13 @@ func (s *InvestigationService) recordFindings(ctx context.Context, repositories 
 	if err := repositories.Conclusions().Save(conclusion); err != nil {
 		return err
 	}
-	if err := s.appendEvents(ctx, repositories, incidentID, now, s.systemEvent(domain.EventDiagnosisCompleted, domain.DiagnosisCompletedDetail{ConclusionID: conclusion.ID(), Recommendation: conclusion.Recommendation()})); err != nil {
+	if err := s.appendEvents(repositories, incidentID, now, s.systemEvent(domain.EventDiagnosisCompleted, domain.DiagnosisCompletedDetail{ConclusionID: conclusion.ID(), Recommendation: conclusion.Recommendation()})); err != nil {
 		return err
 	}
 	if err := repositories.PolicyDecisions().Save(decision); err != nil {
 		return err
 	}
-	return s.appendEvents(ctx, repositories, incidentID, now, s.systemEvent(domain.EventPolicyEvaluated, domain.PolicyEvaluatedDetail{DecisionID: decision.ID(), Allowed: decision.Allowed()}))
+	return s.appendEvents(repositories, incidentID, now, s.systemEvent(domain.EventPolicyEvaluated, domain.PolicyEvaluatedDetail{DecisionID: decision.ID(), Allowed: decision.Allowed()}))
 }
 
 // conclude moves the investigating incident on: declined when policy denied
@@ -146,7 +146,7 @@ func (s *InvestigationService) conclude(ctx context.Context, repositories ports.
 	if err := repositories.Proposals().Save(proposal); err != nil {
 		return domain.Incident{}, err
 	}
-	if err := s.appendEvents(ctx, repositories, incident.ID(), now, s.systemEvent(domain.EventProposalCreated, domain.ProposalCreatedDetail{ActionID: proposal.ActionID(), ProposalHash: proposal.Hash()})); err != nil {
+	if err := s.appendEvents(repositories, incident.ID(), now, s.systemEvent(domain.EventProposalCreated, domain.ProposalCreatedDetail{ActionID: proposal.ActionID(), ProposalHash: proposal.Hash()})); err != nil {
 		return domain.Incident{}, err
 	}
 	return s.moveAndCompleteDispatch(ctx, repositories, incident, (*domain.Incident).AwaitApproval, now)

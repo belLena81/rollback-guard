@@ -81,16 +81,16 @@ func (a audit) transition(ctx context.Context, repositories ports.Repositories, 
 	if err := repositories.Incidents().Update(incident, expected); err != nil {
 		return domain.Incident{}, err
 	}
-	if err := a.appendEvents(ctx, repositories, incident.ID(), now, events(from, incident.Status())...); err != nil {
+	if err := a.appendEvents(repositories, incident.ID(), now, events(from, incident.Status())...); err != nil {
 		return domain.Incident{}, err
 	}
 	return incident, nil
 }
 
 // appendEvents appends the events to the incident's audit trail in order.
-func (a audit) appendEvents(ctx context.Context, repositories ports.Repositories, incidentID domain.IncidentID, now time.Time, events ...auditEvent) error {
+func (a audit) appendEvents(repositories ports.Repositories, incidentID domain.IncidentID, now time.Time, events ...auditEvent) error {
 	for _, e := range events {
-		sequence, err := repositories.Events().NextSequence(ctx, incidentID)
+		sequence, err := repositories.Events().NextSequence(incidentID)
 		if err != nil {
 			return fmt.Errorf("get next event sequence: %w", err)
 		}

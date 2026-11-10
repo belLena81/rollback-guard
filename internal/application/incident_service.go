@@ -52,7 +52,7 @@ func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command Creat
 		if err := repositories.InvestigationTasks().Create(dispatch); err != nil {
 			return err
 		}
-		return s.appendEvents(ctx, repositories, incident.ID(), now,
+		return s.appendEvents(repositories, incident.ID(), now,
 			incidentCreated(command),
 			statusChangeEvent(s.systemActor, domain.StatusCreated, domain.StatusInvestigating))
 	})

@@ -205,13 +205,19 @@ type InvestigationTaskRepository interface {
 	Update(domain.InvestigationDispatch, uint64) error
 }
 type EventRepository interface {
-	NextSequence(context.Context, domain.IncidentID) (uint64, error)
+	NextSequence(domain.IncidentID) (uint64, error)
 	// Append returns a VersionConflictError when the sequence is already
 	// taken. The caller must return that error from its unit of work so the
 	// state change it was auditing is rolled back with it.
 	Append(domain.OperationEvent) error
 	List(domain.IncidentID) ([]domain.OperationEvent, error)
 }
+
+// Repositories is the set of repositories bound to one transaction. Methods
+// take no context.Context by design: the context passed to
+// UnitOfWork.WithinTransaction scopes the whole transaction, and adapters
+// carry it, so cancelling it aborts every statement and prevents the commit.
+// See docs/adr-repository-context.md.
 type Repositories interface {
 	Incidents() IncidentRepository
 	Evidence() EvidenceRepository
@@ -225,6 +231,10 @@ type Repositories interface {
 	InvestigationTasks() InvestigationTaskRepository
 	Events() EventRepository
 }
+
+// UnitOfWork runs fn in one atomic transaction. ctx governs the transaction's
+// lifetime and every repository call made through the Repositories passed to
+// fn; fn must not use those repositories after it returns.
 type UnitOfWork interface {
 	WithinTransaction(context.Context, func(Repositories) error) error
 }
