@@ -157,7 +157,8 @@ func (s *LoginService) Begin(_ context.Context) (LoginStart, error) {
 
 // Complete finishes a login from the callback's sealed state cookie, state
 // and code query parameters. The cookie is verified before anything is sent
-// to the provider. A non-member gets ErrLoginDenied and a disabled user
+// to the provider. A non-member gets ErrLoginDenied (a known user who left
+// the organization also loses every open session) and a disabled user
 // *domain.UserDisabledError; neither writes a row or a session.
 func (s *LoginService) Complete(ctx context.Context, sealedState, state, code string) (LoginResult, error) {
 	verifier, ok := s.open(sealedState, state)
@@ -169,6 +170,9 @@ func (s *LoginService) Complete(ctx context.Context, sealedState, state, code st
 		return LoginResult{}, err
 	}
 	if !s.member(identity) {
+		if err := s.revokeFormerMember(ctx, identity.GitHubID); err != nil {
+			return LoginResult{}, err
+		}
 		return LoginResult{}, ErrLoginDenied
 	}
 	_, err = domain.NewUser("identity-check", identity.GitHubID, identity.Login, identity.Email, identity.Organizations, domain.RoleViewer, s.clock.Now())
@@ -187,6 +191,30 @@ func (s *LoginService) Complete(ctx context.Context, sealedState, state, code st
 		return LoginResult{}, err
 	}
 	return result, nil
+}
+
+// revokeFormerMember revokes every open session of a known user who is no
+// longer in the allowed organization. No row is created for an unknown
+// identity, and the user row itself is left unchanged so that re-admission to
+// the organization restores access.
+func (s *LoginService) revokeFormerMember(ctx context.Context, githubID int64) error {
+	err := s.uow.WithinAuthTransaction(ctx, func(repos ports.AuthRepositories) error {
+		user, err := repos.Users().GetByGitHubID(githubID)
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("load user: %w", err)
+		}
+		if _, err := repos.Sessions().RevokeAllForUser(user.ID(), s.clock.Now()); err != nil {
+			return fmt.Errorf("revoke sessions: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("revoke former member sessions: %w", err)
+	}
+	return nil
 }
 
 // signIn upserts the user and issues the session in one transaction.

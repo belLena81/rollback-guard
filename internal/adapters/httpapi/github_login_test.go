@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -406,6 +407,15 @@ func TestGitHubLoginRoutesAbsentWithoutLogin(t *testing.T) {
 		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("%s without github login = %d, want 404", path, recorder.Code)
 		}
+	}
+}
+
+// A login colliding with a stale login of another account (GitHub rename)
+// is a fixed 409, not a 500.
+func TestLoginErrorResponseMapsLoginCollision(t *testing.T) {
+	status, code, message, cause := loginErrorResponse(fmt.Errorf("create user: %w", fmt.Errorf("user octocat: %w", domain.ErrAlreadyExists)))
+	if status != http.StatusConflict || code != codeConflict || cause != "login_conflict" || strings.Contains(message, "octocat") {
+		t.Fatalf("collision = %d %s %q %s", status, code, message, cause)
 	}
 }
 

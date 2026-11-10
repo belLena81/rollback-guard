@@ -216,7 +216,16 @@ paths:
           description: >-
             The GitHub user is not a member of the allowed organization, or
             the user is disabled (error forbidden, fixed message). No session
-            is issued and, for a non-member, no user is stored.
+            is issued and, for a non-member, no user is stored. A known user
+            who has left the organization also loses every open session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >-
+            The GitHub login is still held by another account's stored login
+            (after a rename on GitHub) (error conflict, fixed message).
           content:
             application/json:
               schema:

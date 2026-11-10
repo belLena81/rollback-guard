@@ -246,6 +246,26 @@ func TestLoginNonMemberIsDeniedWithoutRows(t *testing.T) {
 	}
 }
 
+// A user who has left the allowed organization loses every open session at
+// the denied login, instead of keeping them until SESSION_TTL.
+func TestLoginFormerMemberLosesOpenSessions(t *testing.T) {
+	f := newLoginFixture(t)
+	first, err := f.signIn(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.provider.setIdentity(ports.GitHubIdentity{GitHubID: 7, Login: "octocat", Organizations: []string{"other"}})
+	if _, err := f.signIn(t); !errors.Is(err, application.ErrLoginDenied) {
+		t.Fatalf("former member login = %v, want ErrLoginDenied", err)
+	}
+	if _, err := f.sessions.Resolve(context.Background(), first.Token); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Fatalf("former member session still resolves: %v", err)
+	}
+	if user, ok := f.userByGitHubID(t, 7); !ok || user.Disabled() || user.Role() != domain.RoleViewer {
+		t.Fatal("the user row must stay as it was (re-admission restores access)")
+	}
+}
+
 func TestLoginMemberIsCreatedAsViewerWithWorkingSession(t *testing.T) {
 	f := newLoginFixture(t)
 	result, err := f.signIn(t)

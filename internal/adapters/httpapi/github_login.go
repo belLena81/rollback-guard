@@ -31,6 +31,7 @@ const (
 	messageLoginInvalid  = "the login request is invalid or expired; start the login again"
 	messageLoginDenied   = "login denied"
 	messageLoginProvider = "the identity provider request failed"
+	messageLoginConflict = "the GitHub login is held by another account; ask an administrator"
 )
 
 // WithGitHubLogin serves GET /v1/auth/github/login and /callback through
@@ -145,6 +146,10 @@ func loginErrorResponse(err error) (int, string, string, string) {
 		return http.StatusForbidden, codeForbidden, messageLoginDenied, "not_member"
 	case errors.Is(err, domain.ErrUserDisabled):
 		return http.StatusForbidden, codeForbidden, messageLoginDenied, "user_disabled"
+	case errors.Is(err, domain.ErrAlreadyExists):
+		// The GitHub login is still held by another account's stale row (a
+		// rename on GitHub); it clears when that account signs in again.
+		return http.StatusConflict, codeConflict, messageLoginConflict, "login_conflict"
 	case errors.Is(err, ports.ErrIdentityProviderFailed):
 		return http.StatusBadGateway, codeBadGateway, messageLoginProvider, "provider_failed"
 	default:
