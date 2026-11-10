@@ -71,6 +71,6 @@ In the agent sandbox, PostgreSQL and Prometheus already exist, so `compose-up` i
 - The e2e services use the owner database role for the rollback MCP (`ROLLBACK_MCP_DATABASE_URL` unset, as in the local demo), so the restricted role from `docs/phase3-mcp.md` is not exercised.
 - Only `postgres-integration` fails on a skipped test. The phase 3-5 suites and `phase6-kind-check` have no skips today, but are not guarded against a future one.
 
-- The workflow was validated with actionlint and its commands were run in the sandbox. It has not yet run on a GitHub-hosted runner; the first run may need adjustments for runner differences (action inputs, Docker network names, timing).
+- Reproducing the `e2e` job locally needs a fresh kind cluster: a long-lived cluster keeps the stable ReplicaSet mark and hid a step-order bug that the first hosted run caught. In the agent sandbox the trace check cannot reach Jaeger at `127.0.0.1`, so it fails there for network reasons only.
 - `e2e` runs `make e2e` and `make e2e-decline`; `make e2e-test` (the same flows as a Go test) is not run, to avoid executing each flow twice.
 - Dependabot, branch protection, required status checks and caching limits are repository settings, not part of this file.

@@ -18,7 +18,7 @@ Build the system in phases so every phase ends runnable, testable, and demoable.
 
 ## Current Status
 
-Phases 1-5 are complete. Phase 6 has every task built and its exit gate automated locally (`make e2e`, `make e2e-decline`) and in CI (the `e2e` job), but it stays open until the workflow has had its first green run on a GitHub-hosted runner:
+Phases 1-6 are complete. The Phase 6 exit gate is automated locally (`make e2e`, `make e2e-decline`) and in CI (the `e2e` job), and passed on a GitHub-hosted runner on 2026-11-10 (PR #1, commit `c0240b2`). Next: refactoring stages R4-R8 (`docs/refactoring-plan.md`), then Phase 7.
 
 | Phase 6 task | State |
 |---|---|
