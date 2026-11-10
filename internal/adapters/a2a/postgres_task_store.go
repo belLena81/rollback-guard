@@ -120,12 +120,10 @@ func (s *PostgresTaskStore) List(ctx context.Context, request *a2a.ListTasksRequ
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	tasks := make([]*a2a.Task, 0, pageSize)
 	total := 0
-	for rows.Next() {
+	tasks, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (*a2a.Task, error) {
 		var snapshot []byte
-		if err := rows.Scan(&snapshot, &total); err != nil {
+		if err := row.Scan(&snapshot, &total); err != nil {
 			return nil, err
 		}
 		var task a2a.Task
@@ -135,9 +133,9 @@ func (s *PostgresTaskStore) List(ctx context.Context, request *a2a.ListTasksRequ
 		if !request.IncludeArtifacts {
 			task.Artifacts = nil
 		}
-		tasks = append(tasks, &task)
-	}
-	if err := rows.Err(); err != nil {
+		return &task, nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &a2a.ListTasksResponse{Tasks: tasks, TotalSize: total, PageSize: pageSize}, nil

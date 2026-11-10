@@ -127,26 +127,19 @@ func (repo evidenceRepo) List(id domain.IncidentID) ([]domain.Evidence, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var result []domain.Evidence
-	for rows.Next() {
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Evidence, error) {
 		var evidenceID, incidentID, kindValue string
 		var collectedAt time.Time
 		var payload []byte
-		if err := rows.Scan(&evidenceID, &incidentID, &kindValue, &collectedAt, &payload); err != nil {
-			return nil, err
+		if err := row.Scan(&evidenceID, &incidentID, &kindValue, &collectedAt, &payload); err != nil {
+			return domain.Evidence{}, err
 		}
 		kind, err := domain.ParseEvidenceKind(kindValue)
 		if err != nil {
-			return nil, err
+			return domain.Evidence{}, err
 		}
-		evidence, err := unmarshalEvidencePayload(domain.EvidenceID(evidenceID), domain.IncidentID(incidentID), kind, collectedAt, payload)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, evidence)
-	}
-	return result, rows.Err()
+		return unmarshalEvidencePayload(domain.EvidenceID(evidenceID), domain.IncidentID(incidentID), kind, collectedAt, payload)
+	})
 }
 
 type conclusionRepo struct {
@@ -169,16 +162,31 @@ func (repo conclusionRepo) Save(conclusion domain.InvestigationConclusion) error
 	if err != nil {
 		return mapError(err, "conclusion", string(s.ID))
 	}
+	if len(s.EvidenceIDs) == 0 {
+		return nil
+	}
+	// One round trip for all references. The batch runs inside the caller's
+	// transaction, so a failing reference rolls the conclusion back with it.
+	var batch pgx.Batch
 	for index, evidenceID := range s.EvidenceIDs {
-		_, err := repo.r.tx.Exec(repo.r.ctx, `
+		batch.Queue(`
 			INSERT INTO investigation_result_evidence_refs (conclusion_id, evidence_id, position)
 			VALUES ($1,$2,$3)
 		`, s.ID, evidenceID, index+1)
-		if err != nil {
-			return mapError(err, "conclusion.evidence_ref", string(evidenceID))
+	}
+	results := repo.r.tx.SendBatch(repo.r.ctx, &batch)
+	var execErr error
+	for _, evidenceID := range s.EvidenceIDs {
+		if _, err := results.Exec(); err != nil {
+			execErr = mapError(err, "conclusion.evidence_ref", string(evidenceID))
+			break
 		}
 	}
-	return nil
+	closeErr := results.Close()
+	if execErr != nil {
+		return execErr
+	}
+	return closeErr
 }
 
 func (repo conclusionRepo) Get(id domain.IncidentID) (domain.InvestigationConclusion, error) {
@@ -204,16 +212,12 @@ func (repo conclusionRepo) Get(id domain.IncidentID) (domain.InvestigationConclu
 	if err != nil {
 		return domain.InvestigationConclusion{}, err
 	}
-	defer rows.Close()
-	var evidenceIDs []domain.EvidenceID
-	for rows.Next() {
+	evidenceIDs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.EvidenceID, error) {
 		var evidenceID string
-		if err := rows.Scan(&evidenceID); err != nil {
-			return domain.InvestigationConclusion{}, err
-		}
-		evidenceIDs = append(evidenceIDs, domain.EvidenceID(evidenceID))
-	}
-	if err := rows.Err(); err != nil {
+		err := row.Scan(&evidenceID)
+		return domain.EvidenceID(evidenceID), err
+	})
+	if err != nil {
 		return domain.InvestigationConclusion{}, err
 	}
 	strategy, err := domain.ParseDiagnosisStrategy(strategyValue)
@@ -637,33 +641,31 @@ func (repo eventRepo) List(id domain.IncidentID) ([]domain.OperationEvent, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var result []domain.OperationEvent
-	for rows.Next() {
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.OperationEvent, error) {
 		var eventID, incidentID, kindValue, actorID, actorKindValue string
 		var sequence uint64
 		var occurredAt time.Time
 		var payload []byte
-		if err := rows.Scan(&eventID, &incidentID, &sequence, &kindValue, &occurredAt, &actorID, &actorKindValue, &payload); err != nil {
-			return nil, err
+		if err := row.Scan(&eventID, &incidentID, &sequence, &kindValue, &occurredAt, &actorID, &actorKindValue, &payload); err != nil {
+			return domain.OperationEvent{}, err
 		}
 		kind, err := domain.ParseEventKind(kindValue)
 		if err != nil {
-			return nil, err
+			return domain.OperationEvent{}, err
 		}
 		actorKind, err := domain.ParseActorKind(actorKindValue)
 		if err != nil {
-			return nil, err
+			return domain.OperationEvent{}, err
 		}
 		actor, err := domain.NewActor(domain.ActorID(actorID), actorKind)
 		if err != nil {
-			return nil, err
+			return domain.OperationEvent{}, err
 		}
 		detail, err := unmarshalEventDetail(kind, payload)
 		if err != nil {
-			return nil, err
+			return domain.OperationEvent{}, err
 		}
-		event, err := domain.RehydrateOperationEvent(domain.OperationEventSnapshot{
+		return domain.RehydrateOperationEvent(domain.OperationEventSnapshot{
 			ID:         domain.EventID(eventID),
 			IncidentID: domain.IncidentID(incidentID),
 			Sequence:   sequence,
@@ -672,10 +674,5 @@ func (repo eventRepo) List(id domain.IncidentID) ([]domain.OperationEvent, error
 			Actor:      actor,
 			Detail:     detail,
 		})
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, event)
-	}
-	return result, rows.Err()
+	})
 }
