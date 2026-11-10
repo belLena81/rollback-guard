@@ -19,7 +19,21 @@ var (
 	ErrIdempotencyConflict      = errors.New("idempotency conflict")
 	ErrForbidden                = errors.New("forbidden")
 	ErrUserDisabled             = errors.New("user disabled")
+	ErrNoActiveSession          = errors.New("no active session")
 )
+
+// NoActiveSessionError reports that a session token does not resolve to an
+// active session of an enabled user. It deliberately does not say which
+// condition failed (unknown, expired, revoked or disabled) and carries no
+// token material; callers map it to 401.
+type NoActiveSessionError struct{}
+
+func (*NoActiveSessionError) Error() string {
+	return "no active session"
+}
+func (*NoActiveSessionError) Unwrap() error {
+	return ErrNoActiveSession
+}
 
 type ValidationError struct{ Field, Reason string }
 

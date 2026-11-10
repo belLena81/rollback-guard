@@ -239,3 +239,52 @@ type Repositories interface {
 type UnitOfWork interface {
 	WithinTransaction(context.Context, func(Repositories) error) error
 }
+
+// UserRepository stores users. Create returns *domain.AlreadyExistsError when
+// the ID, GitHub ID or login (case-insensitively) is taken; Update does too
+// when the new login collides. Get* return *domain.NotFoundError for a missing
+// user. Update writes only when the stored version equals expectedVersion and
+// returns *domain.VersionConflictError otherwise.
+type UserRepository interface {
+	Create(domain.User) error
+	GetByID(domain.UserID) (domain.User, error)
+	GetByGitHubID(int64) (domain.User, error)
+	Update(user domain.User, expectedVersion uint64) error
+}
+
+// SessionRepository stores sessions by token hash; it never sees a raw token.
+type SessionRepository interface {
+	// Create returns *domain.AlreadyExistsError when the ID or token hash is
+	// taken, and *domain.NotFoundError when the user does not exist.
+	Create(domain.Session) error
+	// ResolveActive returns the session holding tokenHash together with its
+	// user, in one lookup, only when the session is unrevoked, now is before
+	// its expiry, and the user is enabled. Every other case, including an
+	// unknown hash, returns *domain.NoActiveSessionError without saying which.
+	ResolveActive(tokenHash domain.SessionTokenHash, now time.Time) (domain.Session, domain.User, error)
+	// Revoke marks the session revoked at now (never before its creation).
+	// Revoking a revoked session keeps the first time and is not an error.
+	// A missing session returns *domain.NotFoundError.
+	Revoke(id domain.SessionID, now time.Time) error
+	// RevokeAllForUser revokes every unrevoked session of the user and
+	// returns how many it revoked. An unknown user revokes nothing.
+	RevokeAllForUser(userID domain.UserID, now time.Time) (int, error)
+	// DeleteExpired deletes sessions whose expiry is at or before before and
+	// returns how many it deleted.
+	DeleteExpired(before time.Time) (int, error)
+}
+
+// AuthRepositories is the set of user and session repositories bound to one
+// transaction. As with Repositories, methods take no context.Context: the
+// context passed to AuthUnitOfWork.WithinAuthTransaction scopes them.
+type AuthRepositories interface {
+	Users() UserRepository
+	Sessions() SessionRepository
+}
+
+// AuthUnitOfWork runs fn in one atomic transaction over users and sessions,
+// so a role change or disable commits together with session revocation.
+// fn must not use the repositories after it returns.
+type AuthUnitOfWork interface {
+	WithinAuthTransaction(context.Context, func(AuthRepositories) error) error
+}
