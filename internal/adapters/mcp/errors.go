@@ -13,6 +13,20 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
+// Handle adapts a typed tool body to an SDK handler. Every error the body
+// returns is classified once by Failure into the tool's error envelope; the
+// SDK-level error is always nil so callers see a structured tool result.
+func Handle[In, Out any](body func(context.Context, In) (Out, error)) mcpsdk.ToolHandlerFor[In, Response[Out]] {
+	return func(ctx context.Context, _ *mcpsdk.CallToolRequest, input In) (*mcpsdk.CallToolResult, Response[Out], error) {
+		output, err := body(ctx, input)
+		if err != nil {
+			result, response := Failure[Out](err)
+			return result, response, nil
+		}
+		return nil, Success(output), nil
+	}
+}
+
 func Failure[T any](err error) (*mcpsdk.CallToolResult, Response[T]) {
 	toolError := classifyError(err)
 	result := &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: toolError.Message}}}
