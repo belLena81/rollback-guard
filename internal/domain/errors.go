@@ -17,6 +17,8 @@ var (
 	ErrNonHumanApproval         = errors.New("non-human approval")
 	ErrExpired                  = errors.New("expired")
 	ErrIdempotencyConflict      = errors.New("idempotency conflict")
+	ErrForbidden                = errors.New("forbidden")
+	ErrUserDisabled             = errors.New("user disabled")
 )
 
 type ValidationError struct{ Field, Reason string }
@@ -123,4 +125,30 @@ func (e *IdempotencyConflictError) Error() string {
 }
 func (e *IdempotencyConflictError) Unwrap() error {
 	return ErrIdempotencyConflict
+}
+
+// ForbiddenError reports that a role may not perform an action under
+// RolePolicy. It carries only the two enumeration values, never identity or
+// credential material.
+type ForbiddenError struct {
+	Role   Role
+	Action Action
+}
+
+func (e *ForbiddenError) Error() string {
+	return fmt.Sprintf("role %q may not perform %q", e.Role.String(), e.Action.String())
+}
+func (e *ForbiddenError) Unwrap() error {
+	return ErrForbidden
+}
+
+// UserDisabledError reports that a disabled user cannot act. It names only
+// the internal user ID.
+type UserDisabledError struct{ UserID UserID }
+
+func (e *UserDisabledError) Error() string {
+	return fmt.Sprintf("user %q is disabled", e.UserID)
+}
+func (e *UserDisabledError) Unwrap() error {
+	return ErrUserDisabled
 }
