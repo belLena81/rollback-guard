@@ -95,7 +95,7 @@ phase5-integration:
 # The package also has untagged tests, so one test from each tagged file is
 # required by name: a dropped tag or file cannot pass on the untagged ones.
 postgres-integration:
-	REQUIRED_TESTS="TestEventAppendReportsSequenceConflictToSecondWriter TestRollbackMutationGuardBlocksReplayUntilCompletion TestApproveAndExecuteConcurrentSameApprovalOnPostgres TestAuthResolveActiveSession TestAuthMigrationDown" \
+	REQUIRED_TESTS="TestEventAppendReportsSequenceConflictToSecondWriter TestRollbackMutationGuardBlocksReplayUntilCompletion TestApproveAndExecuteConcurrentSameApprovalOnPostgres TestAuthResolveActiveSession TestAuthMigrationDown TestSessionAuthMiddlewareOnPostgres" \
 	bash scripts/ci/test-no-skips.sh -tags=integration ./internal/adapters/postgres/...
 
 # Every integration-tagged suite. The kind-tagged suite needs a cluster and
