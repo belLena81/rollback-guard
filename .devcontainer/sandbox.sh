@@ -46,12 +46,15 @@ case "${1:-help}" in
     shift
     tier="${SANDBOX_TIER:-standard}"
     if [ "${1:-}" = "--tier" ]; then tier="${2:?--tier needs a value}"; shift 2; fi
+    # Budgets are hard caps per run (USD), overridable per call with
+    # SANDBOX_BUDGET_USD. Tune them from .demo/ask-costs.tsv.
     case "$tier" in
-      light)    tier_args=(--model haiku  --effort low) ;;
-      standard) tier_args=(--model sonnet --effort medium) ;;
-      heavy)    tier_args=(--model opus   --effort high) ;;
+      light)    tier_args=(--model haiku  --effort low);    budget="${SANDBOX_BUDGET_USD:-1}" ;;
+      standard) tier_args=(--model sonnet --effort medium); budget="${SANDBOX_BUDGET_USD:-5}" ;;
+      heavy)    tier_args=(--model opus   --effort medium); budget="${SANDBOX_BUDGET_USD:-12}" ;;
       *) echo "unknown tier: $tier (light|standard|heavy)" >&2; exit 2 ;;
     esac
+    tier_args+=(--max-budget-usd "$budget")
     prompt="${1:?usage: sandbox.sh ask [--tier light|standard|heavy] \"<prompt>\" [--resume <session-id>]}"
     shift
     allowed="Read,Edit,Write,Glob,Grep,Skill,Agent,TodoWrite"
@@ -62,10 +65,14 @@ case "${1:-help}" in
       allowed+=",Bash($c:*)"
     done
     echo "tier: $tier (${tier_args[*]})" >&2
+    out="$(mktemp)"
     "${compose[@]}" exec -T dev claude -p "$prompt" "${tier_args[@]}" \
       --permission-mode acceptEdits --allowedTools "$allowed" \
-      --output-format json "$@" </dev/null |
-      jq -r '"session: \(.session_id)\nerror: \(.is_error)\n\n\(.result)"'
+      --output-format json "$@" </dev/null > "$out"
+    mkdir -p "$repo/.demo"
+    jq -r --arg tier "$tier" '[now|todate, $tier, .session_id, (.total_cost_usd // 0), (.num_turns // 0), .is_error] | @tsv' "$out" >> "$repo/.demo/ask-costs.tsv"
+    jq -r '"session: \(.session_id)\nerror: \(.is_error)\ncost_usd: \(.total_cost_usd // "n/a")  turns: \(.num_turns // "n/a")\n\n\(.result)"' "$out"
+    rm -f "$out"
     ;;
   exec) shift; "${compose[@]}" exec -T dev "$@" ;;
   migrate) "${compose[@]}" exec -T dev sh -c 'migrate -path migrations -database "$DATABASE_URL" up' ;;
