@@ -48,8 +48,15 @@ func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command Creat
 	if err := incident.StartInvestigation(now); err != nil {
 		return domain.Incident{}, err
 	}
+	operationID, messageID := c.ids.NewID("operation"), c.ids.NewID("message")
+	// The dispatch persists the creating request's trace context so the
+	// asynchronous coordinator continues the same trace.
+	traceID := c.tracer.TraceCarrier(ctx)
+	if traceID == "" {
+		traceID = c.ids.NewID("trace")
+	}
 	dispatch := ports.InvestigationDispatch{
-		IncidentID: incident.ID(), OperationID: c.ids.NewID("operation"), MessageID: c.ids.NewID("message"), TraceID: c.ids.NewID("trace"),
+		IncidentID: incident.ID(), OperationID: operationID, MessageID: messageID, TraceID: traceID,
 		IdempotencyKey: "investigation:" + string(incident.ID()), RequestHash: InvestigationRequestHash(incident),
 		State: ports.InvestigationTaskQueued, Stage: ports.InvestigationStageQueued, Version: 1, CreatedAt: now, UpdatedAt: now,
 	}

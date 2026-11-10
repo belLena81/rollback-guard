@@ -11,28 +11,42 @@ import (
 	"syscall"
 	"time"
 
+	protocol "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/adapters/mcp/observabilityserver"
 	metricsprom "github.com/belLena81/rollback-guard/internal/adapters/prometheus"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
+	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	promapi "github.com/prometheus/client_golang/api"
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(logger); err != nil {
+	level := new(slog.LevelVar)
+	logger := telemetry.NewLogger(os.Stdout, level)
+	if err := run(logger, level); err != nil {
 		logger.Error("observability MCP exited", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run(logger *slog.Logger, level *slog.LevelVar) error {
 	cfg, err := config.LoadObservabilityMCP()
 	if err != nil {
 		return err
 	}
-	promClient, err := promapi.NewClient(promapi.Config{Address: cfg.PrometheusURL})
+	level.Set(cfg.Telemetry.LogLevel)
+	tel, err := telemetry.New(telemetry.SettingsFrom(cfg.Telemetry), telemetry.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tel.Shutdown(context.Background()); err != nil {
+			logger.Warn("telemetry shutdown incomplete", "error", err)
+		}
+	}()
+	// Prometheus queries join the tool call's trace.
+	promClient, err := promapi.NewClient(promapi.Config{Address: cfg.PrometheusURL, RoundTripper: tel.Transport(promapi.DefaultRoundTripper)})
 	if err != nil {
 		return fmt.Errorf("create prometheus client: %w", err)
 	}
@@ -47,11 +61,11 @@ func run(logger *slog.Logger) error {
 		_, err := api.Buildinfo(ctx)
 		return err
 	}
-	handler, err := observabilityserver.NewHTTPHandler(backend, ready, cfg.SessionTimeout, logger)
+	handler, err := observabilityserver.NewHTTPHandler(backend, ready, cfg.SessionTimeout, logger, protocol.WithMetricsHandler(tel.MetricsHandler()), protocol.WithToolObserver(protocol.ServerObservability, tel))
 	if err != nil {
 		return err
 	}
-	return serve(cfg.HTTPAddr, handler, logger)
+	return serve(cfg.HTTPAddr, tel.InstrumentServer(handler, protocol.RouteOf), logger)
 }
 
 type timeoutQueryAPI struct {

@@ -11,7 +11,37 @@ import (
 
 const DefaultMaxRequestBytes int64 = 1 << 20
 
-func HTTPHandler(server *mcpsdk.Server, ready func(context.Context) error, maxBytes int64, sessionTimeout time.Duration, logger *slog.Logger) http.Handler {
+// HandlerOption adds optional telemetry to HTTPHandler.
+type HandlerOption func(*handlerOptions)
+
+type handlerOptions struct {
+	metrics    http.Handler
+	serverName string
+	observer   ToolObserver
+}
+
+// WithMetricsHandler serves handler at GET /metrics.
+func WithMetricsHandler(handler http.Handler) HandlerOption {
+	return func(o *handlerOptions) { o.metrics = handler }
+}
+
+// WithToolObserver reports every tools/call handled by the server to
+// observer under serverName.
+func WithToolObserver(serverName string, observer ToolObserver) HandlerOption {
+	return func(o *handlerOptions) {
+		o.serverName = serverName
+		o.observer = observer
+	}
+}
+
+func HTTPHandler(server *mcpsdk.Server, ready func(context.Context) error, maxBytes int64, sessionTimeout time.Duration, logger *slog.Logger, opts ...HandlerOption) http.Handler {
+	var o handlerOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.observer != nil && o.serverName != "" {
+		server.AddReceivingMiddleware(observeToolsMiddleware(o.serverName, o.observer))
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -37,6 +67,9 @@ func HTTPHandler(server *mcpsdk.Server, ready func(context.Context) error, maxBy
 		response.WriteHeader(http.StatusOK)
 		writeHealth(response, `{"status":"ok"}`, logger)
 	})
+	if o.metrics != nil {
+		mux.Handle("GET /metrics", o.metrics)
+	}
 	return mux
 }
 

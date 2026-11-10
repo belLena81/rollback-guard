@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Rollback Guardian is a Go demo of a safe agentic DevOps workflow: detect a bad Kubernetes rollout, investigate evidence, propose a rollback, require human approval bound to an exact proposal hash, execute through narrow MCP tools, and verify recovery. `AGENTS.md` (local, gitignored) holds the full agent rules. Read `SPEC.md`, `DEVELOPMENT_PLAN.md`, and the matching role brief in `.agents/` before working on a phase. Work proceeds strictly in phase order. Phases 1–5 are implemented. Phase 6 is in progress (`DEVELOPMENT_PLAN.md`, Current Status, tracks its tasks). Phase 7 (OAuth/users) has not started.
+Rollback Guardian is a Go demo of a safe agentic DevOps workflow: detect a bad Kubernetes rollout, investigate evidence, propose a rollback, require human approval bound to an exact proposal hash, execute through narrow MCP tools, and verify recovery. `AGENTS.md` (local, gitignored) holds the full agent rules. Read `SPEC.md`, `DEVELOPMENT_PLAN.md`, and the matching role brief in `.agents/` before working on a phase. Work proceeds strictly in phase order. Phases 1–5 are implemented. Phase 6 is in progress (`DEVELOPMENT_PLAN.md`, Current Status, tracks its tasks; telemetry is described in `docs/phase6-telemetry.md`). Code-quality work follows `docs/refactoring-plan.md`. Phase 7 (OAuth/users) has not started.
 
 ## Commands
 
@@ -31,7 +31,7 @@ Ports-and-adapters with a pure domain:
 - `internal/ports/ports.go`: every interface the application depends on. Persistence goes through `UnitOfWork.WithinTransaction(ctx, func(Repositories) error)`, so a state change and its `OperationEvent` audit record commit atomically. Repositories use optimistic locking (`Update(entity, expectedVersion)`).
 - `internal/application`: use-case services built by `NewServices` around one shared `workflow` (incidents, investigations, approvals, executions, verifications, queries). `InvestigationCoordinator` is a lease-based background worker. It claims durable `InvestigationDispatch` rows and submits and watches them through `ports.InvestigationGateway` (A2A). `ai_diagnosis.go` holds LLM/hybrid diagnosers that validate untrusted model output and fall back to the rule diagnoser.
 - `internal/adapters/*`: `postgres` (pgx directly; `sqlc.yaml` exists but nothing is generated), `memory` and `fake` (Phase 1 in-process fakes), `httpapi` (thin REST handlers, DTOs, JSON errors; contract in `api/openapi.yaml`), `mcp` (client adapters implementing the inspector, metrics, and executor ports, plus `kubernetesserver`/`observabilityserver` tool servers), `a2a` (gateway client, Investigator server, Postgres task store), `kubernetes` (client-go, deterministic revision hashing), `prometheus`, `diagnosis` (rule diagnoser), `llm` (OpenAI-compatible reasoner). SDK types (MCP, A2A, OpenAI, client-go) must not leave their adapter package.
-- `internal/platform`: env config (`config.Load`), local auth middleware that injects a typed `Actor`, clock/ID generator.
+- `internal/platform`: env config (`config.Load`), local auth middleware that injects a typed `Actor`, clock/ID generator, and `telemetry` (per-process Prometheus registry, OTel tracer provider, W3C propagation, correlated slog handler, metric decorators around ports). Application code sees telemetry only through `ports.Tracer` and `ports.Correlation`.
 - `cmd/*/main.go`: composition roots only. Construct adapters, validate deps, wire services.
 
 ### Runtime topology

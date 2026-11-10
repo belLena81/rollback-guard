@@ -38,7 +38,7 @@ This rule is the main project invariant. The AI layer may diagnose and recommend
 - [docs/local-demo-env.md](./docs/local-demo-env.md): local `kind` demo environment.
 - [docs/tech-stack.md](./docs/tech-stack.md): selected libraries and alternatives.
 - [.agents/00-INDEX.md](./.agents/00-INDEX.md): role briefs for agentic development.
-- [docs/phase3-mcp.md](./docs/phase3-mcp.md), [docs/phase4-a2a.md](./docs/phase4-a2a.md), [docs/phase5-ai-diagnosis.md](./docs/phase5-ai-diagnosis.md), [docs/phase6-kind.md](./docs/phase6-kind.md): per-phase runtime configuration and verification.
+- [docs/phase3-mcp.md](./docs/phase3-mcp.md), [docs/phase4-a2a.md](./docs/phase4-a2a.md), [docs/phase5-ai-diagnosis.md](./docs/phase5-ai-diagnosis.md), [docs/phase6-kind.md](./docs/phase6-kind.md), [docs/phase6-telemetry.md](./docs/phase6-telemetry.md): per-phase runtime configuration and verification.
 - [CLAUDE.md](./CLAUDE.md): Claude Code guidance.
 - [.devcontainer/README.md](./.devcontainer/README.md): containerised agent sandbox.
 
@@ -63,7 +63,7 @@ test/
 docs/
 ```
 
-Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is in progress: the `demo-api` workload, container images, kind manifests, and the local demo flow exist; telemetry, retry/circuit-breaker decorators, the unattended end-to-end run, and CI do not yet. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
+Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is in progress: the `demo-api` workload, container images, kind manifests, the local demo flow, and telemetry (metrics, correlated logs, tracing) exist; retry/circuit-breaker decorators, the unattended end-to-end run, and CI do not yet. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
 
 ## Canonical Choices
 

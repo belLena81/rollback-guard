@@ -24,10 +24,12 @@ Phases 1-5 are complete. Phase 6 is in progress:
 |---|---|
 | `cmd/demo-api` and container images | done |
 | kind manifests, RBAC ordering, local demo make targets (`docs/phase6-kind.md`) | done |
-| Prometheus metrics, log correlation, OpenTelemetry tracing | in progress |
+| Prometheus metrics, log correlation, OpenTelemetry tracing (`docs/phase6-telemetry.md`) | done |
 | Retry/circuit-breaker decorators | not started |
 | Unattended E2E flow (`create-incident`, `approve-latest-action`, `verify`) | not started |
 | CI checks | not started |
+
+Code-quality refactoring is interleaved with the remaining tasks in the order given in `docs/refactoring-plan.md`.
 
 Phase 7 has not started.
 

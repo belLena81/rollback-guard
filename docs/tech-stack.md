@@ -54,10 +54,10 @@ Default `go test ./...` must not require Kubernetes, network access, real LLM ca
 
 ## Operations
 
-- Health endpoints on every service (implemented).
+- Health endpoints on every service.
+- Prometheus metrics (`prometheus/client_golang`, per-process registry) for HTTP, incidents, investigations, A2A and MCP calls, diagnoses, rollbacks, and verifications.
+- OpenTelemetry traces across REST, A2A, MCP, and Kubernetes/Prometheus calls; OTLP export when configured.
 
 Planned for the rest of Phase 6:
 
-- Prometheus metrics for incidents, investigation duration, MCP calls, rollbacks, approval latency, and failures.
-- OpenTelemetry traces across REST, A2A, MCP, and Kubernetes calls.
 - Retry/circuit-breaker decorators around transient external ports.

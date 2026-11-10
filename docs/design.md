@@ -38,7 +38,7 @@ Use ports and adapters:
 - `internal/application`: use cases and orchestration over ports.
 - `internal/ports`: small interfaces owned by callers.
 - `internal/adapters`: A2A, MCP, Kubernetes, Prometheus, PostgreSQL, LLM, memory.
-- `internal/platform`: config, local auth middleware, clock and ID generation. Telemetry is planned for Phase 6.
+- `internal/platform`: config, local auth middleware, clock and ID generation, telemetry (metrics, log correlation, tracing).
 - `internal/demoapi`: the demo workload behind `cmd/demo-api`.
 
 ## Timeline Data

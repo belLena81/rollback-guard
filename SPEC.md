@@ -98,7 +98,7 @@ Every state mutation and corresponding audit event must be persisted in the same
 
 ## Observability
 
-All services expose health endpoints and structured logs with correlation fields such as incident ID, operation ID, task ID, trace ID, and idempotency key. Later phases add Prometheus metrics and OpenTelemetry traces across REST, A2A, MCP, and Kubernetes calls.
+All services expose health endpoints and structured logs with correlation fields such as incident ID, operation ID, task ID, trace ID, and idempotency key. Every service exposes Prometheus metrics on `GET /metrics` and emits OpenTelemetry traces that follow one incident across REST, A2A, MCP, and Kubernetes/Prometheus calls using W3C trace context. Trace export is off unless an OTLP endpoint is configured. Metric labels are bounded sets only: never incident IDs, keys, hashes, or free text. The metric catalogue and configuration are in `docs/phase6-telemetry.md`.
 
 ## Package Rules
 

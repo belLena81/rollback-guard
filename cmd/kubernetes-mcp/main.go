@@ -12,9 +12,11 @@ import (
 	"time"
 
 	kubernetesadapter "github.com/belLena81/rollback-guard/internal/adapters/kubernetes"
+	protocol "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/adapters/mcp/kubernetesserver"
 	postgresadapter "github.com/belLena81/rollback-guard/internal/adapters/postgres"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
+	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/jackc/pgx/v5/pgxpool"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,23 +26,36 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(logger); err != nil {
+	level := new(slog.LevelVar)
+	logger := telemetry.NewLogger(os.Stdout, level)
+	if err := run(logger, level); err != nil {
 		logger.Error("kubernetes MCP exited", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run(logger *slog.Logger, level *slog.LevelVar) error {
 	cfg, err := config.LoadKubernetesMCP()
 	if err != nil {
 		return err
 	}
+	level.Set(cfg.Telemetry.LogLevel)
+	tel, err := telemetry.New(telemetry.SettingsFrom(cfg.Telemetry), telemetry.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tel.Shutdown(context.Background()); err != nil {
+			logger.Warn("telemetry shutdown incomplete", "error", err)
+		}
+	}()
 	restConfig, err := kubernetesConfig(cfg.Kubeconfig)
 	if err != nil {
 		return err
 	}
 	restConfig.Timeout = cfg.RequestTimeout
+	// Kubernetes API calls join the tool call's trace.
+	restConfig.Wrap(tel.Transport)
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return fmt.Errorf("create kubernetes client: %w", err)
@@ -84,11 +99,15 @@ func run(logger *slog.Logger) error {
 		_, err := clientset.AppsV1().Deployments(target.Namespace()).Get(ctx, target.Deployment(), metav1.GetOptions{})
 		return err
 	}
-	handler, err := kubernetesserver.NewHTTPHandler(backend, mode, ready, cfg.SessionTimeout, logger)
+	serverName := protocol.ServerKubernetesReadonly
+	if mode == kubernetesserver.ModeRollback {
+		serverName = protocol.ServerKubernetesRollback
+	}
+	handler, err := kubernetesserver.NewHTTPHandler(backend, mode, ready, cfg.SessionTimeout, logger, protocol.WithMetricsHandler(tel.MetricsHandler()), protocol.WithToolObserver(serverName, tel))
 	if err != nil {
 		return err
 	}
-	return serve(cfg.HTTPAddr, handler, logger)
+	return serve(cfg.HTTPAddr, tel.InstrumentServer(handler, protocol.RouteOf), logger)
 }
 
 func kubernetesConfig(path string) (*rest.Config, error) {
