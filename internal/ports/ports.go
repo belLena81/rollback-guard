@@ -209,6 +209,10 @@ type RollbackMutationAttempt struct {
 type RollbackMutationGuard interface {
 	Begin(context.Context, domain.IdempotencyKey, domain.ProposalHash, time.Time) (RollbackMutationAttempt, error)
 	Complete(context.Context, domain.RollbackMutation, bool, time.Time) (domain.RollbackMutation, error)
+	// Release gives up a pending attempt returned by Begin that will not be
+	// completed, so a later Begin for the same key can proceed. Releasing an
+	// attempt that is not held is not an error.
+	Release(context.Context, domain.RollbackMutation) error
 }
 type RollbackPolicy interface {
 	Evaluate(domain.EligibilityCandidate) (domain.PolicyDecision, error)

@@ -415,6 +415,30 @@ func TestExecuteApprovedRollbackRejectsAmbiguousStableReplicaSetsBeforePatch(t *
 	}
 }
 
+func TestExecuteApprovedRollbackReleasesPendingMutationThroughGuardPort(t *testing.T) {
+	target := mustTarget(t)
+	deployment := testDeployment("broken:v2")
+	current := testReplicaSet(deployment, "current", "broken:v2", false, time.Now())
+	stable := testReplicaSet(deployment, "stable", "healthy:v1", true, time.Now().Add(-time.Minute))
+	otherStable := testReplicaSet(deployment, "other-stable", "healthy:v0", true, time.Now().Add(-2*time.Minute))
+	client := fake.NewClientset(deployment, current, stable, otherStable)
+	approved := testApprovedRollback(t, target, mustRevision(t, deployment.Spec.Template), mustRevision(t, stable.Spec.Template))
+	guard := newSharedMutationGuard(approved)
+	service, err := NewService(client, Config{ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, MutationGuard: decoratedMutationGuard{guard}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.ExecuteApprovedRollback(context.Background(), approved.Proposal().Hash(), "release-key")
+	if !errors.Is(err, ErrStableRevision) {
+		t.Fatalf("ExecuteApprovedRollback() error = %v, want %v", err, ErrStableRevision)
+	}
+	released := guard.releasedKeys()
+	if len(released) != 1 || released[0] != "release-key" {
+		t.Fatalf("released mutation keys = %v, want [release-key]", released)
+	}
+}
+
 func TestRollbackRejectsUntrustedCommandBeforeKubernetesAccess(t *testing.T) {
 	target := mustTarget(t)
 	deployment := testDeployment("broken:v2")
@@ -488,6 +512,7 @@ type sharedMutationGuard struct {
 	mu       sync.Mutex
 	approved map[domain.ProposalHash]domain.ApprovedRollback
 	records  map[domain.IdempotencyKey]domain.RollbackMutation
+	released []domain.IdempotencyKey
 }
 
 func newSharedMutationGuard(approved domain.ApprovedRollback) *sharedMutationGuard {
@@ -535,6 +560,25 @@ func (g *sharedMutationGuard) Complete(_ context.Context, pending domain.Rollbac
 	}
 	g.records[pending.Key()] = completed
 	return completed, nil
+}
+
+func (g *sharedMutationGuard) Release(_ context.Context, pending domain.RollbackMutation) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.released = append(g.released, pending.Key())
+	return nil
+}
+
+func (g *sharedMutationGuard) releasedKeys() []domain.IdempotencyKey {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]domain.IdempotencyKey(nil), g.released...)
+}
+
+// decoratedMutationGuard exposes exactly the port's method set, as a metrics
+// or retry decorator around the real guard would.
+type decoratedMutationGuard struct {
+	ports.RollbackMutationGuard
 }
 
 func patchActionCount(actions []k8stesting.Action) int {

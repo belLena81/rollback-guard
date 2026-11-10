@@ -338,7 +338,7 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 	releasePending := true
 	defer func() {
 		if releasePending {
-			resultErr = errors.Join(resultErr, s.releaseMutation(ctx, attempt.Mutation))
+			resultErr = errors.Join(resultErr, s.guard.Release(ctx, attempt.Mutation))
 		}
 	}()
 	proposal := attempt.Approved.Proposal()
@@ -375,7 +375,7 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 	}
 	if _, err := s.client.AppsV1().Deployments(proposal.Target().Namespace()).Patch(ctx, proposal.Target().Deployment(), types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		if apierrors.IsConflict(err) {
-			if releaseErr := s.releaseMutation(ctx, attempt.Mutation); releaseErr != nil {
+			if releaseErr := s.guard.Release(ctx, attempt.Mutation); releaseErr != nil {
 				return MutationResult{}, releaseErr
 			}
 			releasePending = false
@@ -402,7 +402,7 @@ func (s *Service) reconcileMutation(ctx context.Context, key domain.IdempotencyK
 	releasePending := true
 	defer func() {
 		if releasePending {
-			resultErr = errors.Join(resultErr, s.releaseMutation(ctx, attempt.Mutation))
+			resultErr = errors.Join(resultErr, s.guard.Release(ctx, attempt.Mutation))
 		}
 	}()
 	proposal := attempt.Approved.Proposal()
@@ -423,18 +423,6 @@ func (s *Service) reconcileMutation(ctx context.Context, key domain.IdempotencyK
 	}
 	releasePending = false
 	return mutationResult(completed), nil
-}
-
-type rollbackMutationReleaser interface {
-	Release(context.Context, domain.RollbackMutation) error
-}
-
-func (s *Service) releaseMutation(ctx context.Context, mutation domain.RollbackMutation) error {
-	releaser, ok := s.guard.(rollbackMutationReleaser)
-	if !ok {
-		return nil
-	}
-	return releaser.Release(ctx, mutation)
 }
 
 func (s *Service) mutationCompletedAt(mutation domain.RollbackMutation) time.Time {
