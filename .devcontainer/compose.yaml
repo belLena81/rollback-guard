@@ -31,6 +31,8 @@ services:
       DOCKER_HOST: tcp://dind:2375
       TESTCONTAINERS_HOST_OVERRIDE: dind
       KUBECONFIG: /home/dev/.kube/config
+      # `make kind-create` must use the sandbox cluster config (API server on dind).
+      KIND_CONFIG: /workspace/.devcontainer/kind-config.yaml
       PROMETHEUS_URL: http://prometheus:9090
       # Free local LLM (start with `sandbox.sh up llm`); OpenAI-compatible API.
       LLM_BASE_URL: http://ollama:11434/v1
