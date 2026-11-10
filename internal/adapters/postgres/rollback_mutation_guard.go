@@ -57,82 +57,23 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 	if err != nil {
 		return ports.RollbackMutationAttempt{}, err
 	}
-	if found {
-		if existing.ProposalHash() != hash {
-			return ports.RollbackMutationAttempt{}, &domain.IdempotencyConflictError{Key: key}
-		}
-		if existing.State() == domain.RollbackMutationCompleted {
-			if err := tx.Commit(ctx); err != nil {
-				return ports.RollbackMutationAttempt{}, fmt.Errorf("commit rollback mutation replay: %w", err)
-			}
-			return ports.RollbackMutationAttempt{Mutation: existing}, nil
-		}
-	}
-	repositories := &repositories{ctx: ctx, tx: tx}
-	record, err := repositories.Idempotency().Get(key)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return ports.RollbackMutationAttempt{}, &domain.ApprovalMismatchError{Reason: "trusted execution record is missing"}
-		}
-		return ports.RollbackMutationAttempt{}, err
-	}
-	if record.Operation() != domain.IdempotencyOperationExecuteRollback || record.State() != domain.IdempotencyPending || record.RequestHash() != string(hash) {
-		if record.RequestHash() != string(hash) {
-			return ports.RollbackMutationAttempt{}, &domain.IdempotencyConflictError{Key: key}
-		}
-		return ports.RollbackMutationAttempt{}, &domain.ApprovalMismatchError{Reason: "trusted execution is not pending"}
-	}
-	incidentID := domain.IncidentID(record.ResourceID())
-	incident, err := repositories.Incidents().Get(incidentID)
-	if err != nil {
-		return ports.RollbackMutationAttempt{}, err
-	}
-	if incident.Status() != domain.StatusExecuting {
-		return ports.RollbackMutationAttempt{}, &domain.ApprovalMismatchError{Reason: "incident is not executing"}
-	}
-	proposal, err := repositories.Proposals().GetByIncident(incidentID)
-	if err != nil {
-		return ports.RollbackMutationAttempt{}, err
-	}
-	if proposal.Hash() != hash {
+	if found && existing.ProposalHash() != hash {
 		return ports.RollbackMutationAttempt{}, &domain.IdempotencyConflictError{Key: key}
 	}
-	decision, err := repositories.PolicyDecisions().Get(proposal.PolicyDecisionID())
-	if err != nil {
-		return ports.RollbackMutationAttempt{}, err
+	if found && existing.State() == domain.RollbackMutationCompleted {
+		if err := tx.Commit(ctx); err != nil {
+			return ports.RollbackMutationAttempt{}, fmt.Errorf("commit rollback mutation replay: %w", err)
+		}
+		return ports.RollbackMutationAttempt{Mutation: existing}, nil
 	}
-	approval, err := repositories.Approvals().GetByIncident(incidentID)
-	if err != nil {
-		return ports.RollbackMutationAttempt{}, err
-	}
-	var approved domain.ApprovedRollback
-	if found {
-		approved, err = domain.ResumeApprovedRollback(proposal, decision, approval, record, key)
-	} else {
-		approved, err = domain.AuthorizeRollback(
-			proposal,
-			decision,
-			approval,
-			domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: proposal.CurrentRevision()},
-			record.StartedAt(),
-		)
-	}
+	trusted, err := authorizeTrustedExecution(ctx, tx, key, hash, found)
 	if err != nil {
 		return ports.RollbackMutationAttempt{}, err
 	}
 	if !found {
-		existing, err = domain.NewPendingRollbackMutation(key, hash, rollbackMutationExecutionID(key, hash), proposal.CurrentRevision(), proposal.TargetRevision(), record.StartedAt())
+		existing, err = insertPendingRollbackMutation(ctx, tx, key, hash, trusted)
 		if err != nil {
 			return ports.RollbackMutationAttempt{}, err
-		}
-		snapshot := existing.Snapshot()
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO rollback_mutations (
-				idempotency_key, proposal_hash, execution_id, from_revision, to_revision,
-				state, started_at, completed_at, already_applied
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,NULL)
-		`, snapshot.Key, snapshot.ProposalHash, snapshot.ExecutionID, snapshot.FromRevision, snapshot.ToRevision, rollbackMutationStateText(snapshot.State), snapshot.StartedAt); err != nil {
-			return ports.RollbackMutationAttempt{}, fmt.Errorf("insert rollback mutation: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -140,7 +81,95 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 	}
 	releaseOnReturn = false
 	g.retainRollbackMutationLock(key, lock)
-	return ports.RollbackMutationAttempt{Mutation: existing, Approved: approved, Lease: lock.lease}, nil
+	return ports.RollbackMutationAttempt{Mutation: existing, Approved: trusted.approved, Lease: lock.lease}, nil
+}
+
+// trustedExecution is the rollback the guard re-derived from the durable
+// records, never from the caller.
+type trustedExecution struct {
+	approved domain.ApprovedRollback
+	proposal domain.RollbackProposal
+	record   domain.IdempotencyRecord
+}
+
+// authorizeTrustedExecution re-checks the pending execution, its incident,
+// proposal, policy decision, and approval against the database inside tx, and
+// authorizes the rollback from them. resume is true when a pending mutation
+// already exists for the key, which is then resumed rather than authorized
+// afresh.
+func authorizeTrustedExecution(ctx context.Context, tx pgx.Tx, key domain.IdempotencyKey, hash domain.ProposalHash, resume bool) (trustedExecution, error) {
+	repositories := &repositories{ctx: ctx, tx: tx}
+	record, err := repositories.Idempotency().Get(key)
+	if errors.Is(err, domain.ErrNotFound) {
+		return trustedExecution{}, &domain.ApprovalMismatchError{Reason: "trusted execution record is missing"}
+	}
+	if err != nil {
+		return trustedExecution{}, err
+	}
+	if record.RequestHash() != string(hash) {
+		return trustedExecution{}, &domain.IdempotencyConflictError{Key: key}
+	}
+	if record.Operation() != domain.IdempotencyOperationExecuteRollback || record.State() != domain.IdempotencyPending {
+		return trustedExecution{}, &domain.ApprovalMismatchError{Reason: "trusted execution is not pending"}
+	}
+	incidentID := domain.IncidentID(record.ResourceID())
+	incident, err := repositories.Incidents().Get(incidentID)
+	if err != nil {
+		return trustedExecution{}, err
+	}
+	if incident.Status() != domain.StatusExecuting {
+		return trustedExecution{}, &domain.ApprovalMismatchError{Reason: "incident is not executing"}
+	}
+	proposal, err := repositories.Proposals().GetByIncident(incidentID)
+	if err != nil {
+		return trustedExecution{}, err
+	}
+	if proposal.Hash() != hash {
+		return trustedExecution{}, &domain.IdempotencyConflictError{Key: key}
+	}
+	decision, err := repositories.PolicyDecisions().Get(proposal.PolicyDecisionID())
+	if err != nil {
+		return trustedExecution{}, err
+	}
+	approval, err := repositories.Approvals().GetByIncident(incidentID)
+	if err != nil {
+		return trustedExecution{}, err
+	}
+	approved, err := authorizeOrResume(proposal, decision, approval, record, key, resume)
+	if err != nil {
+		return trustedExecution{}, err
+	}
+	return trustedExecution{approved: approved, proposal: proposal, record: record}, nil
+}
+
+func authorizeOrResume(proposal domain.RollbackProposal, decision domain.PolicyDecision, approval domain.Approval, record domain.IdempotencyRecord, key domain.IdempotencyKey, resume bool) (domain.ApprovedRollback, error) {
+	if resume {
+		return domain.ResumeApprovedRollback(proposal, decision, approval, record, key)
+	}
+	return domain.AuthorizeRollback(
+		proposal,
+		decision,
+		approval,
+		domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: proposal.CurrentRevision()},
+		record.StartedAt(),
+	)
+}
+
+func insertPendingRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.IdempotencyKey, hash domain.ProposalHash, trusted trustedExecution) (domain.RollbackMutation, error) {
+	pending, err := domain.NewPendingRollbackMutation(key, hash, rollbackMutationExecutionID(key, hash), trusted.proposal.CurrentRevision(), trusted.proposal.TargetRevision(), trusted.record.StartedAt())
+	if err != nil {
+		return domain.RollbackMutation{}, err
+	}
+	snapshot := pending.Snapshot()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO rollback_mutations (
+			idempotency_key, proposal_hash, execution_id, from_revision, to_revision,
+			state, started_at, completed_at, already_applied
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,NULL)
+	`, snapshot.Key, snapshot.ProposalHash, snapshot.ExecutionID, snapshot.FromRevision, snapshot.ToRevision, rollbackMutationStateText(snapshot.State), snapshot.StartedAt); err != nil {
+		return domain.RollbackMutation{}, fmt.Errorf("insert rollback mutation: %w", err)
+	}
+	return pending, nil
 }
 
 // Complete records the attempt's mutation as completed while the attempt's

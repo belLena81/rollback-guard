@@ -7,15 +7,24 @@ linters:
     - errcheck
     - errorlint
     - exhaustive
+    - dupl
+    - gocognit
     - gocritic
+    - gocyclo
     - govet
     - ineffassign
     - mnd
+    - nestif
     - nilerr
     - staticcheck
+    - unparam
     - unused
     - usestdlibvars
   settings:
+    gocognit:
+      min-complexity: 30
+    gocyclo:
+      min-complexity: 20
     errcheck:
       check-type-assertions: true
       check-blank: true
@@ -28,6 +37,16 @@ linters:
       - linters:
           - mnd
         path-except: ^(cmd|internal/platform)/
+      # The R4 ratchet (complexity, duplication, unused parameters) holds
+      # production code. Table-driven tests and scenario fixtures are long
+      # and repetitive by design.
+      - linters:
+          - dupl
+          - gocognit
+          - gocyclo
+          - nestif
+          - unparam
+        path: _test\.go$
 
 formatters:
   enable:

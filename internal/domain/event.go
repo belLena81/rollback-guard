@@ -31,15 +31,22 @@ func (k EventKind) String() string {
 	return names[k]
 }
 
-type EventDetail interface{ eventDetail() }
+// EventDetail is the typed payload of an operation event. It is closed to this
+// package: each detail type decides whether it is valid for an event kind and
+// actor.
+type EventDetail interface {
+	validFor(kind EventKind, actor Actor) bool
+}
 type IncidentCreatedDetail struct{ Target DeploymentTarget }
 
-func (IncidentCreatedDetail) eventDetail() {
+func (value IncidentCreatedDetail) validFor(kind EventKind, _ Actor) bool {
+	return kind == EventIncidentCreated && value.Target.Valid()
 }
 
 type StatusChangedDetail struct{ From, To Status }
 
-func (StatusChangedDetail) eventDetail() {
+func (value StatusChangedDetail) validFor(kind EventKind, _ Actor) bool {
+	return kind == EventStatusChanged && value.From.Valid() && value.To.Valid() && value.From != value.To
 }
 
 type EvidenceCollectedDetail struct {
@@ -47,7 +54,8 @@ type EvidenceCollectedDetail struct {
 	Kind       EvidenceKind
 }
 
-func (EvidenceCollectedDetail) eventDetail() {
+func (value EvidenceCollectedDetail) validFor(kind EventKind, _ Actor) bool {
+	return kind == EventEvidenceCollected && value.EvidenceID != "" && value.Kind >= EvidenceDeployment && value.Kind <= EvidenceKubernetesEvent
 }
 
 type DiagnosisCompletedDetail struct {
@@ -55,7 +63,8 @@ type DiagnosisCompletedDetail struct {
 	Recommendation Recommendation
 }
 
-func (DiagnosisCompletedDetail) eventDetail() {
+func (value DiagnosisCompletedDetail) validFor(kind EventKind, _ Actor) bool {
+	return kind == EventDiagnosisCompleted && value.ConclusionID != "" && (value.Recommendation == RecommendRollback || value.Recommendation == RecommendNoAction)
 }
 
 type PolicyEvaluatedDetail struct {
@@ -63,7 +72,8 @@ type PolicyEvaluatedDetail struct {
 	Allowed    bool
 }
 
-func (PolicyEvaluatedDetail) eventDetail() {
+func (value PolicyEvaluatedDetail) validFor(kind EventKind, _ Actor) bool {
+	return kind == EventPolicyEvaluated && value.DecisionID != ""
 }
 
 type ProposalCreatedDetail struct {
@@ -71,7 +81,8 @@ type ProposalCreatedDetail struct {
 	ProposalHash ProposalHash
 }
 
-func (ProposalCreatedDetail) eventDetail() {
+func (value ProposalCreatedDetail) validFor(kind EventKind, _ Actor) bool {
+	return kind == EventProposalCreated && value.ActionID != "" && value.ProposalHash != ""
 }
 
 type ApprovalRecordedDetail struct {
@@ -79,7 +90,8 @@ type ApprovalRecordedDetail struct {
 	Actor      Actor
 }
 
-func (ApprovalRecordedDetail) eventDetail() {
+func (value ApprovalRecordedDetail) validFor(kind EventKind, actor Actor) bool {
+	return kind == EventApprovalRecorded && value.ApprovalID != "" && value.Actor.IsHuman() && value.Actor == actor
 }
 
 type RejectionRecordedDetail struct {
@@ -87,7 +99,8 @@ type RejectionRecordedDetail struct {
 	Reason     string
 }
 
-func (RejectionRecordedDetail) eventDetail() {
+func (value RejectionRecordedDetail) validFor(kind EventKind, _ Actor) bool {
+	return kind == EventRejectionRecorded && value.ApprovalID != "" && strings.TrimSpace(value.Reason) != ""
 }
 
 type ExecutionCompletedDetail struct {
@@ -95,7 +108,8 @@ type ExecutionCompletedDetail struct {
 	Outcome     ExecutionOutcome
 }
 
-func (ExecutionCompletedDetail) eventDetail() {
+func (value ExecutionCompletedDetail) validFor(kind EventKind, _ Actor) bool {
+	return kind == EventExecutionCompleted && value.ExecutionID != "" && (value.Outcome == ExecutionSucceeded || value.Outcome == ExecutionFailed)
 }
 
 type VerificationCompletedDetail struct {
@@ -103,12 +117,14 @@ type VerificationCompletedDetail struct {
 	Revision Revision
 }
 
-func (VerificationCompletedDetail) eventDetail() {
+func (value VerificationCompletedDetail) validFor(kind EventKind, _ Actor) bool {
+	return kind == EventVerificationCompleted && value.Revision != ""
 }
 
 type TerminalDetail struct{ Reason string }
 
-func (TerminalDetail) eventDetail() {
+func (value TerminalDetail) validFor(kind EventKind, _ Actor) bool {
+	return (kind == EventIncidentFailed || kind == EventIncidentExpired || kind == EventIncidentCanceled) && strings.TrimSpace(value.Reason) != ""
 }
 
 type OperationEvent struct {
@@ -132,32 +148,7 @@ func NewOperationEvent(id EventID, incidentID IncidentID, sequence uint64, kind 
 }
 
 func validateEventDetail(kind EventKind, actor Actor, detail EventDetail) error {
-	valid := false
-	switch value := detail.(type) {
-	case IncidentCreatedDetail:
-		valid = kind == EventIncidentCreated && value.Target.Valid()
-	case StatusChangedDetail:
-		valid = kind == EventStatusChanged && value.From.Valid() && value.To.Valid() && value.From != value.To
-	case EvidenceCollectedDetail:
-		valid = kind == EventEvidenceCollected && value.EvidenceID != "" && value.Kind >= EvidenceDeployment && value.Kind <= EvidenceKubernetesEvent
-	case DiagnosisCompletedDetail:
-		valid = kind == EventDiagnosisCompleted && value.ConclusionID != "" && (value.Recommendation == RecommendRollback || value.Recommendation == RecommendNoAction)
-	case PolicyEvaluatedDetail:
-		valid = kind == EventPolicyEvaluated && value.DecisionID != ""
-	case ProposalCreatedDetail:
-		valid = kind == EventProposalCreated && value.ActionID != "" && value.ProposalHash != ""
-	case ApprovalRecordedDetail:
-		valid = kind == EventApprovalRecorded && value.ApprovalID != "" && value.Actor.IsHuman() && value.Actor == actor
-	case RejectionRecordedDetail:
-		valid = kind == EventRejectionRecorded && value.ApprovalID != "" && strings.TrimSpace(value.Reason) != ""
-	case ExecutionCompletedDetail:
-		valid = kind == EventExecutionCompleted && value.ExecutionID != "" && (value.Outcome == ExecutionSucceeded || value.Outcome == ExecutionFailed)
-	case VerificationCompletedDetail:
-		valid = kind == EventVerificationCompleted && value.Revision != ""
-	case TerminalDetail:
-		valid = (kind == EventIncidentFailed || kind == EventIncidentExpired || kind == EventIncidentCanceled) && strings.TrimSpace(value.Reason) != ""
-	}
-	if !valid {
+	if !detail.validFor(kind, actor) {
 		return invalid("event.detail", "does not match event kind or contains invalid values")
 	}
 	return nil

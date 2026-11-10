@@ -42,68 +42,92 @@ func (s *ApprovalService) Reject(ctx context.Context, command RejectionCommand) 
 	return s.recordDecision(ctx, approvalCommand, domain.ApprovalRejected, command.Reason)
 }
 
+// decisionOutcome is the result of recording a decision: the approval, or
+// that the proposal had expired (in which case the incident is expired).
+type decisionOutcome struct {
+	approval domain.Approval
+	expired  bool
+}
+
 func (s *ApprovalService) recordDecision(ctx context.Context, command ApprovalCommand, decision domain.ApprovalDecision, reason string) (domain.Approval, error) {
 	now := s.clock.Now()
-	var approval domain.Approval
-	expired := false
+	var outcome decisionOutcome
 	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		incident, err := repositories.Incidents().Get(command.IncidentID)
-		if err != nil {
-			return err
-		}
-		proposal, err := repositories.Proposals().GetByIncident(command.IncidentID)
-		if err != nil {
-			return err
-		}
-		existing, existingErr := repositories.Approvals().GetByIncident(command.IncidentID)
-		if existingErr == nil {
-			if existing.Actor() == command.Actor && existing.Decision() == decision && existing.ActionID() == command.ActionID && existing.ProposalHash() == command.ProposalHash && existing.RejectionReason() == reason {
-				approval = existing
-				return nil
-			}
-			return &domain.ApprovalMismatchError{Reason: "a different approval decision is already recorded"}
-		}
-		if !errors.Is(existingErr, domain.ErrNotFound) {
-			return existingErr
-		}
-		if proposal.Expired(now) {
-			if incident.Status() != domain.StatusExpired {
-				if _, err := s.transition(ctx, repositories, incident, now, (*domain.Incident).Expire, terminated(s.systemActor, domain.EventIncidentExpired, "proposal expired")); err != nil {
-					return err
-				}
-			}
-			expired = true
-			return nil
-		}
-		if command.ActionID != proposal.ActionID() || command.ProposalHash != proposal.Hash() {
-			return &domain.ApprovalMismatchError{Reason: "action or proposal hash does not match"}
-		}
-		expiresAt := now.Add(s.approvalTTL)
-		if proposal.ExpiresAt().Before(expiresAt) {
-			expiresAt = proposal.ExpiresAt()
-		}
-		approval, err = domain.NewApproval(domain.ApprovalID(s.ids.NewID("approval")), command.Actor, decision, command.ActionID, command.ProposalHash, now, expiresAt, reason)
-		if err != nil {
-			return err
-		}
-		apply := (*domain.Incident).Approve
-		if decision != domain.ApprovalApproved {
-			apply = (*domain.Incident).Reject
-		}
-		// Transition first: a concurrent request that recorded the same
-		// decision has already moved the incident on, so this one fails on
-		// the version guard (a conflict) instead of a duplicate approval
-		// insert. Both writes commit or roll back together.
-		if _, err := s.transition(ctx, repositories, incident, now, apply, approvalEvents(command.Actor, approval, reason)); err != nil {
-			return err
-		}
-		return repositories.Approvals().Save(approval)
+		var err error
+		outcome, err = s.decide(ctx, repositories, command, decision, reason, now)
+		return err
 	})
 	if err != nil {
 		return domain.Approval{}, fmt.Errorf("record approval decision: %w", err)
 	}
-	if expired {
+	if outcome.expired {
 		return domain.Approval{}, &domain.ExpiryError{Resource: "proposal"}
 	}
-	return approval, nil
+	return outcome.approval, nil
+}
+
+func (s *ApprovalService) decide(ctx context.Context, repositories ports.Repositories, command ApprovalCommand, decision domain.ApprovalDecision, reason string, now time.Time) (decisionOutcome, error) {
+	incident, err := repositories.Incidents().Get(command.IncidentID)
+	if err != nil {
+		return decisionOutcome{}, err
+	}
+	proposal, err := repositories.Proposals().GetByIncident(command.IncidentID)
+	if err != nil {
+		return decisionOutcome{}, err
+	}
+	if existing, found, err := s.existingDecision(repositories, command, decision, reason); found || err != nil {
+		return decisionOutcome{approval: existing}, err
+	}
+	if proposal.Expired(now) {
+		return decisionOutcome{expired: true}, s.expire(ctx, repositories, incident, now)
+	}
+	if command.ActionID != proposal.ActionID() || command.ProposalHash != proposal.Hash() {
+		return decisionOutcome{}, &domain.ApprovalMismatchError{Reason: "action or proposal hash does not match"}
+	}
+	expiresAt := now.Add(s.approvalTTL)
+	if proposal.ExpiresAt().Before(expiresAt) {
+		expiresAt = proposal.ExpiresAt()
+	}
+	approval, err := domain.NewApproval(domain.ApprovalID(s.ids.NewID("approval")), command.Actor, decision, command.ActionID, command.ProposalHash, now, expiresAt, reason)
+	if err != nil {
+		return decisionOutcome{}, err
+	}
+	apply := (*domain.Incident).Approve
+	if decision != domain.ApprovalApproved {
+		apply = (*domain.Incident).Reject
+	}
+	// Transition first: a concurrent request that recorded the same
+	// decision has already moved the incident on, so this one fails on
+	// the version guard (a conflict) instead of a duplicate approval
+	// insert. Both writes commit or roll back together.
+	if _, err := s.transition(ctx, repositories, incident, now, apply, approvalEvents(command.Actor, approval, reason)); err != nil {
+		return decisionOutcome{}, err
+	}
+	return decisionOutcome{approval: approval}, repositories.Approvals().Save(approval)
+}
+
+// existingDecision reports a decision already recorded for the incident.
+// Replaying the same decision returns it; any other is a mismatch.
+func (s *ApprovalService) existingDecision(repositories ports.Repositories, command ApprovalCommand, decision domain.ApprovalDecision, reason string) (domain.Approval, bool, error) {
+	existing, err := repositories.Approvals().GetByIncident(command.IncidentID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.Approval{}, false, nil
+	}
+	if err != nil {
+		return domain.Approval{}, true, err
+	}
+	if existing.Actor() == command.Actor && existing.Decision() == decision && existing.ActionID() == command.ActionID && existing.ProposalHash() == command.ProposalHash && existing.RejectionReason() == reason {
+		return existing, true, nil
+	}
+	return domain.Approval{}, true, &domain.ApprovalMismatchError{Reason: "a different approval decision is already recorded"}
+}
+
+// expire marks the incident expired because its proposal ran out before a
+// decision was recorded; an incident already expired is left as it is.
+func (s *ApprovalService) expire(ctx context.Context, repositories ports.Repositories, incident domain.Incident, now time.Time) error {
+	if incident.Status() == domain.StatusExpired {
+		return nil
+	}
+	_, err := s.transition(ctx, repositories, incident, now, (*domain.Incident).Expire, terminated(s.systemActor, domain.EventIncidentExpired, "proposal expired"))
+	return err
 }

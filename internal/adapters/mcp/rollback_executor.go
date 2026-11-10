@@ -32,24 +32,8 @@ func (a *RollbackExecutor) ExecuteApprovedRollback(ctx context.Context, approved
 	}
 	alreadyApplied := inspectErr == nil && current.CurrentRevision == proposal.TargetRevision()
 	if !alreadyApplied {
-		if err := ctx.Err(); err != nil {
-			// The caller gave up before anything that can mutate was sent.
-			return domain.RollbackExecution{}, fmt.Errorf("before prepare rollback: %w", err)
-		}
-		prepare := PrepareRollbackInput{Proposal: ProposalFromDomain(proposal)}
-		prepared, err := callTool[PrepareRollbackInput, PrepareRollbackOutput](ctx, a.rollback, ToolPrepareRollback, prepare)
-		if err != nil {
-			// With a failed inspection, "not applied" was never
-			// established: a revision-drift answer may mean an earlier
-			// attempt already applied this rollback. Only a request that
-			// never left stays a plain (retryable) failure.
-			if inspectErr != nil && !resilience.RequestNotSent(err) {
-				return domain.RollbackExecution{}, fmt.Errorf("prepare rollback after failed inspection: %w", ports.ErrRollbackOutcomeUnknown)
-			}
+		if err := a.prepare(ctx, proposal, inspectErr); err != nil {
 			return domain.RollbackExecution{}, err
-		}
-		if prepared.ProposalHash != string(proposal.Hash()) || prepared.TargetRevision != string(proposal.TargetRevision()) {
-			return domain.RollbackExecution{}, fmt.Errorf("rollback MCP preparation mismatch")
 		}
 	}
 	input := ExecuteRollbackInput{ProposalHash: string(proposal.Hash()), IdempotencyKey: string(key)}
@@ -74,6 +58,32 @@ func (a *RollbackExecutor) ExecuteApprovedRollback(ctx context.Context, approved
 		waitCtx = reconcileCtx
 	}
 	return a.waitAndBuild(waitCtx, approved, key, mutation.StartedAt, mutation.CompletedAt)
+}
+
+// prepare asks the rollback server to validate the proposal before the
+// mutation. inspectErr is the failure of the inspection that preceded it, nil
+// when the deployment was read.
+func (a *RollbackExecutor) prepare(ctx context.Context, proposal domain.RollbackProposal, inspectErr error) error {
+	if err := ctx.Err(); err != nil {
+		// The caller gave up before anything that can mutate was sent.
+		return fmt.Errorf("before prepare rollback: %w", err)
+	}
+	prepare := PrepareRollbackInput{Proposal: ProposalFromDomain(proposal)}
+	prepared, err := callTool[PrepareRollbackInput, PrepareRollbackOutput](ctx, a.rollback, ToolPrepareRollback, prepare)
+	if err != nil {
+		// With a failed inspection, "not applied" was never
+		// established: a revision-drift answer may mean an earlier
+		// attempt already applied this rollback. Only a request that
+		// never left stays a plain (retryable) failure.
+		if inspectErr != nil && !resilience.RequestNotSent(err) {
+			return fmt.Errorf("prepare rollback after failed inspection: %w", ports.ErrRollbackOutcomeUnknown)
+		}
+		return err
+	}
+	if prepared.ProposalHash != string(proposal.Hash()) || prepared.TargetRevision != string(proposal.TargetRevision()) {
+		return fmt.Errorf("rollback MCP preparation mismatch")
+	}
+	return nil
 }
 
 // mutationFailureKind classifies a failed execute_approved_rollback call by

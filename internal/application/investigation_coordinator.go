@@ -123,78 +123,106 @@ func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch domain.In
 
 	taskCtx, cancel := context.WithTimeout(ctx, c.config.TaskTimeout)
 	defer cancel()
-	ref := dispatch.Ref
-	if ref.TaskID == "" {
-		// Hand the Investigator the trace context of this dispatch span so
-		// a detached task execution still joins the incident's trace.
-		traceID := c.config.Tracer.TraceCarrier(ctx)
-		if traceID == "" {
-			traceID = dispatch.TraceID
-		}
-		var err error
-		ref, err = c.gateway.Submit(taskCtx, ports.InvestigationSubmission{Incident: incident, OperationID: dispatch.OperationID, IdempotencyKey: dispatch.IdempotencyKey, MessageID: dispatch.MessageID, TraceID: traceID, RequestHash: dispatch.RequestHash})
-		if err != nil {
-			if dispatch.Attempts < c.config.MaxAttempts {
-				if retryErr := c.retry(ctx, dispatch.IncidentID, false); retryErr != nil {
-					if errors.Is(retryErr, domain.ErrInvestigationCancellationRequested) {
-						return c.cancelLatestInvestigation(ctx, dispatch, ref)
-					}
-					return errors.Join(err, retryErr)
-				}
-				return err
-			}
-			return c.fail(ctx, dispatch.IncidentID, "submission_failed", err)
-		}
-		ctx = ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID})
-		dispatch, err = c.attachTaskRef(ctx, dispatch.IncidentID, ref)
-		if err != nil {
+	if dispatch.Ref.TaskID == "" {
+		submitted, done, err := c.submit(ctx, taskCtx, dispatch, incident)
+		if done {
 			return err
 		}
-		if dispatch.CancellationRequested() {
-			return c.cancelInvestigation(ctx, dispatch)
-		}
+		dispatch = submitted
+		ctx = ports.WithCorrelation(ctx, ports.Correlation{TaskID: dispatch.Ref.TaskID})
 	}
+	ref := dispatch.Ref
 	result, canceled, err := c.watchInvestigation(ctx, taskCtx, dispatch, ref)
 	if canceled {
 		return err
 	}
 	if err != nil {
-		if errors.Is(ctx.Err(), context.Canceled) && errors.Is(taskCtx.Err(), context.Canceled) {
-			return ctx.Err()
-		}
-		latest, loadErr := c.loadDispatch(ctx, dispatch.IncidentID)
-		if loadErr == nil && latest.CancellationRequested() {
-			return c.cancelInvestigation(ctx, latest)
-		}
-		if !errors.Is(taskCtx.Err(), context.DeadlineExceeded) && dispatch.Attempts < c.config.MaxAttempts {
-			if retryErr := c.retry(ctx, dispatch.IncidentID, true); retryErr != nil {
-				if errors.Is(retryErr, domain.ErrInvestigationCancellationRequested) {
-					return c.cancelLatestInvestigation(ctx, dispatch, ref)
-				}
-				return errors.Join(err, retryErr)
-			}
-			return err
-		}
-		cancelCtx, cancelRemote := context.WithTimeout(context.WithoutCancel(ctx), c.config.CancelTimeout)
-		defer cancelRemote()
-		cancelErr := c.gateway.Cancel(cancelCtx, ref)
-		code := "investigation_failed"
-		if errors.Is(taskCtx.Err(), context.DeadlineExceeded) {
-			code = "investigation_timeout"
-		}
-		return c.fail(ctx, dispatch.IncidentID, code, errors.Join(err, cancelErr))
+		return c.handleWatchFailure(ctx, taskCtx, dispatch, ref, err)
 	}
-	if _, err := c.investigations.Complete(ctx, dispatch.IncidentID, result); err != nil {
-		latest, loadErr := c.loadDispatch(ctx, dispatch.IncidentID)
-		if loadErr == nil && latest.CancellationRequested() {
-			return c.cancelInvestigation(ctx, latest)
-		}
-		if loadErr != nil {
-			return errors.Join(err, loadErr)
-		}
-		return c.fail(ctx, dispatch.IncidentID, "invalid_investigation_result", err)
+	return c.finish(ctx, dispatch, result)
+}
+
+// submit hands the investigation to the Investigator and records the remote
+// task on the dispatch. done reports that the drive is over, with err as its
+// outcome: the submission failed (and was retried or failed for good) or the
+// dispatch was canceled meanwhile. Otherwise it returns the updated dispatch.
+func (c *InvestigationCoordinator) submit(ctx, taskCtx context.Context, dispatch domain.InvestigationDispatch, incident domain.Incident) (domain.InvestigationDispatch, bool, error) {
+	// Hand the Investigator the trace context of this dispatch span so a
+	// detached task execution still joins the incident's trace.
+	traceID := c.config.Tracer.TraceCarrier(ctx)
+	if traceID == "" {
+		traceID = dispatch.TraceID
 	}
-	return nil
+	ref, err := c.gateway.Submit(taskCtx, ports.InvestigationSubmission{Incident: incident, OperationID: dispatch.OperationID, IdempotencyKey: dispatch.IdempotencyKey, MessageID: dispatch.MessageID, TraceID: traceID, RequestHash: dispatch.RequestHash})
+	if err != nil {
+		if dispatch.Attempts < c.config.MaxAttempts {
+			return dispatch, true, c.retryOrCancel(ctx, dispatch, ref, false, err)
+		}
+		return dispatch, true, c.fail(ctx, dispatch.IncidentID, "submission_failed", err)
+	}
+	ctx = ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID})
+	attached, err := c.attachTaskRef(ctx, dispatch.IncidentID, ref)
+	if err != nil {
+		return dispatch, true, err
+	}
+	if attached.CancellationRequested() {
+		return attached, true, c.cancelInvestigation(ctx, attached)
+	}
+	return attached, false, nil
+}
+
+// retryOrCancel schedules another attempt and returns cause. If cancellation
+// was requested meanwhile it cancels the investigation instead.
+func (c *InvestigationCoordinator) retryOrCancel(ctx context.Context, dispatch domain.InvestigationDispatch, ref domain.InvestigationTaskRef, submitted bool, cause error) error {
+	retryErr := c.retry(ctx, dispatch.IncidentID, submitted)
+	if errors.Is(retryErr, domain.ErrInvestigationCancellationRequested) {
+		return c.cancelLatestInvestigation(ctx, dispatch, ref)
+	}
+	if retryErr != nil {
+		return errors.Join(cause, retryErr)
+	}
+	return cause
+}
+
+// handleWatchFailure decides what a failed watch means: shutdown, a
+// cancellation requested meanwhile, another attempt, or a failed
+// investigation (after canceling the remote task).
+func (c *InvestigationCoordinator) handleWatchFailure(ctx, taskCtx context.Context, dispatch domain.InvestigationDispatch, ref domain.InvestigationTaskRef, watchErr error) error {
+	if errors.Is(ctx.Err(), context.Canceled) && errors.Is(taskCtx.Err(), context.Canceled) {
+		return ctx.Err()
+	}
+	if latest, loadErr := c.loadDispatch(ctx, dispatch.IncidentID); loadErr == nil && latest.CancellationRequested() {
+		return c.cancelInvestigation(ctx, latest)
+	}
+	timedOut := errors.Is(taskCtx.Err(), context.DeadlineExceeded)
+	if !timedOut && dispatch.Attempts < c.config.MaxAttempts {
+		return c.retryOrCancel(ctx, dispatch, ref, true, watchErr)
+	}
+	cancelCtx, cancelRemote := context.WithTimeout(context.WithoutCancel(ctx), c.config.CancelTimeout)
+	defer cancelRemote()
+	cancelErr := c.gateway.Cancel(cancelCtx, ref)
+	code := "investigation_failed"
+	if timedOut {
+		code = "investigation_timeout"
+	}
+	return c.fail(ctx, dispatch.IncidentID, code, errors.Join(watchErr, cancelErr))
+}
+
+// finish persists the investigation result. A result that cannot be persisted
+// fails the investigation unless cancellation was requested meanwhile.
+func (c *InvestigationCoordinator) finish(ctx context.Context, dispatch domain.InvestigationDispatch, result ports.InvestigationResult) error {
+	_, err := c.investigations.Complete(ctx, dispatch.IncidentID, result)
+	if err == nil {
+		return nil
+	}
+	latest, loadErr := c.loadDispatch(ctx, dispatch.IncidentID)
+	if loadErr != nil {
+		return errors.Join(err, loadErr)
+	}
+	if latest.CancellationRequested() {
+		return c.cancelInvestigation(ctx, latest)
+	}
+	return c.fail(ctx, dispatch.IncidentID, "invalid_investigation_result", err)
 }
 
 func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskCtx context.Context, dispatch domain.InvestigationDispatch, ref domain.InvestigationTaskRef) (ports.InvestigationResult, bool, error) {

@@ -87,38 +87,8 @@ func (s *ExecutionService) loadExecution(ctx context.Context, incidentID domain.
 		if err != nil {
 			return err
 		}
-		requestHash := string(loaded.proposal.Hash())
-		var recordErr error
-		loaded.record, recordErr = repositories.Idempotency().Get(key)
-		if recordErr == nil {
-			if loaded.record.Operation() != domain.IdempotencyOperationExecuteRollback || loaded.record.RequestHash() != requestHash || loaded.record.ResourceID() != string(incidentID) {
-				return &domain.IdempotencyConflictError{Key: key}
-			}
-			switch loaded.record.State() {
-			case domain.IdempotencyCompleted:
-				loaded.existing, err = repositories.Executions().Get(loaded.record.ResultID())
-				if err != nil {
-					return err
-				}
-				if err := validateExecutionResult(loaded.existing, loaded.proposal, key); err != nil {
-					return &domain.IdempotencyConflictError{Key: key}
-				}
-				loaded.completed = true
-				return nil
-			case domain.IdempotencyPending:
-				if loaded.incident.Status() != domain.StatusExecuting {
-					return &domain.IdempotencyConflictError{Key: key}
-				}
-				loaded.resume = true
-			default:
-				return &domain.IdempotencyConflictError{Key: key}
-			}
-		}
-		if recordErr != nil && !errors.Is(recordErr, domain.ErrNotFound) {
-			return recordErr
-		}
-		if errors.Is(recordErr, domain.ErrNotFound) && loaded.incident.Status() != domain.StatusApproved {
-			return &domain.IllegalTransitionError{From: loaded.incident.Status(), To: domain.StatusExecuting}
+		if done, err := s.readAttempt(repositories, &loaded, key); done || err != nil {
+			return err
 		}
 		loaded.approval, err = repositories.Approvals().GetByIncident(incidentID)
 		if err != nil {
@@ -128,6 +98,48 @@ func (s *ExecutionService) loadExecution(ctx context.Context, incidentID domain.
 		return err
 	})
 	return loaded, err
+}
+
+// readAttempt looks up the idempotency record for key and records in loaded
+// what it means: a completed attempt (done, with its stored result), a pending
+// one to resume, or no attempt yet, which needs an approved incident. A record
+// that belongs to another operation, proposal, incident, or state is a
+// conflict.
+func (s *ExecutionService) readAttempt(repositories ports.Repositories, loaded *loadedExecution, key domain.IdempotencyKey) (done bool, err error) {
+	record, err := repositories.Idempotency().Get(key)
+	if errors.Is(err, domain.ErrNotFound) {
+		if loaded.incident.Status() != domain.StatusApproved {
+			return false, &domain.IllegalTransitionError{From: loaded.incident.Status(), To: domain.StatusExecuting}
+		}
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	loaded.record = record
+	if record.Operation() != domain.IdempotencyOperationExecuteRollback || record.RequestHash() != string(loaded.proposal.Hash()) || record.ResourceID() != string(loaded.incident.ID()) {
+		return false, &domain.IdempotencyConflictError{Key: key}
+	}
+	switch record.State() {
+	case domain.IdempotencyCompleted:
+		loaded.existing, err = repositories.Executions().Get(record.ResultID())
+		if err != nil {
+			return false, err
+		}
+		if validateExecutionResult(loaded.existing, loaded.proposal, key) != nil {
+			return false, &domain.IdempotencyConflictError{Key: key}
+		}
+		loaded.completed = true
+		return true, nil
+	case domain.IdempotencyPending:
+		if loaded.incident.Status() != domain.StatusExecuting {
+			return false, &domain.IdempotencyConflictError{Key: key}
+		}
+		loaded.resume = true
+		return false, nil
+	default:
+		return false, &domain.IdempotencyConflictError{Key: key}
+	}
 }
 
 func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedExecution, key domain.IdempotencyKey) (executionPreparation, error) {
@@ -220,7 +232,7 @@ func deploymentRecovered(deployment domain.DeploymentEvidence) bool {
 }
 
 func (s *ExecutionService) completePendingRevalidationFailure(ctx context.Context, loaded loadedExecution, startedAt time.Time, cause error) executionPreparation {
-	execution, createErr := s.newFailedExecution(loaded.proposal, loaded.record, startedAt, cause)
+	execution, createErr := s.newFailedExecution(loaded.proposal, loaded.record, startedAt)
 	if createErr != nil {
 		return executionPreparation{executionErr: errors.Join(cause, createErr), completed: true}
 	}
@@ -244,7 +256,7 @@ func (s *ExecutionService) invokeExecutor(ctx context.Context, approved domain.A
 	}
 	if executeErr != nil {
 		var err error
-		execution, err = s.newFailedExecution(proposal, record, startedAt, executeErr)
+		execution, err = s.newFailedExecution(proposal, record, startedAt)
 		if err != nil {
 			return domain.RollbackExecution{}, errors.Join(executeErr, fmt.Errorf("create failed execution result: %w", err))
 		}
@@ -252,7 +264,7 @@ func (s *ExecutionService) invokeExecutor(ctx context.Context, approved domain.A
 	return execution, nil
 }
 
-func (s *ExecutionService) newFailedExecution(proposal domain.RollbackProposal, record domain.IdempotencyRecord, startedAt time.Time, cause error) (domain.RollbackExecution, error) {
+func (s *ExecutionService) newFailedExecution(proposal domain.RollbackProposal, record domain.IdempotencyRecord, startedAt time.Time) (domain.RollbackExecution, error) {
 	return domain.NewRollbackExecution(
 		domain.ExecutionID(s.ids.NewID("execution")),
 		proposal.IncidentID(),

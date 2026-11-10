@@ -54,52 +54,67 @@ func (p EligibilityPolicy) Validate() error {
 	return nil
 }
 
-func (p EligibilityPolicy) Evaluate(candidate EligibilityCandidate) (PolicyDecision, error) {
-	if err := p.Validate(); err != nil {
-		return PolicyDecision{}, err
-	}
-	belongs := true
+// referencedEvidence is what a conclusion's evidence references resolve to:
+// the last referenced deployment and metric evidence, and whether every
+// reference points at evidence that exists and belongs to the incident.
+type referencedEvidence struct {
+	deployment *DeploymentEvidence
+	metric     *MetricEvidence
+	belongs    bool
+}
+
+func resolveReferencedEvidence(candidate EligibilityCandidate) referencedEvidence {
+	result := referencedEvidence{belongs: true}
 	referenced := map[EvidenceID]bool{}
 	for _, id := range candidate.Conclusion.EvidenceIDs() {
 		referenced[id] = true
 	}
-	var deployment *DeploymentEvidence
-	var metric *MetricEvidence
-	deploymentReferenced := false
-	metricReferenced := false
 	for _, evidence := range candidate.Evidence {
 		isReferenced := referenced[evidence.ID()]
 		if d, ok := evidence.Deployment(); ok && isReferenced {
 			copyValue := d
-			deployment = &copyValue
-			deploymentReferenced = true
+			result.deployment = &copyValue
 		}
 		if m, ok := evidence.Metric(); ok && isReferenced {
 			copyValue := m
-			metric = &copyValue
-			metricReferenced = true
+			result.metric = &copyValue
 		}
 		if isReferenced && evidence.IncidentID() != candidate.Incident.ID() {
-			belongs = false
+			result.belongs = false
 		}
 	}
 	for id := range referenced {
-		found := false
-		for _, e := range candidate.Evidence {
-			if e.ID() == id && e.IncidentID() == candidate.Incident.ID() {
-				found = true
-				break
-			}
-		}
-		belongs = belongs && found
+		result.belongs = result.belongs && evidenceBelongs(candidate, id)
 	}
-	targetAllowed := false
+	return result
+}
+
+func evidenceBelongs(candidate EligibilityCandidate, id EvidenceID) bool {
+	for _, e := range candidate.Evidence {
+		if e.ID() == id && e.IncidentID() == candidate.Incident.ID() {
+			return true
+		}
+	}
+	return false
+}
+
+func (p EligibilityPolicy) allowsTarget(target DeploymentTarget) bool {
 	for _, allowed := range p.allowedTargets {
-		if candidate.Incident.Target().Equal(allowed) {
-			targetAllowed = true
-			break
+		if target.Equal(allowed) {
+			return true
 		}
 	}
+	return false
+}
+
+func (p EligibilityPolicy) Evaluate(candidate EligibilityCandidate) (PolicyDecision, error) {
+	if err := p.Validate(); err != nil {
+		return PolicyDecision{}, err
+	}
+	resolved := resolveReferencedEvidence(candidate)
+	belongs, deployment, metric := resolved.belongs, resolved.deployment, resolved.metric
+	deploymentReferenced, metricReferenced := deployment != nil, metric != nil
+	targetAllowed := p.allowsTarget(candidate.Incident.Target())
 	// Rollout health is deliberately not a rule. A build that serves errors
 	// but passes readiness completes its rollout, so requiring an unhealthy
 	// rollout made exactly that regression ineligible. Eligibility rests on

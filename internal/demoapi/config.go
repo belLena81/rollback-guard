@@ -107,30 +107,47 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 	}
 	cfg.WorkLatency = latency
 
-	if cfg.Mode == ModeErrorStorm {
-		rate, parseErr := strconv.ParseFloat(get("DEMO_ERROR_RATE", strconv.FormatFloat(defaultErrorStormRate, 'f', -1, 64)), 64)
-		if parseErr != nil || math.IsNaN(rate) || rate <= 0 || rate > 1 {
-			return Config{}, errors.New("DEMO_ERROR_RATE must be greater than 0 and at most 1")
-		}
-		cfg.ErrorRate = rate
-	} else if hasErrorRate {
-		return Config{}, errors.New("DEMO_ERROR_RATE is only valid with DEMO_MODE=error-storm")
+	if cfg.ErrorRate, err = loadErrorRate(cfg.Mode, get, hasErrorRate); err != nil {
+		return Config{}, err
 	}
-
-	if cfg.Mode == ModeCrashLoop {
-		crashAfter, parseErr := time.ParseDuration(get("DEMO_CRASH_AFTER", defaultCrashAfter.String()))
-		if parseErr != nil || crashAfter <= 0 || crashAfter > maxCrashAfter {
-			return Config{}, fmt.Errorf("DEMO_CRASH_AFTER must be a positive duration no greater than %s", maxCrashAfter)
-		}
-		cfg.CrashAfter = crashAfter
-	} else if hasCrashAfter {
-		return Config{}, errors.New("DEMO_CRASH_AFTER is only valid with DEMO_MODE=crashloop")
+	if cfg.CrashAfter, err = loadCrashAfter(cfg.Mode, get, hasCrashAfter); err != nil {
+		return Config{}, err
 	}
 
 	if err := cfg.Target.validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// loadErrorRate reads DEMO_ERROR_RATE, which only error-storm mode accepts.
+func loadErrorRate(mode Mode, get func(name, fallback string) string, present bool) (float64, error) {
+	if mode != ModeErrorStorm {
+		if present {
+			return 0, errors.New("DEMO_ERROR_RATE is only valid with DEMO_MODE=error-storm")
+		}
+		return 0, nil
+	}
+	rate, err := strconv.ParseFloat(get("DEMO_ERROR_RATE", strconv.FormatFloat(defaultErrorStormRate, 'f', -1, 64)), 64)
+	if err != nil || math.IsNaN(rate) || rate <= 0 || rate > 1 {
+		return 0, errors.New("DEMO_ERROR_RATE must be greater than 0 and at most 1")
+	}
+	return rate, nil
+}
+
+// loadCrashAfter reads DEMO_CRASH_AFTER, which only crashloop mode accepts.
+func loadCrashAfter(mode Mode, get func(name, fallback string) string, present bool) (time.Duration, error) {
+	if mode != ModeCrashLoop {
+		if present {
+			return 0, errors.New("DEMO_CRASH_AFTER is only valid with DEMO_MODE=crashloop")
+		}
+		return 0, nil
+	}
+	crashAfter, err := time.ParseDuration(get("DEMO_CRASH_AFTER", defaultCrashAfter.String()))
+	if err != nil || crashAfter <= 0 || crashAfter > maxCrashAfter {
+		return 0, fmt.Errorf("DEMO_CRASH_AFTER must be a positive duration no greater than %s", maxCrashAfter)
+	}
+	return crashAfter, nil
 }
 
 func (m Mode) validate() error {

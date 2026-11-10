@@ -353,15 +353,7 @@ func unmarshalEventDetail(kind domain.EventKind, data []byte) (domain.EventDetai
 		}
 		return domain.IncidentCreatedDetail{Target: target}, nil
 	case domain.EventStatusChanged:
-		from, err := parseStatus(payload.From)
-		if err != nil {
-			return nil, err
-		}
-		to, err := parseStatus(payload.To)
-		if err != nil {
-			return nil, err
-		}
-		return domain.StatusChangedDetail{From: from, To: to}, nil
+		return statusChangedDetail(payload)
 	case domain.EventEvidenceCollected:
 		evidenceKind, err := parseEvidenceKind(payload.Kind)
 		if err != nil {
@@ -379,15 +371,7 @@ func unmarshalEventDetail(kind domain.EventKind, data []byte) (domain.EventDetai
 	case domain.EventProposalCreated:
 		return domain.ProposalCreatedDetail{ActionID: domain.ActionID(payload.ActionID), ProposalHash: domain.ProposalHash(payload.ProposalHash)}, nil
 	case domain.EventApprovalRecorded:
-		actorKind, err := parseActorKind(payload.ActorKind)
-		if err != nil {
-			return nil, err
-		}
-		actor, err := domain.NewActor(domain.ActorID(payload.ActorID), actorKind)
-		if err != nil {
-			return nil, err
-		}
-		return domain.ApprovalRecordedDetail{ApprovalID: domain.ApprovalID(payload.ApprovalID), Actor: actor}, nil
+		return approvalRecordedDetail(payload)
 	case domain.EventRejectionRecorded:
 		return domain.RejectionRecordedDetail{ApprovalID: domain.ApprovalID(payload.ApprovalID), Reason: payload.Reason}, nil
 	case domain.EventExecutionCompleted:
@@ -403,6 +387,30 @@ func unmarshalEventDetail(kind domain.EventKind, data []byte) (domain.EventDetai
 	default:
 		return nil, fmt.Errorf("unknown event kind")
 	}
+}
+
+func statusChangedDetail(payload eventDetailPayload) (domain.EventDetail, error) {
+	from, err := parseStatus(payload.From)
+	if err != nil {
+		return nil, err
+	}
+	to, err := parseStatus(payload.To)
+	if err != nil {
+		return nil, err
+	}
+	return domain.StatusChangedDetail{From: from, To: to}, nil
+}
+
+func approvalRecordedDetail(payload eventDetailPayload) (domain.EventDetail, error) {
+	actorKind, err := parseActorKind(payload.ActorKind)
+	if err != nil {
+		return nil, err
+	}
+	actor, err := domain.NewActor(domain.ActorID(payload.ActorID), actorKind)
+	if err != nil {
+		return nil, err
+	}
+	return domain.ApprovalRecordedDetail{ApprovalID: domain.ApprovalID(payload.ApprovalID), Actor: actor}, nil
 }
 
 func eventKindText(kind domain.EventKind) string {

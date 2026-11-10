@@ -91,68 +91,16 @@ func (g *Gateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, pr
 	if task.Status.State.Terminal() {
 		return resultFromTask(task)
 	}
-	var result *ports.InvestigationResult
+	watch := &taskWatch{gateway: g, ctx: ctx, ref: ref, progress: progress}
 	for event, eventErr := range g.client.SubscribeToTask(extensionContext(ctx), &a2a.SubscribeToTaskRequest{ID: a2a.TaskID(ref.TaskID)}) {
 		if eventErr != nil {
-			latest, latestErr := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
-			if latestErr == nil && latest.Status.State.Terminal() {
-				return resultFromTask(latest)
-			}
-			return ports.InvestigationResult{}, fmt.Errorf("watch investigation task: %w", eventErr)
+			return g.resultAfterStreamError(ctx, ref, eventErr)
 		}
-		switch value := event.(type) {
-		case *a2a.Task:
-			parsed, parseErr := resultFromArtifacts(value.Artifacts)
-			if parseErr == nil {
-				result = &parsed
+		if final, err := watch.observe(event); final != nil || err != nil {
+			if err != nil {
+				return ports.InvestigationResult{}, err
 			}
-			if value.Status.State == a2a.TaskStateFailed || value.Status.State == a2a.TaskStateRejected {
-				return ports.InvestigationResult{}, fmt.Errorf("investigation task failed")
-			}
-			if value.Status.State == a2a.TaskStateCanceled {
-				return ports.InvestigationResult{}, context.Canceled
-			}
-		case *a2a.TaskStatusUpdateEvent:
-			if value.Status.State == a2a.TaskStateWorking && value.Status.Message != nil {
-				stage, parseErr := stageFromParts(value.Status.Message.Parts)
-				if parseErr != nil {
-					return ports.InvestigationResult{}, parseErr
-				}
-				if progress != nil {
-					if err := progress(stage); err != nil {
-						return ports.InvestigationResult{}, err
-					}
-				}
-			}
-			if value.Status.State == a2a.TaskStateFailed || value.Status.State == a2a.TaskStateRejected {
-				return ports.InvestigationResult{}, fmt.Errorf("investigation task failed")
-			}
-			if value.Status.State == a2a.TaskStateCanceled {
-				return ports.InvestigationResult{}, context.Canceled
-			}
-			if value.Status.State == a2a.TaskStateCompleted {
-				if result == nil {
-					latest, err := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
-					if err != nil {
-						return ports.InvestigationResult{}, err
-					}
-					return resultFromTask(latest)
-				}
-				return *result, nil
-			}
-		case *a2a.TaskArtifactUpdateEvent:
-			if value.Artifact == nil || value.Artifact.Name != ResultArtifactName {
-				return ports.InvestigationResult{}, fmt.Errorf("unexpected investigation artifact")
-			}
-			parsed, parseErr := resultFromParts(value.Artifact.Parts)
-			if parseErr != nil {
-				return ports.InvestigationResult{}, parseErr
-			}
-			result = &parsed
-		case *a2a.Message:
-			return ports.InvestigationResult{}, fmt.Errorf("investigator returned a message instead of task events")
-		default:
-			return ports.InvestigationResult{}, fmt.Errorf("investigator returned an unknown event")
+			return *final, nil
 		}
 	}
 	latest, err := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
@@ -160,6 +108,107 @@ func (g *Gateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, pr
 		return ports.InvestigationResult{}, fmt.Errorf("investigation event stream ended: %w", err)
 	}
 	return resultFromTask(latest)
+}
+
+// resultAfterStreamError prefers the task's terminal state over a broken
+// event stream: the task may have finished while the stream failed.
+func (g *Gateway) resultAfterStreamError(ctx context.Context, ref domain.InvestigationTaskRef, streamErr error) (ports.InvestigationResult, error) {
+	latest, latestErr := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
+	if latestErr == nil && latest.Status.State.Terminal() {
+		return resultFromTask(latest)
+	}
+	return ports.InvestigationResult{}, fmt.Errorf("watch investigation task: %w", streamErr)
+}
+
+// taskWatch folds the events of one task subscription into a result.
+type taskWatch struct {
+	gateway  *Gateway
+	ctx      context.Context
+	ref      domain.InvestigationTaskRef
+	progress func(domain.InvestigationStage) error
+	result   *ports.InvestigationResult
+}
+
+// observe handles one event. It returns the final result, or an error, once
+// the watch is over; it returns neither while the task is still running.
+func (w *taskWatch) observe(event a2a.Event) (*ports.InvestigationResult, error) {
+	switch value := event.(type) {
+	case *a2a.Task:
+		if parsed, parseErr := resultFromArtifacts(value.Artifacts); parseErr == nil {
+			w.result = &parsed
+		}
+		return nil, failureOfState(value.Status.State)
+	case *a2a.TaskStatusUpdateEvent:
+		return w.observeStatus(value)
+	case *a2a.TaskArtifactUpdateEvent:
+		if value.Artifact == nil || value.Artifact.Name != ResultArtifactName {
+			return nil, fmt.Errorf("unexpected investigation artifact")
+		}
+		parsed, err := resultFromParts(value.Artifact.Parts)
+		if err != nil {
+			return nil, err
+		}
+		w.result = &parsed
+		return nil, nil
+	case *a2a.Message:
+		return nil, fmt.Errorf("investigator returned a message instead of task events")
+	default:
+		return nil, fmt.Errorf("investigator returned an unknown event")
+	}
+}
+
+func (w *taskWatch) observeStatus(update *a2a.TaskStatusUpdateEvent) (*ports.InvestigationResult, error) {
+	state := update.Status.State
+	if state == a2a.TaskStateWorking && update.Status.Message != nil {
+		if err := w.reportProgress(update.Status.Message.Parts); err != nil {
+			return nil, err
+		}
+	}
+	if err := failureOfState(state); err != nil {
+		return nil, err
+	}
+	if state != a2a.TaskStateCompleted {
+		return nil, nil
+	}
+	if w.result != nil {
+		return w.result, nil
+	}
+	latest, err := w.gateway.client.GetTask(extensionContext(w.ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(w.ref.TaskID)})
+	if err != nil {
+		return nil, err
+	}
+	result, err := resultFromTask(latest)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (w *taskWatch) reportProgress(parts a2a.ContentParts) error {
+	stage, err := stageFromParts(parts)
+	if err != nil {
+		return err
+	}
+	if w.progress == nil {
+		return nil
+	}
+	return w.progress(stage)
+}
+
+// failureOfState is the error for a task that failed or was canceled, and nil
+// for every other state.
+func failureOfState(state a2a.TaskState) error {
+	switch state {
+	case a2a.TaskStateFailed, a2a.TaskStateRejected:
+		return fmt.Errorf("investigation task failed")
+	case a2a.TaskStateCanceled:
+		return context.Canceled
+	case a2a.TaskStateUnspecified, a2a.TaskStateSubmitted, a2a.TaskStateWorking, a2a.TaskStateCompleted,
+		a2a.TaskStateAuthRequired, a2a.TaskStateInputRequired:
+		return nil
+	default:
+		return nil
+	}
 }
 
 func (g *Gateway) Get(ctx context.Context, ref domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
