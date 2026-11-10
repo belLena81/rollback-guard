@@ -2,67 +2,14 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 	"net"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
 )
-
-const (
-	defaultAllowedTargets          = "local/rollback-demo/demo-api/demo-api"
-	investigationEvidenceCallCount = 2
-	minimumRuleFallbackBudget      = time.Second
-)
-
-// TelemetryConfig is shared by every service.
-type TelemetryConfig struct {
-	ServiceName string
-	// OTLPEndpoint is the OTLP/HTTP collector base URL; empty disables span
-	// export (tracing stays on in-process for log correlation).
-	OTLPEndpoint    string
-	SampleRatio     float64
-	ShutdownTimeout time.Duration
-	LogLevel        slog.Level
-}
-
-func telemetryEnv(defaultServiceName string) (TelemetryConfig, error) {
-	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
-	if endpoint != "" {
-		parsed, err := url.Parse(endpoint)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return TelemetryConfig{}, fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT must be an http(s) URL without credentials, query, or fragment")
-		}
-	}
-	ratio := 1.0
-	if value := strings.TrimSpace(os.Getenv("OTEL_TRACES_SAMPLE_RATIO")); value != "" {
-		parsed, err := strconv.ParseFloat(value, 64)
-		if err != nil || parsed < 0 || parsed > 1 {
-			return TelemetryConfig{}, fmt.Errorf("OTEL_TRACES_SAMPLE_RATIO must be between 0 and 1")
-		}
-		ratio = parsed
-	}
-	shutdownTimeout, err := durationEnv("TELEMETRY_SHUTDOWN_TIMEOUT", 5*time.Second)
-	if err != nil || shutdownTimeout > 30*time.Second {
-		return TelemetryConfig{}, fmt.Errorf("TELEMETRY_SHUTDOWN_TIMEOUT must be positive and no greater than 30s")
-	}
-	levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
-	level, ok := levels[strings.ToLower(stringEnv("LOG_LEVEL", "info"))]
-	if !ok {
-		return TelemetryConfig{}, fmt.Errorf("LOG_LEVEL must be debug, info, warn, or error")
-	}
-	return TelemetryConfig{
-		ServiceName:     stringEnv("OTEL_SERVICE_NAME", defaultServiceName),
-		OTLPEndpoint:    endpoint,
-		SampleRatio:     ratio,
-		ShutdownTimeout: shutdownTimeout,
-		LogLevel:        level,
-	}, nil
-}
 
 type LLMProvider string
 
@@ -89,6 +36,7 @@ type Config struct {
 	MCPWatchTimeout       time.Duration
 	MetricsWindow         time.Duration
 	InvestigatorURL       string
+	A2AConnectTimeout     time.Duration
 	A2ATaskTimeout        time.Duration
 	A2ACancelTimeout      time.Duration
 	A2APollInterval       time.Duration
@@ -146,72 +94,33 @@ type ObservabilityMCPConfig struct {
 	Telemetry      TelemetryConfig
 }
 
+// Load reads the orchestrator configuration.
 func Load() (Config, error) {
-	proposalTTL, err := durationEnv("PROPOSAL_TTL", 15*time.Minute)
+	workflow, err := loadWorkflow()
 	if err != nil {
 		return Config{}, err
 	}
-	approvalTTL, err := durationEnv("APPROVAL_TTL", 10*time.Minute)
+	db, err := loadDB("")
 	if err != nil {
 		return Config{}, err
 	}
-	cleanupTimeout, err := durationEnv("CLEANUP_TIMEOUT", 5*time.Second)
+	targets, err := loadTargets()
 	if err != nil {
 		return Config{}, err
 	}
-	dbPingTimeout, err := durationEnv("DB_PING_TIMEOUT", 2*time.Second)
+	mcp, err := loadMCPClient()
 	if err != nil {
 		return Config{}, err
 	}
-	ruleWindow, err := durationEnv("RULE_CORRELATION_WINDOW", 10*time.Minute)
+	mcpWatchTimeout, err := boundedDurationEnv("MCP_WATCH_TIMEOUT", defaultMCPWatchTimeout, domain.MinRolloutWatch, domain.MaxRolloutWatch)
 	if err != nil {
 		return Config{}, err
 	}
-	confidence, err := floatEnv("RULE_MIN_CONFIDENCE", 0.8)
+	metricsWindow, err := loadMetricsWindow()
 	if err != nil {
 		return Config{}, err
 	}
-	maxConns, err := intEnv("DB_MAX_CONNS", 4)
-	if err != nil {
-		return Config{}, err
-	}
-	targets, err := targetsEnv("ALLOWED_TARGETS", defaultAllowedTargets)
-	if err != nil {
-		return Config{}, err
-	}
-	mcpConnectTimeout, err := durationEnv("MCP_CONNECT_TIMEOUT", 5*time.Second)
-	if err != nil || mcpConnectTimeout > 30*time.Second {
-		return Config{}, fmt.Errorf("MCP_CONNECT_TIMEOUT must be positive and no greater than 30s")
-	}
-	mcpCallTimeout, err := durationEnv("MCP_CALL_TIMEOUT", 10*time.Second)
-	if err != nil || mcpCallTimeout > 30*time.Second {
-		return Config{}, fmt.Errorf("MCP_CALL_TIMEOUT must be positive and no greater than 30s")
-	}
-	mcpWatchTimeout, err := durationEnv("MCP_WATCH_TIMEOUT", 90*time.Second)
-	if err != nil || mcpWatchTimeout < time.Second || mcpWatchTimeout > 2*time.Minute {
-		return Config{}, fmt.Errorf("MCP_WATCH_TIMEOUT must be between 1s and 2m")
-	}
-	metricsWindow, err := durationEnv("METRICS_WINDOW", 5*time.Minute)
-	if err != nil || metricsWindow < 30*time.Second || metricsWindow > time.Hour {
-		return Config{}, fmt.Errorf("METRICS_WINDOW must be between 30s and 1h")
-	}
-	a2aTaskTimeout, err := durationEnv("A2A_TASK_TIMEOUT", 45*time.Second)
-	if err != nil || a2aTaskTimeout > 2*time.Minute {
-		return Config{}, fmt.Errorf("A2A_TASK_TIMEOUT must be positive and no greater than 2m")
-	}
-	a2aCancelTimeout, err := durationEnv("A2A_CANCEL_TIMEOUT", 5*time.Second)
-	if err != nil || a2aCancelTimeout > 30*time.Second {
-		return Config{}, fmt.Errorf("A2A_CANCEL_TIMEOUT must be positive and no greater than 30s")
-	}
-	a2aPollInterval, err := durationEnv("A2A_POLL_INTERVAL", 250*time.Millisecond)
-	if err != nil {
-		return Config{}, err
-	}
-	a2aLeaseTTL, err := durationEnv("A2A_LEASE_TTL", a2aTaskTimeout+a2aCancelTimeout)
-	if err != nil || a2aLeaseTTL < a2aTaskTimeout+a2aCancelTimeout {
-		return Config{}, fmt.Errorf("A2A_LEASE_TTL must be at least A2A_TASK_TIMEOUT plus A2A_CANCEL_TIMEOUT")
-	}
-	a2aMaxAttempts, err := intEnv("A2A_MAX_ATTEMPTS", 3)
+	a2a, err := loadA2AClient(mcp.connectTimeout)
 	if err != nil {
 		return Config{}, err
 	}
@@ -219,71 +128,57 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg := Config{
-		HTTPAddr:              stringEnv("HTTP_ADDR", ":8080"),
-		DatabaseURL:           os.Getenv("DATABASE_URL"),
-		DBMaxConns:            int32(maxConns),
-		DBPingTimeout:         dbPingTimeout,
-		ProposalTTL:           proposalTTL,
-		ApprovalTTL:           approvalTTL,
-		CleanupTimeout:        cleanupTimeout,
-		SystemActorID:         domain.ActorID(stringEnv("SYSTEM_ACTOR_ID", "rollback-guardian")),
-		LocalActorID:          domain.ActorID(stringEnv("LOCAL_ACTOR_ID", "local-admin")),
-		RuleMinimumConfidence: confidence,
-		RuleCorrelationWindow: ruleWindow,
+	return Config{
+		HTTPAddr:              stringEnv("HTTP_ADDR", DefaultOrchestratorAddr),
+		DatabaseURL:           db.url,
+		DBMaxConns:            db.maxConns,
+		DBPingTimeout:         db.pingTimeout,
+		ProposalTTL:           workflow.proposalTTL,
+		ApprovalTTL:           workflow.approvalTTL,
+		CleanupTimeout:        workflow.cleanupTimeout,
+		SystemActorID:         domain.ActorID(stringEnv("SYSTEM_ACTOR_ID", defaultSystemActorID)),
+		LocalActorID:          domain.ActorID(stringEnv("LOCAL_ACTOR_ID", defaultLocalActorID)),
+		RuleMinimumConfidence: workflow.ruleMinimumConfidence,
+		RuleCorrelationWindow: workflow.ruleCorrelationWindow,
 		AllowedTargets:        targets,
-		KubernetesReadMCPURL:  stringEnv("KUBERNETES_READ_MCP_URL", "http://127.0.0.1:8091/mcp"),
-		KubernetesWriteMCPURL: stringEnv("KUBERNETES_ROLLBACK_MCP_URL", "http://127.0.0.1:8092/mcp"),
-		ObservabilityMCPURL:   stringEnv("OBSERVABILITY_MCP_URL", "http://127.0.0.1:8093/mcp"),
-		MCPConnectTimeout:     mcpConnectTimeout,
-		MCPCallTimeout:        mcpCallTimeout,
+		KubernetesReadMCPURL:  mcp.kubernetesReadURL,
+		KubernetesWriteMCPURL: stringEnv("KUBERNETES_ROLLBACK_MCP_URL", defaultKubernetesRollbackMCPURL),
+		ObservabilityMCPURL:   mcp.observabilityURL,
+		MCPConnectTimeout:     mcp.connectTimeout,
+		MCPCallTimeout:        mcp.callTimeout,
 		MCPWatchTimeout:       mcpWatchTimeout,
 		MetricsWindow:         metricsWindow,
-		InvestigatorURL:       stringEnv("INVESTIGATOR_URL", "http://127.0.0.1:8094"),
-		A2ATaskTimeout:        a2aTaskTimeout,
-		A2ACancelTimeout:      a2aCancelTimeout,
-		A2APollInterval:       a2aPollInterval,
-		A2ALeaseTTL:           a2aLeaseTTL,
-		A2AWorkerID:           stringEnv("A2A_WORKER_ID", "orchestrator-1"),
-		A2AMaxAttempts:        a2aMaxAttempts,
+		InvestigatorURL:       stringEnv("INVESTIGATOR_URL", defaultInvestigatorURL),
+		A2AConnectTimeout:     a2a.connectTimeout,
+		A2ATaskTimeout:        a2a.taskTimeout,
+		A2ACancelTimeout:      a2a.cancelTimeout,
+		A2APollInterval:       a2a.pollInterval,
+		A2ALeaseTTL:           a2a.leaseTTL,
+		A2AWorkerID:           stringEnv("A2A_WORKER_ID", defaultA2AWorkerID),
+		A2AMaxAttempts:        a2a.maxAttempts,
 		Telemetry:             telemetry,
-	}
-	if strings.TrimSpace(cfg.DatabaseURL) == "" {
-		return Config{}, fmt.Errorf("DATABASE_URL is required")
-	}
-	return cfg, nil
+	}, nil
 }
 
+// LoadInvestigator reads the investigator configuration.
 func LoadInvestigator() (InvestigatorConfig, error) {
-	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if databaseURL == "" {
-		return InvestigatorConfig{}, fmt.Errorf("DATABASE_URL is required")
-	}
-	maxConns, err := intEnv("DB_MAX_CONNS", 4)
+	db, err := loadDB("")
 	if err != nil {
 		return InvestigatorConfig{}, err
 	}
-	dbPingTimeout, err := durationEnv("DB_PING_TIMEOUT", 2*time.Second)
+	mcp, err := loadMCPClient()
 	if err != nil {
 		return InvestigatorConfig{}, err
 	}
-	connectTimeout, err := durationEnv("MCP_CONNECT_TIMEOUT", 5*time.Second)
-	if err != nil || connectTimeout > 30*time.Second {
-		return InvestigatorConfig{}, fmt.Errorf("MCP_CONNECT_TIMEOUT must be positive and no greater than 30s")
+	taskTimeout, err := loadA2ATaskTimeout()
+	if err != nil {
+		return InvestigatorConfig{}, err
 	}
-	callTimeout, err := durationEnv("MCP_CALL_TIMEOUT", 10*time.Second)
-	if err != nil || callTimeout > 30*time.Second {
-		return InvestigatorConfig{}, fmt.Errorf("MCP_CALL_TIMEOUT must be positive and no greater than 30s")
+	metricsWindow, err := loadMetricsWindow()
+	if err != nil {
+		return InvestigatorConfig{}, err
 	}
-	taskTimeout, err := durationEnv("A2A_TASK_TIMEOUT", 45*time.Second)
-	if err != nil || taskTimeout > 2*time.Minute {
-		return InvestigatorConfig{}, fmt.Errorf("A2A_TASK_TIMEOUT must be positive and no greater than 2m")
-	}
-	metricsWindow, err := durationEnv("METRICS_WINDOW", 5*time.Minute)
-	if err != nil || metricsWindow < 30*time.Second || metricsWindow > time.Hour {
-		return InvestigatorConfig{}, fmt.Errorf("METRICS_WINDOW must be between 30s and 1h")
-	}
-	ruleWindow, err := durationEnv("RULE_CORRELATION_WINDOW", 10*time.Minute)
+	ruleWindow, err := durationEnv("RULE_CORRELATION_WINDOW", defaultRuleCorrelationWindow)
 	if err != nil {
 		return InvestigatorConfig{}, err
 	}
@@ -295,61 +190,313 @@ func LoadInvestigator() (InvestigatorConfig, error) {
 	if err != nil {
 		return InvestigatorConfig{}, err
 	}
-	provider := LLMProvider(stringEnv("LLM_PROVIDER", string(LLMProviderOpenAICompatible)))
-	baseURL := strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
-	model := strings.TrimSpace(os.Getenv("LLM_MODEL"))
-	apiKey := strings.TrimSpace(os.Getenv("LLM_API_KEY"))
-	llmTimeout := 15 * time.Second
-	maxOutputTokens := 512
-	if strategy != domain.StrategyRules {
-		if provider != LLMProviderOpenAICompatible {
-			return InvestigatorConfig{}, fmt.Errorf("LLM_PROVIDER must be %q", LLMProviderOpenAICompatible)
-		}
-		loopback, urlErr := validateLLMBaseURL(baseURL)
-		if urlErr != nil {
-			return InvestigatorConfig{}, urlErr
-		}
-		if model == "" {
-			return InvestigatorConfig{}, fmt.Errorf("LLM_MODEL is required for model diagnosis")
-		}
-		if !loopback && apiKey == "" {
-			return InvestigatorConfig{}, fmt.Errorf("LLM_API_KEY is required for non-loopback providers")
-		}
-		llmTimeout, err = durationEnv("LLM_TIMEOUT", llmTimeout)
-		if err != nil || llmTimeout > 30*time.Second {
-			return InvestigatorConfig{}, fmt.Errorf("LLM_TIMEOUT must be positive and no greater than 30s")
-		}
-		requiredTaskBudget := investigationEvidenceCallCount*callTimeout + llmTimeout + minimumRuleFallbackBudget
-		if taskTimeout < requiredTaskBudget {
-			return InvestigatorConfig{}, fmt.Errorf("A2A_TASK_TIMEOUT must be at least %s to cover two MCP calls, LLM reasoning, and rule fallback", requiredTaskBudget)
-		}
-		maxOutputTokens, err = intEnv("LLM_MAX_OUTPUT_TOKENS", maxOutputTokens)
-		if err != nil || maxOutputTokens < 64 || maxOutputTokens > 2048 {
-			return InvestigatorConfig{}, fmt.Errorf("LLM_MAX_OUTPUT_TOKENS must be between 64 and 2048")
-		}
+	llm, err := loadLLM(strategy, mcp.callTimeout, taskTimeout)
+	if err != nil {
+		return InvestigatorConfig{}, err
 	}
 	return InvestigatorConfig{
-		HTTPAddr:              stringEnv("HTTP_ADDR", "127.0.0.1:8094"),
-		PublicURL:             stringEnv("INVESTIGATOR_PUBLIC_URL", "http://127.0.0.1:8094"),
-		DatabaseURL:           databaseURL,
-		DBMaxConns:            int32(maxConns),
-		DBPingTimeout:         dbPingTimeout,
-		KubernetesReadMCPURL:  stringEnv("KUBERNETES_READ_MCP_URL", "http://127.0.0.1:8091/mcp"),
-		ObservabilityMCPURL:   stringEnv("OBSERVABILITY_MCP_URL", "http://127.0.0.1:8093/mcp"),
-		MCPConnectTimeout:     connectTimeout,
-		MCPCallTimeout:        callTimeout,
+		HTTPAddr:              stringEnv("HTTP_ADDR", DefaultInvestigatorAddr),
+		PublicURL:             stringEnv("INVESTIGATOR_PUBLIC_URL", defaultInvestigatorURL),
+		DatabaseURL:           db.url,
+		DBMaxConns:            db.maxConns,
+		DBPingTimeout:         db.pingTimeout,
+		KubernetesReadMCPURL:  mcp.kubernetesReadURL,
+		ObservabilityMCPURL:   mcp.observabilityURL,
+		MCPConnectTimeout:     mcp.connectTimeout,
+		MCPCallTimeout:        mcp.callTimeout,
 		TaskTimeout:           taskTimeout,
 		MetricsWindow:         metricsWindow,
 		RuleCorrelationWindow: ruleWindow,
 		DiagnosisStrategy:     strategy,
-		LLMProvider:           provider,
-		LLMBaseURL:            baseURL,
-		LLMModel:              model,
-		LLMAPIKey:             apiKey,
-		LLMTimeout:            llmTimeout,
-		LLMMaxOutputTokens:    maxOutputTokens,
+		LLMProvider:           llm.provider,
+		LLMBaseURL:            llm.baseURL,
+		LLMModel:              llm.model,
+		LLMAPIKey:             llm.apiKey,
+		LLMTimeout:            llm.timeout,
+		LLMMaxOutputTokens:    llm.maxOutputTokens,
 		Telemetry:             telemetry,
 	}, nil
+}
+
+// LoadKubernetesMCP reads the Kubernetes MCP configuration for either mode.
+func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
+	targets, err := loadTargets()
+	if err != nil {
+		return KubernetesMCPConfig{}, err
+	}
+	requestTimeout, err := boundedDurationEnv("MCP_REQUEST_TIMEOUT", defaultMCPRequestTimeout, 0, maxMCPRequestTimeout)
+	if err != nil {
+		return KubernetesMCPConfig{}, err
+	}
+	sessionTimeout, err := durationEnv("MCP_SESSION_TIMEOUT", defaultMCPSessionTimeout)
+	if err != nil {
+		return KubernetesMCPConfig{}, err
+	}
+	mode := stringEnv("KUBERNETES_MCP_MODE", KubernetesMCPModeReadonly)
+	if mode != KubernetesMCPModeReadonly && mode != KubernetesMCPModeRollback {
+		return KubernetesMCPConfig{}, fmt.Errorf("KUBERNETES_MCP_MODE must be readonly or rollback")
+	}
+	clusterID := stringEnv("CLUSTER_ID", defaultClusterID)
+	for _, target := range targets {
+		if target.Cluster() != clusterID {
+			return KubernetesMCPConfig{}, fmt.Errorf("ALLOWED_TARGETS must use CLUSTER_ID %q", clusterID)
+		}
+	}
+	// Only rollback mode connects to PostgreSQL.
+	defaultAddr := DefaultKubernetesReadMCPAddr
+	var db dbSettings
+	if mode == KubernetesMCPModeRollback {
+		defaultAddr = DefaultKubernetesRollbackMCPAddr
+		db, err = loadDB(" in rollback mode")
+		if err != nil {
+			return KubernetesMCPConfig{}, err
+		}
+	}
+	telemetry, err := telemetryEnv("kubernetes-mcp-" + mode)
+	if err != nil {
+		return KubernetesMCPConfig{}, err
+	}
+	return KubernetesMCPConfig{
+		HTTPAddr:       stringEnv("HTTP_ADDR", defaultAddr),
+		Mode:           mode,
+		ClusterID:      clusterID,
+		Kubeconfig:     strings.TrimSpace(os.Getenv("KUBECONFIG")),
+		DatabaseURL:    db.url,
+		DBMaxConns:     db.maxConns,
+		DBPingTimeout:  db.pingTimeout,
+		AllowedTargets: targets,
+		RequestTimeout: requestTimeout,
+		SessionTimeout: sessionTimeout,
+		Telemetry:      telemetry,
+	}, nil
+}
+
+// LoadObservabilityMCP reads the observability MCP configuration.
+func LoadObservabilityMCP() (ObservabilityMCPConfig, error) {
+	targets, err := loadTargets()
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
+	requestTimeout, err := boundedDurationEnv("PROMETHEUS_TIMEOUT", defaultPrometheusTimeout, 0, MaxPrometheusTimeout)
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
+	sessionTimeout, err := durationEnv("MCP_SESSION_TIMEOUT", defaultMCPSessionTimeout)
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
+	window, err := loadMetricsWindow()
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
+	maxAge, err := boundedDurationEnv("METRICS_MAX_SAMPLE_AGE", defaultMaxSampleAge, 0, maxMaxSampleAge)
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
+	telemetry, err := telemetryEnv("observability-mcp")
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
+	return ObservabilityMCPConfig{
+		HTTPAddr:       stringEnv("HTTP_ADDR", DefaultObservabilityMCPAddr),
+		PrometheusURL:  stringEnv("PROMETHEUS_URL", defaultPrometheusURL),
+		AllowedTargets: targets,
+		RequestTimeout: requestTimeout,
+		SessionTimeout: sessionTimeout,
+		MetricsWindow:  window,
+		MaxSampleAge:   maxAge,
+		Telemetry:      telemetry,
+	}, nil
+}
+
+type dbSettings struct {
+	url         string
+	maxConns    int32
+	pingTimeout time.Duration
+}
+
+// loadDB reads the PostgreSQL settings. requiredFor is appended to the
+// "DATABASE_URL is required" error, for example " in rollback mode".
+func loadDB(requiredFor string) (dbSettings, error) {
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		return dbSettings{}, fmt.Errorf("DATABASE_URL is required%s", requiredFor)
+	}
+	maxConns, err := intEnv("DB_MAX_CONNS", defaultDBMaxConns)
+	if err != nil {
+		return dbSettings{}, err
+	}
+	pingTimeout, err := durationEnv("DB_PING_TIMEOUT", defaultDBPingTimeout)
+	if err != nil {
+		return dbSettings{}, err
+	}
+	return dbSettings{url: databaseURL, maxConns: int32(maxConns), pingTimeout: pingTimeout}, nil
+}
+
+type mcpClientSettings struct {
+	kubernetesReadURL string
+	observabilityURL  string
+	connectTimeout    time.Duration
+	callTimeout       time.Duration
+}
+
+// loadMCPClient reads the settings shared by both MCP clients (orchestrator
+// and investigator).
+func loadMCPClient() (mcpClientSettings, error) {
+	connectTimeout, err := boundedDurationEnv("MCP_CONNECT_TIMEOUT", defaultMCPConnectTimeout, 0, MaxConnectTimeout)
+	if err != nil {
+		return mcpClientSettings{}, err
+	}
+	callTimeout, err := boundedDurationEnv("MCP_CALL_TIMEOUT", defaultMCPCallTimeout, 0, MaxMCPCallTimeout)
+	if err != nil {
+		return mcpClientSettings{}, err
+	}
+	return mcpClientSettings{
+		kubernetesReadURL: stringEnv("KUBERNETES_READ_MCP_URL", defaultKubernetesReadMCPURL),
+		observabilityURL:  stringEnv("OBSERVABILITY_MCP_URL", defaultObservabilityMCPURL),
+		connectTimeout:    connectTimeout,
+		callTimeout:       callTimeout,
+	}, nil
+}
+
+func loadTargets() ([]domain.DeploymentTarget, error) {
+	return targetsEnv("ALLOWED_TARGETS", defaultAllowedTargets)
+}
+
+func loadMetricsWindow() (time.Duration, error) {
+	return boundedDurationEnv("METRICS_WINDOW", defaultMetricsWindow, domain.MinMetricsWindow, domain.MaxMetricsWindow)
+}
+
+func loadA2ATaskTimeout() (time.Duration, error) {
+	return boundedDurationEnv("A2A_TASK_TIMEOUT", defaultA2ATaskTimeout, 0, MaxA2ATaskTimeout)
+}
+
+type workflowSettings struct {
+	proposalTTL           time.Duration
+	approvalTTL           time.Duration
+	cleanupTimeout        time.Duration
+	ruleCorrelationWindow time.Duration
+	ruleMinimumConfidence float64
+}
+
+func loadWorkflow() (workflowSettings, error) {
+	proposalTTL, err := durationEnv("PROPOSAL_TTL", defaultProposalTTL)
+	if err != nil {
+		return workflowSettings{}, err
+	}
+	approvalTTL, err := durationEnv("APPROVAL_TTL", defaultApprovalTTL)
+	if err != nil {
+		return workflowSettings{}, err
+	}
+	cleanupTimeout, err := durationEnv("CLEANUP_TIMEOUT", defaultCleanupTimeout)
+	if err != nil {
+		return workflowSettings{}, err
+	}
+	ruleWindow, err := durationEnv("RULE_CORRELATION_WINDOW", defaultRuleCorrelationWindow)
+	if err != nil {
+		return workflowSettings{}, err
+	}
+	confidence, err := floatEnv("RULE_MIN_CONFIDENCE", defaultRuleMinConfidence)
+	if err != nil {
+		return workflowSettings{}, err
+	}
+	return workflowSettings{proposalTTL: proposalTTL, approvalTTL: approvalTTL, cleanupTimeout: cleanupTimeout, ruleCorrelationWindow: ruleWindow, ruleMinimumConfidence: confidence}, nil
+}
+
+type a2aClientSettings struct {
+	connectTimeout time.Duration
+	taskTimeout    time.Duration
+	cancelTimeout  time.Duration
+	pollInterval   time.Duration
+	leaseTTL       time.Duration
+	maxAttempts    int
+}
+
+// loadA2AClient reads the orchestrator's A2A settings. A2A_CONNECT_TIMEOUT
+// used to be MCP_CONNECT_TIMEOUT, so that value stays its default.
+func loadA2AClient(mcpConnectTimeout time.Duration) (a2aClientSettings, error) {
+	connectTimeout, err := boundedDurationEnv("A2A_CONNECT_TIMEOUT", mcpConnectTimeout, 0, MaxConnectTimeout)
+	if err != nil {
+		return a2aClientSettings{}, err
+	}
+	taskTimeout, err := loadA2ATaskTimeout()
+	if err != nil {
+		return a2aClientSettings{}, err
+	}
+	cancelTimeout, err := boundedDurationEnv("A2A_CANCEL_TIMEOUT", defaultA2ACancelTimeout, 0, MaxA2ACancelTimeout)
+	if err != nil {
+		return a2aClientSettings{}, err
+	}
+	pollInterval, err := durationEnv("A2A_POLL_INTERVAL", defaultA2APollInterval)
+	if err != nil {
+		return a2aClientSettings{}, err
+	}
+	// The lease has to outlive the task and its cancellation cleanup.
+	minimumLease := taskTimeout + cancelTimeout
+	leaseTTL, err := durationEnv("A2A_LEASE_TTL", minimumLease)
+	if err != nil {
+		return a2aClientSettings{}, err
+	}
+	if leaseTTL < minimumLease {
+		return a2aClientSettings{}, fmt.Errorf("A2A_LEASE_TTL must be at least A2A_TASK_TIMEOUT plus A2A_CANCEL_TIMEOUT (%s), got %s", formatDuration(minimumLease), formatDuration(leaseTTL))
+	}
+	maxAttempts, err := intEnv("A2A_MAX_ATTEMPTS", defaultA2AMaxAttempts)
+	if err != nil {
+		return a2aClientSettings{}, err
+	}
+	return a2aClientSettings{connectTimeout: connectTimeout, taskTimeout: taskTimeout, cancelTimeout: cancelTimeout, pollInterval: pollInterval, leaseTTL: leaseTTL, maxAttempts: maxAttempts}, nil
+}
+
+type llmSettings struct {
+	provider        LLMProvider
+	baseURL         string
+	model           string
+	apiKey          string
+	timeout         time.Duration
+	maxOutputTokens int
+}
+
+// loadLLM reads the model settings. They are validated only when the
+// strategy uses a model, so a rule-based investigator ignores stale or
+// invalid LLM_* values.
+func loadLLM(strategy domain.DiagnosisStrategy, mcpCallTimeout, taskTimeout time.Duration) (llmSettings, error) {
+	settings := llmSettings{
+		provider:        LLMProvider(stringEnv("LLM_PROVIDER", string(LLMProviderOpenAICompatible))),
+		baseURL:         strings.TrimSpace(os.Getenv("LLM_BASE_URL")),
+		model:           strings.TrimSpace(os.Getenv("LLM_MODEL")),
+		apiKey:          strings.TrimSpace(os.Getenv("LLM_API_KEY")),
+		timeout:         defaultLLMTimeout,
+		maxOutputTokens: defaultLLMMaxOutputTokens,
+	}
+	if strategy == domain.StrategyRules {
+		return settings, nil
+	}
+	if settings.provider != LLMProviderOpenAICompatible {
+		return llmSettings{}, fmt.Errorf("LLM_PROVIDER must be %q", LLMProviderOpenAICompatible)
+	}
+	loopback, err := validateLLMBaseURL(settings.baseURL)
+	if err != nil {
+		return llmSettings{}, err
+	}
+	if settings.model == "" {
+		return llmSettings{}, fmt.Errorf("LLM_MODEL is required for model diagnosis")
+	}
+	if !loopback && settings.apiKey == "" {
+		return llmSettings{}, fmt.Errorf("LLM_API_KEY is required for non-loopback providers")
+	}
+	settings.timeout, err = boundedDurationEnv("LLM_TIMEOUT", defaultLLMTimeout, 0, maxLLMTimeout)
+	if err != nil {
+		return llmSettings{}, err
+	}
+	requiredTaskBudget := investigationEvidenceCallCount*mcpCallTimeout + settings.timeout + minimumRuleFallbackBudget
+	if taskTimeout < requiredTaskBudget {
+		return llmSettings{}, fmt.Errorf("A2A_TASK_TIMEOUT must be at least %s to cover two MCP calls, LLM reasoning, and rule fallback", requiredTaskBudget)
+	}
+	settings.maxOutputTokens, err = boundedIntEnv("LLM_MAX_OUTPUT_TOKENS", defaultLLMMaxOutputTokens, minLLMMaxOutputTokens, maxLLMMaxOutputTokens)
+	if err != nil {
+		return llmSettings{}, err
+	}
+	return settings, nil
 }
 
 func diagnosisStrategyEnv() (domain.DiagnosisStrategy, error) {
@@ -371,6 +518,8 @@ func validateLLMBaseURL(value string) (bool, error) {
 	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		// The value may carry credentials, so neither it nor the parse
+		// error is reported.
 		return false, fmt.Errorf("LLM_BASE_URL must be an absolute URL without credentials, query, or fragment")
 	}
 	host := parsed.Hostname()
@@ -382,143 +531,4 @@ func validateLLMBaseURL(value string) (bool, error) {
 		return false, fmt.Errorf("LLM_BASE_URL must use HTTPS unless it targets loopback")
 	}
 	return loopback, nil
-}
-
-func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
-	targets, err := targetsEnv("ALLOWED_TARGETS", defaultAllowedTargets)
-	if err != nil {
-		return KubernetesMCPConfig{}, err
-	}
-	requestTimeout, err := durationEnv("MCP_REQUEST_TIMEOUT", 2*time.Minute)
-	if err != nil || requestTimeout > 2*time.Minute {
-		return KubernetesMCPConfig{}, fmt.Errorf("MCP_REQUEST_TIMEOUT must be positive and no greater than 2m")
-	}
-	sessionTimeout, err := durationEnv("MCP_SESSION_TIMEOUT", 5*time.Minute)
-	if err != nil {
-		return KubernetesMCPConfig{}, err
-	}
-	mode := stringEnv("KUBERNETES_MCP_MODE", "readonly")
-	if mode != "readonly" && mode != "rollback" {
-		return KubernetesMCPConfig{}, fmt.Errorf("KUBERNETES_MCP_MODE must be readonly or rollback")
-	}
-	clusterID := stringEnv("CLUSTER_ID", "local")
-	for _, target := range targets {
-		if target.Cluster() != clusterID {
-			return KubernetesMCPConfig{}, fmt.Errorf("ALLOWED_TARGETS must use CLUSTER_ID %q", clusterID)
-		}
-	}
-	defaultAddr := ":8091"
-	databaseURL := ""
-	var dbMaxConns int32
-	var dbPingTimeout time.Duration
-	if mode == "rollback" {
-		defaultAddr = ":8092"
-		databaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
-		if databaseURL == "" {
-			return KubernetesMCPConfig{}, fmt.Errorf("DATABASE_URL is required in rollback mode")
-		}
-		maxConns, maxConnsErr := intEnv("DB_MAX_CONNS", 4)
-		if maxConnsErr != nil {
-			return KubernetesMCPConfig{}, maxConnsErr
-		}
-		dbMaxConns = int32(maxConns)
-		dbPingTimeout, err = durationEnv("DB_PING_TIMEOUT", 2*time.Second)
-		if err != nil {
-			return KubernetesMCPConfig{}, err
-		}
-	}
-	telemetry, err := telemetryEnv("kubernetes-mcp-" + mode)
-	if err != nil {
-		return KubernetesMCPConfig{}, err
-	}
-	return KubernetesMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", defaultAddr), Mode: mode, ClusterID: clusterID, Kubeconfig: strings.TrimSpace(os.Getenv("KUBECONFIG")), DatabaseURL: databaseURL, DBMaxConns: dbMaxConns, DBPingTimeout: dbPingTimeout, AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout, Telemetry: telemetry}, nil
-}
-
-func LoadObservabilityMCP() (ObservabilityMCPConfig, error) {
-	targets, err := targetsEnv("ALLOWED_TARGETS", defaultAllowedTargets)
-	if err != nil {
-		return ObservabilityMCPConfig{}, err
-	}
-	requestTimeout, err := durationEnv("PROMETHEUS_TIMEOUT", 5*time.Second)
-	if err != nil || requestTimeout > 30*time.Second {
-		return ObservabilityMCPConfig{}, fmt.Errorf("PROMETHEUS_TIMEOUT must be positive and no greater than 30s")
-	}
-	sessionTimeout, err := durationEnv("MCP_SESSION_TIMEOUT", 5*time.Minute)
-	if err != nil {
-		return ObservabilityMCPConfig{}, err
-	}
-	window, err := durationEnv("METRICS_WINDOW", 5*time.Minute)
-	if err != nil || window < 30*time.Second || window > time.Hour {
-		return ObservabilityMCPConfig{}, fmt.Errorf("METRICS_WINDOW must be between 30s and 1h")
-	}
-	maxAge, err := durationEnv("METRICS_MAX_SAMPLE_AGE", time.Minute)
-	if err != nil || maxAge > 15*time.Minute {
-		return ObservabilityMCPConfig{}, fmt.Errorf("METRICS_MAX_SAMPLE_AGE must be positive and no greater than 15m")
-	}
-	telemetry, err := telemetryEnv("observability-mcp")
-	if err != nil {
-		return ObservabilityMCPConfig{}, err
-	}
-	return ObservabilityMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", ":8093"), PrometheusURL: stringEnv("PROMETHEUS_URL", "http://127.0.0.1:9090"), AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout, MetricsWindow: window, MaxSampleAge: maxAge, Telemetry: telemetry}, nil
-}
-
-func stringEnv(name string, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	duration, err := time.ParseDuration(value)
-	if err != nil || duration <= 0 {
-		return 0, fmt.Errorf("%s must be a positive duration", name)
-	}
-	return duration, nil
-}
-
-func intEnv(name string, fallback int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("%s must be a positive integer", name)
-	}
-	return parsed, nil
-}
-
-func floatEnv(name string, fallback float64) (float64, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s must be a float", name)
-	}
-	return parsed, nil
-}
-
-func targetsEnv(name string, fallback string) ([]domain.DeploymentTarget, error) {
-	value := stringEnv(name, fallback)
-	parts := strings.Split(value, ",")
-	targets := make([]domain.DeploymentTarget, 0, len(parts))
-	for _, part := range parts {
-		fields := strings.Split(strings.TrimSpace(part), "/")
-		if len(fields) != 4 {
-			return nil, fmt.Errorf("%s target %q must be cluster/namespace/deployment/service", name, part)
-		}
-		target, err := domain.NewDeploymentTarget(fields[0], fields[1], fields[2], fields[3])
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", name, err)
-		}
-		targets = append(targets, target)
-	}
-	return targets, nil
 }

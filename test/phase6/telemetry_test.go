@@ -311,7 +311,7 @@ func (b *syncBuffer) String() string {
 
 func connectMCP(t *testing.T, ctx context.Context, provider *telemetry.Provider, endpoint string, server string, tools []string) protocol.Caller {
 	t.Helper()
-	client, err := protocol.Connect(ctx, endpoint, provider.HTTPClient(10*time.Second))
+	client, err := protocol.Connect(ctx, endpoint, provider.HTTPClient(10*time.Second), protocol.ClientOrchestrator)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -79,11 +79,13 @@ Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface.
 ```bash
 make test                # unit, contract, and in-process lifecycle tests
 make test-race
-make lint                # gofmt check, go vet, golangci-lint
+make lint                # gofmt check, go vet, golangci-lint (also integration- and kind-tagged files)
 make contract-test
 make phase3-integration  # integration suites need Docker (testcontainers)
 make phase4-integration
 make phase5-integration
+make postgres-integration  # Postgres adapter tests; a skipped test fails (needs ROLLBACK_GUARD_POSTGRES_TEST_DSN)
+make integration         # every integration-tagged suite
 make images              # service images and the four demo-api tags
 make kind-create
 make kind-load

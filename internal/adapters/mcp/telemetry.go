@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -140,7 +141,7 @@ func observeToolsMiddleware(server string, observer ToolObserver) mcpsdk.Middlew
 // telemetry labels.
 func RouteOf(request *http.Request) string {
 	switch request.URL.Path {
-	case "/mcp", "/health/live", "/health/ready", "/metrics":
+	case "/mcp", httpserver.LivePath, httpserver.ReadyPath, "/metrics":
 		return request.URL.Path
 	default:
 		return "unmatched"

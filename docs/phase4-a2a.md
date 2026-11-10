@@ -59,11 +59,15 @@ Poll the URL returned in the `Location` response header. `investigation.state` p
 | --- | --- | --- |
 | `INVESTIGATOR_URL` | `http://127.0.0.1:8094` | Orchestrator discovery base URL |
 | `INVESTIGATOR_PUBLIC_URL` | `http://127.0.0.1:8094` | URL advertised by the Agent Card |
-| `A2A_TASK_TIMEOUT` | `45s` | Total investigation deadline |
+| `HTTP_ADDR` | `127.0.0.1:8094` (investigator), `127.0.0.1:8080` (orchestrator) | Listen address |
+| `A2A_CONNECT_TIMEOUT` | value of `MCP_CONNECT_TIMEOUT` (`5s`) | Agent Card discovery and client setup at orchestrator startup (≤30s). It used to share `MCP_CONNECT_TIMEOUT`, which stays its default |
+| `A2A_TASK_TIMEOUT` | `45s` | Total investigation deadline (≤2m) |
 | `A2A_CANCEL_TIMEOUT` | `5s` | Remote cancellation and cleanup deadline |
 | `A2A_POLL_INTERVAL` | `250ms` | Durable coordinator polling interval |
 | `A2A_LEASE_TTL` | task plus cancellation timeout | Dispatch recovery lease |
 | `A2A_WORKER_ID` | `orchestrator-1` | Coordinator lease owner |
 | `A2A_MAX_ATTEMPTS` | `3` | Maximum ambiguous or transient submission/watch attempts |
 
-Authentication is intentionally deferred for Phase 4. Both services default to loopback endpoints and must remain network-isolated until the authentication phase adds an A2A credential mechanism.
+The Investigator deduplicates requests by idempotency key. Both intervals of that record follow `A2A_TASK_TIMEOUT`: a `working` record older than the task timeout plus 10s (5s for the terminal write, 5s of margin for clock skew) belongs to an owner that is gone and is reclaimed by the next request (55s by default; this was a fixed 2m), and a duplicate request polls the owner's record every hundredth of the task timeout, between 10ms and 100ms (100ms by default, as before). Investigator readiness is bounded by `DB_PING_TIMEOUT` (default `2s`).
+
+Authentication is intentionally deferred for Phase 4. Every service, including the MCP servers, binds loopback by default (`HTTP_ADDR`) and must remain network-isolated until the authentication phase adds an A2A credential mechanism. Set `HTTP_ADDR` explicitly only where a service has to be reachable from another network namespace, as the service image does (`deploy/docker/service.Dockerfile`).

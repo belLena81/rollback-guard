@@ -121,7 +121,7 @@ func TestMCPTelemetryOptionsKeepToolCatalogs(t *testing.T) {
 			defer server.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			client, err := protocol.Connect(ctx, server.URL+"/mcp", provider.HTTPClient(5*time.Second))
+			client, err := protocol.Connect(ctx, server.URL+"/mcp", provider.HTTPClient(5*time.Second), protocol.ClientOrchestrator)
 			if err != nil {
 				t.Fatal(err)
 			}

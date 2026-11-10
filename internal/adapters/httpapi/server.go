@@ -17,10 +17,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
-const (
-	defaultReadinessTimeout = 2 * time.Second
-	maxJSONBodyBytes        = 1 << 20
-)
+const maxJSONBodyBytes = 1 << 20
 
 type Server struct {
 	services   *application.Services
@@ -78,8 +75,9 @@ func (s *Server) Routes(ready func(context.Context) error, readyTimeout time.Dur
 	}
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/v1/", apiHandler)
-	s.handle(rootMux, "GET /health/live", live)
-	s.handle(rootMux, "GET /health/ready", readiness(ready, readyTimeout))
+	health := httpserver.NewHealth(ready, readyTimeout, s.logger)
+	s.handle(rootMux, http.MethodGet+" "+httpserver.LivePath, health.Live)
+	s.handle(rootMux, http.MethodGet+" "+httpserver.ReadyPath, health.Ready)
 	// Requests matching no pattern (404/405 from the mux) are not
 	// instrumented: a catch-all route would turn 405 responses into 404s.
 	rootMux.Handle("GET /metrics", s.instrument("/metrics", s.metrics))
@@ -113,29 +111,6 @@ func withPathCorrelation(next http.Handler) http.Handler {
 func emptyMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-}
-
-func live(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func readiness(ready func(context.Context) error, readyTimeout time.Duration) http.HandlerFunc {
-	if readyTimeout <= 0 {
-		readyTimeout = defaultReadinessTimeout
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		if ready == nil {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
-		defer cancel()
-		if err := ready(ctx); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	}
 }
 
 type createIncidentRequest struct {

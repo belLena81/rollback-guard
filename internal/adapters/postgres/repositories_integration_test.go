@@ -29,7 +29,7 @@ func TestEventAppendReportsSequenceConflictToSecondWriter(t *testing.T) {
 
 	// Both writers computed sequence 1 before either committed. The second
 	// insert blocks on the unique index until the first writer commits.
-	secondErr, sequenceAfterAppend := appendWhileFirstWriterHoldsSequence(ctx, t, pool, uow, "incident-events", now, nil)
+	sequenceAfterAppend, secondErr := appendWhileFirstWriterHoldsSequence(ctx, t, pool, uow, "incident-events", now, nil)
 
 	var conflict *domain.VersionConflictError
 	if !errors.As(secondErr, &conflict) {
@@ -58,7 +58,7 @@ func TestEventAppendSucceedsWhenFirstWriterRollsBack(t *testing.T) {
 	defer cancel()
 
 	firstFailure := errors.New("first writer failed")
-	secondErr, sequenceAfterAppend := appendWhileFirstWriterHoldsSequence(ctx, t, pool, uow, "incident-rollback", now, firstFailure)
+	sequenceAfterAppend, secondErr := appendWhileFirstWriterHoldsSequence(ctx, t, pool, uow, "incident-rollback", now, firstFailure)
 
 	if secondErr != nil {
 		t.Fatalf("second writer error = %v, want nil after the first writer rolled back", secondErr)
@@ -74,9 +74,9 @@ func TestEventAppendSucceedsWhenFirstWriterRollsBack(t *testing.T) {
 // appendWhileFirstWriterHoldsSequence appends sequence 1 in a first
 // transaction, starts a second transaction appending the same sequence, waits
 // until PostgreSQL reports that insert blocked on a lock, and then ends the
-// first transaction with firstResult. It returns the second transaction's
-// error and the next sequence the second transaction saw after its append.
-func appendWhileFirstWriterHoldsSequence(ctx context.Context, t *testing.T, observer *pgxpool.Pool, uow *UnitOfWork, incidentID domain.IncidentID, now time.Time, firstResult error) (error, uint64) {
+// first transaction with firstResult. It returns the next sequence the second
+// transaction saw after its append, and the second transaction's error.
+func appendWhileFirstWriterHoldsSequence(ctx context.Context, t *testing.T, observer *pgxpool.Pool, uow *UnitOfWork, incidentID domain.IncidentID, now time.Time, firstResult error) (uint64, error) {
 	t.Helper()
 	firstEvent := testStatusEvent(t, "event-first", incidentID, 1, now)
 	secondEvent := testStatusEvent(t, "event-second", incidentID, 1, now)
@@ -124,10 +124,10 @@ func appendWhileFirstWriterHoldsSequence(ctx context.Context, t *testing.T, obse
 	}
 	select {
 	case err := <-secondErr:
-		return err, sequenceAfterAppend
+		return sequenceAfterAppend, err
 	case <-ctx.Done():
 		t.Fatalf("second writer did not finish: %v", ctx.Err())
-		return nil, 0
+		return 0, nil
 	}
 }
 

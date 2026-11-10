@@ -90,7 +90,7 @@ func (c *Client) QueryMetric(ctx context.Context, target domain.DeploymentTarget
 	if _, ok := c.allowed[target]; !ok {
 		return MetricSample{}, ErrTargetForbidden
 	}
-	if request.Window <= 0 || request.Window > time.Hour || request.Offset < 0 || request.Offset > 24*time.Hour {
+	if request.Window <= 0 || request.Window > domain.MaxMetricsWindow || request.Offset < 0 || request.Offset > 24*time.Hour {
 		return MetricSample{}, &domain.ValidationError{Field: "metric_window", Reason: "out of range"}
 	}
 	query, unit, err := c.query(target, request)

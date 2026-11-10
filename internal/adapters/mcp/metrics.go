@@ -14,7 +14,7 @@ type MetricsAdapter struct {
 }
 
 func NewMetricsAdapter(caller Caller, window time.Duration) (*MetricsAdapter, error) {
-	if caller == nil || window < 30*time.Second || window > time.Hour {
+	if caller == nil || !domain.ValidMetricsWindow(window) {
 		return nil, fmt.Errorf("invalid metrics MCP adapter configuration")
 	}
 	return &MetricsAdapter{caller: caller, window: window}, nil

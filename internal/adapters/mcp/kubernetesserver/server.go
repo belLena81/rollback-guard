@@ -9,6 +9,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/kubernetes"
 	protocol "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/buildinfo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -34,7 +35,7 @@ func New(backend Backend, mode Mode) (*mcp.Server, error) {
 	if backend == nil || (mode != ModeReadonly && mode != ModeRollback) {
 		return nil, &domain.ValidationError{Field: "kubernetes_mcp", Reason: "invalid backend or mode"}
 	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "rollback-guardian-kubernetes-" + string(mode), Version: "v0.3.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "rollback-guardian-kubernetes-" + string(mode), Version: buildinfo.Version}, nil)
 	if mode == ModeReadonly {
 		registerReadonly(server, backend)
 	} else {
@@ -163,7 +164,7 @@ func getRolloutStatus(backend Backend) mcp.ToolHandlerFor[protocol.TargetInput, 
 
 func watchRollout(backend Backend) mcp.ToolHandlerFor[protocol.WatchRolloutInput, protocol.Response[protocol.RolloutOutput]] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, input protocol.WatchRolloutInput) (*mcp.CallToolResult, protocol.Response[protocol.RolloutOutput], error) {
-		if input.ExpectedRevision == "" || input.TimeoutSeconds < 1 || input.TimeoutSeconds > 120 {
+		if input.ExpectedRevision == "" || !protocol.ValidWatchSeconds(input.TimeoutSeconds) {
 			result, response := protocol.Failure[protocol.RolloutOutput](&domain.ValidationError{Field: "watch_rollout", Reason: "revision and timeout are invalid"})
 			return result, response, nil
 		}

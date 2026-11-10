@@ -13,6 +13,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
@@ -21,6 +22,9 @@ type ServerConfig struct {
 	TaskTimeout     time.Duration
 	MaxRequestBytes int64
 	Ready           func(context.Context) error
+	// ReadyTimeout bounds each readiness check. Zero uses the shared default
+	// (httpserver.DefaultReadyTimeout).
+	ReadyTimeout time.Duration
 	// Tracer continues the caller's trace for task execution, which may run
 	// detached from the HTTP request. Nil disables tracing.
 	Tracer ports.Tracer
@@ -65,28 +69,7 @@ func NewServerHandler(investigator ports.Investigator, store taskstore.Store, lo
 	mux := http.NewServeMux()
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 	mux.Handle("/a2a/", http.StripPrefix("/a2a", rest))
-	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
-			logger.WarnContext(context.Background(), "write liveness response", "error", err)
-		}
-	})
-	mux.HandleFunc("GET /health/ready", func(w http.ResponseWriter, r *http.Request) {
-		if config.Ready != nil {
-			readyCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-			defer cancel()
-			if err := config.Ready(readyCtx); err != nil {
-				http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
-				return
-			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
-			logger.WarnContext(r.Context(), "write readiness response", "error", err)
-		}
-	})
+	httpserver.NewHealth(config.Ready, config.ReadyTimeout, logger).Register(mux)
 	if config.Metrics != nil {
 		mux.Handle("GET /metrics", config.Metrics)
 	}
@@ -98,7 +81,7 @@ func NewServerHandler(investigator ports.Investigator, store taskstore.Store, lo
 func RouteOf(request *http.Request) string {
 	path := request.URL.Path
 	switch {
-	case path == a2asrv.WellKnownAgentCardPath, path == "/health/live", path == "/health/ready", path == "/metrics":
+	case path == a2asrv.WellKnownAgentCardPath, path == httpserver.LivePath, path == httpserver.ReadyPath, path == "/metrics":
 		return path
 	case strings.HasPrefix(path, "/a2a/"):
 		return "/a2a/*"

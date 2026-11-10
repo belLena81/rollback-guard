@@ -11,6 +11,7 @@ import (
 	protocol "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	metricsprom "github.com/belLena81/rollback-guard/internal/adapters/prometheus"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/buildinfo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -22,7 +23,7 @@ func New(backend Backend) (*mcp.Server, error) {
 	if backend == nil {
 		return nil, &domain.ValidationError{Field: "observability_mcp", Reason: "backend is required"}
 	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "rollback-guardian-observability", Version: "v0.3.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "rollback-guardian-observability", Version: buildinfo.Version}, nil)
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPointer(false), IdempotentHint: true, OpenWorldHint: boolPointer(false)}
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetHTTPErrorRate, Description: "Read a fixed-window HTTP 5xx ratio", Annotations: annotations}, metricHandler(backend, "http_error_rate"))
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolCompareErrorRateWindows, Description: "Compare current and baseline HTTP 5xx ratios", Annotations: annotations}, compareWindows(backend))
@@ -150,5 +151,5 @@ func boolPointer(value bool) *bool {
 }
 
 func validWindow(seconds int) bool {
-	return seconds >= 30 && seconds <= 3600
+	return protocol.ValidWindowSeconds(seconds)
 }

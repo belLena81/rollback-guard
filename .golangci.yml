@@ -10,13 +10,24 @@ linters:
     - gocritic
     - govet
     - ineffassign
+    - mnd
     - nilerr
     - staticcheck
     - unused
+    - usestdlibvars
   settings:
     errcheck:
       check-type-assertions: true
       check-blank: true
+  exclusions:
+    rules:
+      # mnd holds the line where R2 named every default and bound: the
+      # composition roots and internal/platform (config first). Seven literals
+      # remain elsewhere (probe percentiles, two poll intervals, one default
+      # window); widen this when R4-R6 name them.
+      - linters:
+          - mnd
+        path-except: ^(cmd|internal/platform)/
 
 formatters:
   enable:

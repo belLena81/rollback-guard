@@ -17,7 +17,7 @@ type RollbackExecutor struct {
 }
 
 func NewRollbackExecutor(rollback, readonly Caller, timeout time.Duration) (*RollbackExecutor, error) {
-	if rollback == nil || readonly == nil || timeout < time.Second || timeout > 2*time.Minute {
+	if rollback == nil || readonly == nil || !domain.ValidRolloutWatch(timeout) {
 		return nil, fmt.Errorf("invalid rollback MCP adapter configuration")
 	}
 	return &RollbackExecutor{rollback: rollback, readonly: readonly, timeout: timeout}, nil
