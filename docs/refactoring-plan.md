@@ -20,7 +20,7 @@ Source: a code-quality audit of the `phase6` branch (production code under `cmd/
 | 4 | Phase 6 resilience decorators (done) | |
 | 5 | R3 Approve-and-execute use case (done) | The E2E flow drives exactly this path; fix its shape first. |
 | 6 | Phase 6 E2E flow and CI | CI enforces the ratcheted lint config from here on. |
-| 7 | R4-R8 (R4, R5 done) | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
+| 7 | R4-R8 (R4, R5, R6 done) | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
 
 ## R1. Correctness defects (done)
 
@@ -114,7 +114,11 @@ Status: implemented on `refactor/r5-domain-vocabulary`, one commit per item. Dom
 2. **Symptom kind.** 15 bare string literals across the Prometheus adapter, MCP metrics adapter, and observability server; `domain.NewSymptom` accepts any non-empty kind, so an unsupported one fails late. Introduce a validated `domain.SymptomKind`.
 3. **Metric and annotation names.** Share the Prometheus series names between `internal/demoapi` and `internal/adapters/prometheus` (the contract test already ties them together); name the repeated `"true"`, `"pending"`, `"unknown"` literals.
 
-## R6. Adapter boilerplate
+## R6. Adapter boilerplate (done)
+
+Status: implemented on `refactor/r6-adapters`, one commit per item. `protocol.Handle[In, Out]` wraps all 14 tool bodies (the handlers moved to `handlers.go` beside each server). The four scan loops use `pgx.CollectRows`; `conclusionRepo.Save` queues the evidence-reference inserts in one `pgx.Batch` inside the existing transaction. `/metrics` was already `promhttp.HandlerFor`. The LLM adapter now deletes `OpenAI-Organization`, `OpenAI-Project` and (without a configured key) `Authorization` with `option.WithHeaderDel`; the `RoundTripper` stays only as `boundedResponseTransport`, because the SDK has no option to cap response bodies. The A2A SQL moved to `adapters/postgres/a2a_records.go` behind two consumer-owned interfaces in `adapters/a2a` (`RequestLedger`, `TaskRecords`); `PostgresTaskStore` became `DurableTaskStore`; `cmd/investigator` changed constructors only. No ADR needed. R6 added no lint ratchet entry.
+
+Known gap, unchanged by R6: the SDK reads `OPENAI_CUSTOM_HEADERS` from the environment, and arbitrary custom headers other than `Authorization` still reach the configured endpoint. Closing it needs a header allow-list in the transport.
 
 1. **MCP tool handlers.** The three-line `protocol.Failure[T]` return appears 32 times. One generic `handle[In, Out]` wrapper. Tool names and schemas must not change; `test/contract/mcp_tools_test.go` is the guard.
 2. **pgx.** `pgx.CollectRows` for the four manual scan loops; batch or `unnest` the per-row evidence-reference inserts in `conclusionRepo.Save`.
