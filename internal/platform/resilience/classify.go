@@ -69,7 +69,7 @@ func MarkTransient(err error) error {
 var permanent = []error{
 	domain.ErrValidation, domain.ErrNotFound, domain.ErrVersionConflict, domain.ErrPolicyDenied,
 	domain.ErrApprovalMismatch, domain.ErrNonHumanApproval, domain.ErrExpired, domain.ErrIdempotencyConflict,
-	domain.ErrIllegalTransition, domain.ErrInvalidEvidenceReference,
+	domain.ErrIllegalTransition, domain.ErrInvalidEvidenceReference, domain.ErrAlreadyExists,
 	ports.ErrReasonerRefused, ports.ErrReasonerInvalidResponse, ports.ErrRollbackOutcomeUnknown,
 	context.Canceled, ErrCircuitOpen,
 }

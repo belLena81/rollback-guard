@@ -27,6 +27,7 @@ func TestWriteErrorNeverEchoesWrappedErrorText(t *testing.T) {
 	}{
 		{name: "illegal transition", err: errors.Join(&domain.IllegalTransitionError{From: domain.StatusResolved, To: domain.StatusExecuting}, leak), wantStatus: http.StatusConflict, wantCode: "conflict", wantMessage: messageIllegalTransition},
 		{name: "version conflict", err: fmt.Errorf("start rollback execution: %w", errors.Join(&domain.VersionConflictError{Expected: 3, Actual: 4}, leak)), wantStatus: http.StatusConflict, wantCode: "conflict", wantMessage: messageVersionConflict},
+		{name: "duplicate insert", err: fmt.Errorf("persist: %w", errors.Join(&domain.AlreadyExistsError{Resource: "approval"}, leak)), wantStatus: http.StatusConflict, wantCode: "conflict", wantMessage: messageAlreadyExists},
 		{name: "idempotency conflict", err: errors.Join(&domain.IdempotencyConflictError{Key: "approval:approval-1"}, leak), wantStatus: http.StatusConflict, wantCode: "conflict", wantMessage: messageIdempotency},
 		{name: "approval mismatch with failed cleanup", err: errors.Join(&domain.ApprovalMismatchError{Reason: "deployment identity or current revision changed"}, leak), wantStatus: http.StatusConflict, wantCode: "conflict", wantMessage: messageApprovalMismatch},
 		{name: "expired with failed cleanup", err: errors.Join(&domain.ExpiryError{Resource: "approval"}, leak), wantStatus: http.StatusConflict, wantCode: "conflict", wantMessage: messageExpired},

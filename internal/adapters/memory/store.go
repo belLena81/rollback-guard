@@ -169,7 +169,7 @@ type incidentRepo struct{ d *data }
 
 func (r incidentRepo) Create(v domain.Incident) error {
 	if _, ok := r.d.incidents[v.ID()]; ok {
-		return &domain.ValidationError{Field: "incident.id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "incident.id"}
 	}
 	r.d.incidents[v.ID()] = v
 	return nil
@@ -203,7 +203,7 @@ func (r evidenceRepo) Add(v domain.Evidence) error {
 		return &domain.NotFoundError{Resource: "incident", ID: string(v.IncidentID())}
 	}
 	if _, exists := r.d.evidenceIDs[v.ID()]; exists {
-		return &domain.ValidationError{Field: "evidence.id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "evidence.id"}
 	}
 	r.d.evidence[v.IncidentID()] = append(r.d.evidence[v.IncidentID()], v)
 	r.d.evidenceIDs[v.ID()] = v.IncidentID()
@@ -221,10 +221,10 @@ func (r conclusionRepo) Save(v domain.InvestigationConclusion) error {
 		return &domain.NotFoundError{Resource: "incident", ID: string(v.IncidentID())}
 	}
 	if _, exists := r.d.conclusions[v.IncidentID()]; exists {
-		return &domain.ValidationError{Field: "conclusion.incident_id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "conclusion.incident_id"}
 	}
 	if _, exists := r.d.conclusionIDs[v.ID()]; exists {
-		return &domain.ValidationError{Field: "conclusion.id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "conclusion.id"}
 	}
 	for _, evidenceID := range v.EvidenceIDs() {
 		if incidentID, ok := r.d.evidenceIDs[evidenceID]; !ok || incidentID != v.IncidentID() {
@@ -250,7 +250,7 @@ func (r decisionRepo) Save(v domain.PolicyDecision) error {
 		return &domain.NotFoundError{Resource: "incident", ID: string(v.IncidentID())}
 	}
 	if _, exists := r.d.decisions[v.ID()]; exists {
-		return &domain.ValidationError{Field: "policy_decision.id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "policy_decision.id"}
 	}
 	r.d.decisions[v.ID()] = v
 	return nil
@@ -274,10 +274,10 @@ func (r proposalRepo) Save(v domain.RollbackProposal) error {
 		return &domain.NotFoundError{Resource: "policy decision", ID: string(v.PolicyDecisionID())}
 	}
 	if _, exists := r.d.proposals[v.IncidentID()]; exists {
-		return &domain.ValidationError{Field: "proposal.incident_id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "proposal.incident_id"}
 	}
 	if _, exists := r.d.actions[v.ActionID()]; exists {
-		return &domain.ValidationError{Field: "proposal.action_id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "proposal.action_id"}
 	}
 	r.d.proposals[v.IncidentID()] = v
 	r.d.actions[v.ActionID()] = v.IncidentID()
@@ -303,10 +303,10 @@ func (r approvalRepo) Save(v domain.Approval) error {
 		return &domain.ApprovalMismatchError{Reason: "approval hash does not match proposal"}
 	}
 	if _, exists := r.d.approvals[incident]; exists {
-		return &domain.ValidationError{Field: "approval.incident_id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "approval.incident_id"}
 	}
 	if _, exists := r.d.approvalIDs[v.ID()]; exists {
-		return &domain.ValidationError{Field: "approval.id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "approval.id"}
 	}
 	r.d.approvals[incident] = v
 	r.d.approvalIDs[v.ID()] = incident
@@ -327,10 +327,10 @@ func (r executionRepo) Save(v domain.RollbackExecution) error {
 		return &domain.NotFoundError{Resource: "incident", ID: string(v.IncidentID())}
 	}
 	if _, exists := r.d.executions[v.IncidentID()]; exists {
-		return &domain.ValidationError{Field: "execution.incident_id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "execution.incident_id"}
 	}
 	if _, exists := r.d.executionIDs[v.ID()]; exists {
-		return &domain.ValidationError{Field: "execution.id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "execution.id"}
 	}
 	proposal, proposalExists := r.d.proposals[v.IncidentID()]
 	record, recordExists := r.d.idempotency[v.IdempotencyKey()]
@@ -370,7 +370,7 @@ func (r verificationRepo) Save(v domain.RecoveryVerification) error {
 		return &domain.ValidationError{Field: "verification.execution_id", Reason: "belongs to another incident"}
 	}
 	if _, exists := r.d.verifications[v.IncidentID()]; exists {
-		return &domain.ValidationError{Field: "verification.incident_id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "verification.incident_id"}
 	}
 	r.d.verifications[v.IncidentID()] = v
 	return nil
@@ -434,7 +434,7 @@ func (r investigationTaskRepo) Create(v domain.InvestigationDispatch) error {
 		return &domain.NotFoundError{Resource: "incident", ID: string(v.IncidentID)}
 	}
 	if _, exists := r.d.investigations[v.IncidentID]; exists {
-		return &domain.ValidationError{Field: "investigation.incident_id", Reason: "already exists"}
+		return &domain.AlreadyExistsError{Resource: "investigation.incident_id"}
 	}
 	r.d.investigations[v.IncidentID] = v
 	return nil

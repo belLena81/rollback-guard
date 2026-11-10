@@ -159,8 +159,49 @@ func TestEventAppendStillRejectsDuplicateEventID(t *testing.T) {
 		}
 		return repositories.Events().Append(testStatusEvent(t, "event-duplicate", "incident-event-id", 2, now))
 	})
-	if !errors.Is(err, domain.ErrValidation) || errors.Is(err, domain.ErrVersionConflict) {
-		t.Fatalf("duplicate event id error = %v, want validation error that is not a version conflict", err)
+	if !errors.Is(err, domain.ErrAlreadyExists) || errors.Is(err, domain.ErrVersionConflict) {
+		t.Fatalf("duplicate event id error = %v, want already exists that is not a version conflict", err)
+	}
+}
+
+func TestDuplicateInsertsAreConflictsNotValidationErrors(t *testing.T) {
+	pool := isolatedRollbackGuardPool(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	proposal := seedTrustedRollback(t, pool, "incident-duplicate", "key-duplicate", now)
+	uow, err := NewUnitOfWork(repositoryPool(t, pool, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	symptom, err := domain.NewSymptom("errors", 0.2, 0.1, "ratio", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	incident, err := domain.NewIncident("incident-duplicate", proposal.Target(), symptom, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := domain.NewPolicyDecision("policy-incident-duplicate", incident.ID(), []domain.RuleResult{{Name: "eligible", Passed: true}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		insert func(ports.Repositories) error
+	}{
+		{"incident", func(r ports.Repositories) error { return r.Incidents().Create(incident) }},
+		{"policy decision", func(r ports.Repositories) error { return r.PolicyDecisions().Save(decision) }},
+		{"proposal", func(r ports.Repositories) error { return r.Proposals().Save(proposal) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := uow.WithinTransaction(context.Background(), func(r ports.Repositories) error { return tt.insert(r) })
+			if !errors.Is(err, domain.ErrAlreadyExists) {
+				t.Fatalf("duplicate insert error = %v, want already exists", err)
+			}
+			if errors.Is(err, domain.ErrValidation) {
+				t.Fatalf("duplicate insert error = %v, must not be a validation error", err)
+			}
+		})
 	}
 }
 

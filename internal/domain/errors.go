@@ -6,6 +6,7 @@ var (
 	ErrValidation               = fmt.Errorf("validation failed")
 	ErrIllegalTransition        = fmt.Errorf("illegal transition")
 	ErrNotFound                 = fmt.Errorf("not found")
+	ErrAlreadyExists            = fmt.Errorf("already exists")
 	ErrVersionConflict          = fmt.Errorf("version conflict")
 	ErrInvalidEvidenceReference = fmt.Errorf("invalid evidence reference")
 	ErrPolicyDenied             = fmt.Errorf("policy denied")
@@ -44,6 +45,18 @@ func (e *NotFoundError) Error() string {
 }
 func (e *NotFoundError) Unwrap() error {
 	return ErrNotFound
+}
+
+// AlreadyExistsError reports an insert of a record that is already stored
+// under the same identity. It is a conflict with existing state, not a
+// malformed request, so it is deliberately not a ValidationError.
+type AlreadyExistsError struct{ Resource string }
+
+func (e *AlreadyExistsError) Error() string {
+	return e.Resource + " already exists"
+}
+func (e *AlreadyExistsError) Unwrap() error {
+	return ErrAlreadyExists
 }
 
 type VersionConflictError struct{ Expected, Actual uint64 }

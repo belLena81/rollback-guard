@@ -94,6 +94,7 @@ const (
 	messageIllegalTransition = "the incident is not in a state that allows this operation"
 	messageVersionConflict   = "the incident was changed by another request; reload and retry"
 	messageIdempotency       = "the request conflicts with an earlier request for the same operation"
+	messageAlreadyExists     = "the record already exists"
 	messageApprovalMismatch  = "the approval does not match the current proposal or deployment"
 	messageExpired           = "the proposal or approval has expired"
 	messagePolicyDenied      = "the rollback policy denied this action"
@@ -138,6 +139,8 @@ func errorResponse(err error) (int, string, string) {
 		return http.StatusConflict, codeConflict, messageIllegalTransition
 	case errors.Is(err, domain.ErrVersionConflict):
 		return http.StatusConflict, codeConflict, messageVersionConflict
+	case errors.Is(err, domain.ErrAlreadyExists):
+		return http.StatusConflict, codeConflict, messageAlreadyExists
 	case errors.Is(err, domain.ErrIdempotencyConflict):
 		return http.StatusConflict, codeConflict, messageIdempotency
 	case errors.Is(err, domain.ErrApprovalMismatch):

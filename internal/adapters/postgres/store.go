@@ -118,7 +118,7 @@ func mapError(err error, resource, id string) error {
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case uniqueViolation:
-			return &domain.ValidationError{Field: resource, Reason: "already exists"}
+			return &domain.AlreadyExistsError{Resource: resource}
 		case "23503":
 			return &domain.NotFoundError{Resource: resource, ID: id}
 		case "23514":

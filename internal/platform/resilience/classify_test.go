@@ -62,6 +62,7 @@ func TestIsTransient(t *testing.T) {
 		{"canceled joined with transient cause", errors.Join(context.Canceled, context.DeadlineExceeded), false},
 		{"non-human approval", domain.ErrNonHumanApproval, false},
 		{"illegal transition", domain.ErrIllegalTransition, false},
+		{"already exists", domain.ErrAlreadyExists, false},
 		{"invalid evidence reference", domain.ErrInvalidEvidenceReference, false},
 		{"permanent flag beats wrapped deadline", fmt.Errorf("x: %w", errors.Join(transientFlag(false), context.DeadlineExceeded)), false},
 	}
