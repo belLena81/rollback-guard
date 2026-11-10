@@ -19,23 +19,35 @@ import (
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/runtime"
+	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(logger); err != nil {
+	level := new(slog.LevelVar)
+	logger := telemetry.NewLogger(os.Stdout, level)
+	if err := run(logger, level); err != nil {
 		logger.Error("investigator exited", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run(logger *slog.Logger, level *slog.LevelVar) error {
 	cfg, err := config.LoadInvestigator()
 	if err != nil {
 		return err
 	}
+	level.Set(cfg.Telemetry.LogLevel)
+	tel, err := telemetry.New(telemetry.SettingsFrom(cfg.Telemetry), telemetry.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tel.Shutdown(context.Background()); err != nil {
+			logger.Warn("telemetry shutdown incomplete", "error", err)
+		}
+	}()
 	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -48,7 +60,7 @@ func run(logger *slog.Logger) error {
 	defer pool.Close()
 	connectCtx, cancelConnect := context.WithTimeout(context.Background(), cfg.MCPConnectTimeout)
 	defer cancelConnect()
-	mcpHTTPClient := &http.Client{Timeout: cfg.MCPCallTimeout}
+	mcpHTTPClient := tel.HTTPClient(cfg.MCPCallTimeout)
 	readClient, err := connectMCP(connectCtx, cfg.KubernetesReadMCPURL, mcpHTTPClient, []string{mcpadapter.ToolGetDeployment})
 	if err != nil {
 		return fmt.Errorf("connect readonly kubernetes MCP: %w", err)
@@ -67,11 +79,11 @@ func run(logger *slog.Logger) error {
 			logger.Warn("close observability MCP client", "error", err)
 		}
 	}()
-	boundedRead, err := mcpadapter.BoundCalls(readClient, cfg.MCPCallTimeout)
+	boundedRead, err := observedCalls(readClient, cfg.MCPCallTimeout, mcpadapter.ServerKubernetesReadonly, tel)
 	if err != nil {
 		return err
 	}
-	boundedObservability, err := mcpadapter.BoundCalls(observabilityClient, cfg.MCPCallTimeout)
+	boundedObservability, err := observedCalls(observabilityClient, cfg.MCPCallTimeout, mcpadapter.ServerObservability, tel)
 	if err != nil {
 		return err
 	}
@@ -84,7 +96,13 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	ids := &runtime.IDGenerator{}
-	diagnoser, err := newDiagnoser(cfg, ids, &http.Client{Timeout: cfg.LLMTimeout})
+	// The LLM provider client is deliberately not traced: its requests carry
+	// the API key and prompt, and nothing about them is exported.
+	strategyDiagnoser, err := newDiagnoser(cfg, ids, &http.Client{Timeout: cfg.LLMTimeout})
+	if err != nil {
+		return err
+	}
+	diagnoser, err := tel.ObserveDiagnoser(strategyDiagnoser, cfg.DiagnosisStrategy)
 	if err != nil {
 		return err
 	}
@@ -100,7 +118,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	handler, err := a2aadapter.NewServerHandler(idempotentRunner, store, logger, a2aadapter.ServerConfig{PublicURL: cfg.PublicURL, TaskTimeout: cfg.TaskTimeout, Ready: func(ctx context.Context) error {
+	handler, err := a2aadapter.NewServerHandler(idempotentRunner, store, logger, a2aadapter.ServerConfig{PublicURL: cfg.PublicURL, TaskTimeout: cfg.TaskTimeout, Tracer: tel, Metrics: tel.MetricsHandler(), Ready: func(ctx context.Context) error {
 		if err := pool.Ping(ctx); err != nil {
 			return err
 		}
@@ -112,7 +130,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: tel.InstrumentServer(handler, a2aadapter.RouteOf), ReadHeaderTimeout: 5 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	errCh := make(chan error, 1)
@@ -159,6 +177,16 @@ func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, provider
 	default:
 		return nil, fmt.Errorf("unsupported diagnosis strategy %q", cfg.DiagnosisStrategy)
 	}
+}
+
+// observedCalls bounds each call and reports it (including timeouts) to
+// telemetry under the server's label.
+func observedCalls(client *mcpadapter.Client, timeout time.Duration, server string, observer mcpadapter.CallObserver) (mcpadapter.Caller, error) {
+	bounded, err := mcpadapter.BoundCalls(client, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return mcpadapter.ObserveCalls(bounded, server, observer)
 }
 
 func connectMCP(ctx context.Context, endpoint string, httpClient *http.Client, tools []string) (*mcpadapter.Client, error) {

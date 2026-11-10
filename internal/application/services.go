@@ -18,6 +18,8 @@ type Dependencies struct {
 	ApprovalPolicy ports.ApprovalPolicy
 	Clock          ports.Clock
 	IDGenerator    ports.IDGenerator
+	// Tracer is optional; nil disables tracing.
+	Tracer ports.Tracer
 }
 
 type WorkflowConfig struct {
@@ -37,6 +39,7 @@ type workflow struct {
 	approvalPolicy ports.ApprovalPolicy
 	clock          ports.Clock
 	ids            ports.IDGenerator
+	tracer         ports.Tracer
 	config         WorkflowConfig
 	systemActor    domain.Actor
 }
@@ -78,8 +81,13 @@ func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, er
 	if err != nil {
 		return Services{}, err
 	}
+	tracer := dependencies.Tracer
+	if tracer == nil {
+		tracer = ports.NoopTracer{}
+	}
 	w := &workflow{
-		uow: dependencies.UnitOfWork, inspector: dependencies.Inspector, metrics: dependencies.Metrics,
+		tracer: tracer,
+		uow:    dependencies.UnitOfWork, inspector: dependencies.Inspector, metrics: dependencies.Metrics,
 		investigator: investigator, executor: dependencies.Executor, rollbackPolicy: dependencies.RollbackPolicy,
 		approvalPolicy: dependencies.ApprovalPolicy, clock: dependencies.Clock, ids: dependencies.IDGenerator,
 		config: config, systemActor: config.SystemActor,

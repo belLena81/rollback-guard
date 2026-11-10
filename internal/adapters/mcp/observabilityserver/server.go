@@ -33,12 +33,12 @@ func New(backend Backend) (*mcp.Server, error) {
 	return server, nil
 }
 
-func NewHTTPHandler(backend Backend, ready func(context.Context) error, sessionTimeout time.Duration, logger *slog.Logger) (http.Handler, error) {
+func NewHTTPHandler(backend Backend, ready func(context.Context) error, sessionTimeout time.Duration, logger *slog.Logger, opts ...protocol.HandlerOption) (http.Handler, error) {
 	server, err := New(backend)
 	if err != nil {
 		return nil, err
 	}
-	return protocol.HTTPHandler(server, ready, protocol.DefaultMaxRequestBytes, sessionTimeout, logger), nil
+	return protocol.HTTPHandler(server, ready, protocol.DefaultMaxRequestBytes, sessionTimeout, logger, opts...), nil
 }
 
 func metricHandler(backend Backend, kind string) mcp.ToolHandlerFor[protocol.MetricInput, protocol.Response[protocol.MetricOutput]] {

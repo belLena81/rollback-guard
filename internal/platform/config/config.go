@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -17,6 +18,51 @@ const (
 	investigationEvidenceCallCount = 2
 	minimumRuleFallbackBudget      = time.Second
 )
+
+// TelemetryConfig is shared by every service.
+type TelemetryConfig struct {
+	ServiceName string
+	// OTLPEndpoint is the OTLP/HTTP collector base URL; empty disables span
+	// export (tracing stays on in-process for log correlation).
+	OTLPEndpoint    string
+	SampleRatio     float64
+	ShutdownTimeout time.Duration
+	LogLevel        slog.Level
+}
+
+func telemetryEnv(defaultServiceName string) (TelemetryConfig, error) {
+	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if endpoint != "" {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return TelemetryConfig{}, fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT must be an http(s) URL without credentials, query, or fragment")
+		}
+	}
+	ratio := 1.0
+	if value := strings.TrimSpace(os.Getenv("OTEL_TRACES_SAMPLE_RATIO")); value != "" {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil || parsed < 0 || parsed > 1 {
+			return TelemetryConfig{}, fmt.Errorf("OTEL_TRACES_SAMPLE_RATIO must be between 0 and 1")
+		}
+		ratio = parsed
+	}
+	shutdownTimeout, err := durationEnv("TELEMETRY_SHUTDOWN_TIMEOUT", 5*time.Second)
+	if err != nil || shutdownTimeout > 30*time.Second {
+		return TelemetryConfig{}, fmt.Errorf("TELEMETRY_SHUTDOWN_TIMEOUT must be positive and no greater than 30s")
+	}
+	levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
+	level, ok := levels[strings.ToLower(stringEnv("LOG_LEVEL", "info"))]
+	if !ok {
+		return TelemetryConfig{}, fmt.Errorf("LOG_LEVEL must be debug, info, warn, or error")
+	}
+	return TelemetryConfig{
+		ServiceName:     stringEnv("OTEL_SERVICE_NAME", defaultServiceName),
+		OTLPEndpoint:    endpoint,
+		SampleRatio:     ratio,
+		ShutdownTimeout: shutdownTimeout,
+		LogLevel:        level,
+	}, nil
+}
 
 type LLMProvider string
 
@@ -49,6 +95,7 @@ type Config struct {
 	A2ALeaseTTL           time.Duration
 	A2AWorkerID           string
 	A2AMaxAttempts        int
+	Telemetry             TelemetryConfig
 }
 
 type InvestigatorConfig struct {
@@ -71,6 +118,7 @@ type InvestigatorConfig struct {
 	LLMAPIKey             string
 	LLMTimeout            time.Duration
 	LLMMaxOutputTokens    int
+	Telemetry             TelemetryConfig
 }
 
 type KubernetesMCPConfig struct {
@@ -84,6 +132,7 @@ type KubernetesMCPConfig struct {
 	AllowedTargets []domain.DeploymentTarget
 	RequestTimeout time.Duration
 	SessionTimeout time.Duration
+	Telemetry      TelemetryConfig
 }
 
 type ObservabilityMCPConfig struct {
@@ -94,6 +143,7 @@ type ObservabilityMCPConfig struct {
 	SessionTimeout time.Duration
 	MetricsWindow  time.Duration
 	MaxSampleAge   time.Duration
+	Telemetry      TelemetryConfig
 }
 
 func Load() (Config, error) {
@@ -165,6 +215,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	telemetry, err := telemetryEnv("orchestrator")
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		HTTPAddr:              stringEnv("HTTP_ADDR", ":8080"),
 		DatabaseURL:           os.Getenv("DATABASE_URL"),
@@ -192,6 +246,7 @@ func Load() (Config, error) {
 		A2ALeaseTTL:           a2aLeaseTTL,
 		A2AWorkerID:           stringEnv("A2A_WORKER_ID", "orchestrator-1"),
 		A2AMaxAttempts:        a2aMaxAttempts,
+		Telemetry:             telemetry,
 	}
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
@@ -233,6 +288,10 @@ func LoadInvestigator() (InvestigatorConfig, error) {
 		return InvestigatorConfig{}, err
 	}
 	strategy, err := diagnosisStrategyEnv()
+	if err != nil {
+		return InvestigatorConfig{}, err
+	}
+	telemetry, err := telemetryEnv("investigator")
 	if err != nil {
 		return InvestigatorConfig{}, err
 	}
@@ -289,6 +348,7 @@ func LoadInvestigator() (InvestigatorConfig, error) {
 		LLMAPIKey:             apiKey,
 		LLMTimeout:            llmTimeout,
 		LLMMaxOutputTokens:    maxOutputTokens,
+		Telemetry:             telemetry,
 	}, nil
 }
 
@@ -367,7 +427,11 @@ func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
 			return KubernetesMCPConfig{}, err
 		}
 	}
-	return KubernetesMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", defaultAddr), Mode: mode, ClusterID: clusterID, Kubeconfig: strings.TrimSpace(os.Getenv("KUBECONFIG")), DatabaseURL: databaseURL, DBMaxConns: dbMaxConns, DBPingTimeout: dbPingTimeout, AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout}, nil
+	telemetry, err := telemetryEnv("kubernetes-mcp-" + mode)
+	if err != nil {
+		return KubernetesMCPConfig{}, err
+	}
+	return KubernetesMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", defaultAddr), Mode: mode, ClusterID: clusterID, Kubeconfig: strings.TrimSpace(os.Getenv("KUBECONFIG")), DatabaseURL: databaseURL, DBMaxConns: dbMaxConns, DBPingTimeout: dbPingTimeout, AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout, Telemetry: telemetry}, nil
 }
 
 func LoadObservabilityMCP() (ObservabilityMCPConfig, error) {
@@ -391,7 +455,11 @@ func LoadObservabilityMCP() (ObservabilityMCPConfig, error) {
 	if err != nil || maxAge > 15*time.Minute {
 		return ObservabilityMCPConfig{}, fmt.Errorf("METRICS_MAX_SAMPLE_AGE must be positive and no greater than 15m")
 	}
-	return ObservabilityMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", ":8093"), PrometheusURL: stringEnv("PROMETHEUS_URL", "http://127.0.0.1:9090"), AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout, MetricsWindow: window, MaxSampleAge: maxAge}, nil
+	telemetry, err := telemetryEnv("observability-mcp")
+	if err != nil {
+		return ObservabilityMCPConfig{}, err
+	}
+	return ObservabilityMCPConfig{HTTPAddr: stringEnv("HTTP_ADDR", ":8093"), PrometheusURL: stringEnv("PROMETHEUS_URL", "http://127.0.0.1:9090"), AllowedTargets: targets, RequestTimeout: requestTimeout, SessionTimeout: sessionTimeout, MetricsWindow: window, MaxSampleAge: maxAge, Telemetry: telemetry}, nil
 }
 
 func stringEnv(name string, fallback string) string {

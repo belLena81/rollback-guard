@@ -1,4 +1,4 @@
-.PHONY: fmt-check test test-race vet lint contract-test phase3-integration phase4-integration phase5-integration images images-services images-demo-api \
+.PHONY: fmt-check test test-race vet lint contract-test phase3-integration phase4-integration phase5-integration phase6-telemetry images images-services images-demo-api \
 	kind-create kind-delete kind-load deploy demo-v1 demo-v2-broken generate-load rbac-check kubeconfigs phase6-kind-check
 
 DOCKER ?= docker
@@ -60,6 +60,10 @@ phase4-integration:
 
 phase5-integration:
 	go test -tags=integration -timeout=3m ./test/integration/phase5/...
+
+# In-process telemetry exit check (docs/phase6-telemetry.md); also part of `make test`.
+phase6-telemetry:
+	go test -race ./test/phase6/... ./internal/platform/telemetry/...
 
 images: images-services images-demo-api
 

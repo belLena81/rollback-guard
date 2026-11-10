@@ -102,9 +102,20 @@ paths:
   /metrics:
     get:
       operationId: metrics
+      description: >-
+        Prometheus metrics for this orchestrator process (per-process registry).
+        Labels are bounded: route patterns, enum outcomes, and tool names only;
+        incident IDs, keys, and hashes never appear. See docs/phase6-telemetry.md.
       responses:
         '200':
-          description: Placeholder metrics
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # TYPE rollback_guardian_incidents_total counter
+                rollback_guardian_incidents_total 3
 components:
   parameters:
     IncidentId:

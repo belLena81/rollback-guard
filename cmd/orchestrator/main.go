@@ -21,22 +21,30 @@ import (
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 	"github.com/belLena81/rollback-guard/internal/platform/runtime"
+	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(logger); err != nil {
+	level := new(slog.LevelVar)
+	logger := telemetry.NewLogger(os.Stdout, level)
+	if err := run(logger, level); err != nil {
 		logger.Error("orchestrator exited", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run(logger *slog.Logger, level *slog.LevelVar) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	level.Set(cfg.Telemetry.LogLevel)
+	tel, err := telemetry.New(telemetry.SettingsFrom(cfg.Telemetry), telemetry.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+	defer shutdownTelemetry(tel, logger)
 	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -47,7 +55,11 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	defer pool.Close()
-	uow, err := postgres.NewUnitOfWork(pool)
+	store, err := postgres.NewUnitOfWork(pool)
+	if err != nil {
+		return err
+	}
+	uow, err := tel.ObserveUnitOfWork(store)
 	if err != nil {
 		return err
 	}
@@ -75,7 +87,7 @@ func run(logger *slog.Logger) error {
 	}
 	connectCtx, cancelConnect := context.WithTimeout(context.Background(), cfg.MCPConnectTimeout)
 	defer cancelConnect()
-	mcpHTTPClient := &http.Client{Timeout: cfg.MCPWatchTimeout + cfg.MCPCallTimeout}
+	mcpHTTPClient := tel.HTTPClient(cfg.MCPWatchTimeout + cfg.MCPCallTimeout)
 	readClient, err := connectMCP(connectCtx, cfg.KubernetesReadMCPURL, mcpHTTPClient, []string{mcpadapter.ToolGetDeployment, mcpadapter.ToolGetReplicaSets, mcpadapter.ToolListPods, mcpadapter.ToolGetPodEvents, mcpadapter.ToolGetRolloutStatus, mcpadapter.ToolWatchRollout})
 	if err != nil {
 		return fmt.Errorf("connect readonly kubernetes MCP: %w", err)
@@ -91,15 +103,15 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("connect observability MCP: %w", err)
 	}
 	defer closeMCP(observabilityClient, "observability", logger)
-	boundedRead, err := mcpadapter.BoundCalls(readClient, cfg.MCPCallTimeout)
+	boundedRead, err := observedCalls(readClient, cfg.MCPCallTimeout, mcpadapter.ServerKubernetesReadonly, tel)
 	if err != nil {
 		return err
 	}
-	boundedWrite, err := mcpadapter.BoundCalls(writeClient, cfg.MCPCallTimeout)
+	boundedWrite, err := observedCalls(writeClient, cfg.MCPCallTimeout, mcpadapter.ServerKubernetesRollback, tel)
 	if err != nil {
 		return err
 	}
-	boundedObservability, err := mcpadapter.BoundCalls(observabilityClient, cfg.MCPCallTimeout)
+	boundedObservability, err := observedCalls(observabilityClient, cfg.MCPCallTimeout, mcpadapter.ServerObservability, tel)
 	if err != nil {
 		return err
 	}
@@ -125,6 +137,7 @@ func run(logger *slog.Logger) error {
 		ApprovalPolicy: domain.ApprovalAuthorizer{},
 		Clock:          clock,
 		IDGenerator:    ids,
+		Tracer:         tel,
 	}, application.WorkflowConfig{
 		ProposalTTL:    cfg.ProposalTTL,
 		ApprovalTTL:    cfg.ApprovalTTL,
@@ -134,7 +147,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	a2aHTTPClient := &http.Client{Timeout: cfg.A2ATaskTimeout + cfg.A2ACancelTimeout}
+	a2aHTTPClient := tel.HTTPClient(cfg.A2ATaskTimeout + cfg.A2ACancelTimeout)
 	a2aConnectCtx, cancelA2AConnect := context.WithTimeout(context.Background(), cfg.MCPConnectTimeout)
 	defer cancelA2AConnect()
 	a2aGateway, err := a2aadapter.NewGateway(a2aConnectCtx, cfg.InvestigatorURL, a2aHTTPClient)
@@ -146,7 +159,17 @@ func run(logger *slog.Logger) error {
 			logger.Warn("close investigator A2A client", "error", err)
 		}
 	}()
-	coordinator, err := application.NewInvestigationCoordinator(uow, a2aGateway, services.Investigations, clock, application.InvestigationCoordinatorConfig{WorkerID: cfg.A2AWorkerID, TaskTimeout: cfg.A2ATaskTimeout, CancelTimeout: cfg.A2ACancelTimeout, PollInterval: cfg.A2APollInterval, LeaseTTL: cfg.A2ALeaseTTL, MaxAttempts: cfg.A2AMaxAttempts, ReportError: func(err error) { logger.Error("investigation coordinator iteration failed", "error", err) }})
+	gateway, err := tel.ObserveGateway(a2aGateway)
+	if err != nil {
+		return err
+	}
+	coordinator, err := application.NewInvestigationCoordinator(uow, gateway, services.Investigations, clock, application.InvestigationCoordinatorConfig{
+		WorkerID: cfg.A2AWorkerID, TaskTimeout: cfg.A2ATaskTimeout, CancelTimeout: cfg.A2ACancelTimeout, PollInterval: cfg.A2APollInterval, LeaseTTL: cfg.A2ALeaseTTL, MaxAttempts: cfg.A2AMaxAttempts,
+		Tracer: tel,
+		ReportError: func(ctx context.Context, err error) {
+			logger.ErrorContext(ctx, "investigation coordinator iteration failed", "error", err)
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -154,7 +177,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	api, err := httpapi.NewServer(services, logger)
+	api, err := httpapi.NewServer(services, logger, httpapi.WithRouteMiddleware(tel.Route), httpapi.WithMetricsHandler(tel.MetricsHandler()))
 	if err != nil {
 		return err
 	}
@@ -212,6 +235,22 @@ func connectMCP(ctx context.Context, endpoint string, httpClient *http.Client, t
 		return nil, errors.Join(err, client.Close())
 	}
 	return client, nil
+}
+
+// observedCalls bounds each call and reports it (including timeouts) to
+// telemetry under the server's label.
+func observedCalls(client *mcpadapter.Client, timeout time.Duration, server string, observer mcpadapter.CallObserver) (mcpadapter.Caller, error) {
+	bounded, err := mcpadapter.BoundCalls(client, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return mcpadapter.ObserveCalls(bounded, server, observer)
+}
+
+func shutdownTelemetry(tel *telemetry.Provider, logger *slog.Logger) {
+	if err := tel.Shutdown(context.Background()); err != nil {
+		logger.Warn("telemetry shutdown incomplete", "error", err)
+	}
 }
 
 func closeMCP(client *mcpadapter.Client, name string, logger *slog.Logger) {

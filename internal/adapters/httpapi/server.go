@@ -14,6 +14,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
+	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
 const (
@@ -22,38 +23,96 @@ const (
 )
 
 type Server struct {
-	services *application.Services
-	logger   *slog.Logger
+	services   *application.Services
+	logger     *slog.Logger
+	instrument RouteMiddleware
+	metrics    http.Handler
 }
 
-func NewServer(services application.Services, logger *slog.Logger) (*Server, error) {
+// RouteMiddleware wraps the handler registered for one route pattern (for
+// example "POST /v1/incidents/{incidentId}/approve"). It receives the path
+// part of the pattern so telemetry labels stay bounded.
+type RouteMiddleware func(route string, next http.Handler) http.Handler
+
+type Option func(*Server)
+
+// WithRouteMiddleware instruments every registered route. Requests that
+// match no route (mux 404/405) are not instrumented.
+func WithRouteMiddleware(middleware RouteMiddleware) Option {
+	return func(s *Server) { s.instrument = middleware }
+}
+
+// WithMetricsHandler serves handler at GET /metrics.
+func WithMetricsHandler(handler http.Handler) Option {
+	return func(s *Server) { s.metrics = handler }
+}
+
+func NewServer(services application.Services, logger *slog.Logger, opts ...Option) (*Server, error) {
 	if services.Incidents == nil || services.Investigations == nil || services.Approvals == nil || services.Executions == nil || services.Verifications == nil || services.Queries == nil {
 		return nil, fmt.Errorf("all application services are required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{services: &services, logger: logger}, nil
+	server := &Server{services: &services, logger: logger, metrics: http.HandlerFunc(emptyMetrics)}
+	for _, opt := range opts {
+		opt(server)
+	}
+	if server.instrument == nil {
+		server.instrument = func(_ string, next http.Handler) http.Handler { return next }
+	}
+	return server, nil
 }
 
 func (s *Server) Routes(ready func(context.Context) error, readyTimeout time.Duration, auth httpserver.AuthMiddleware) http.Handler {
 	apiMux := http.NewServeMux()
-	apiMux.HandleFunc("POST /v1/incidents", s.createIncident)
-	apiMux.HandleFunc("GET /v1/incidents/{incidentId}", s.getIncident)
-	apiMux.HandleFunc("GET /v1/incidents/{incidentId}/events", s.listEvents)
-	apiMux.HandleFunc("POST /v1/incidents/{incidentId}/approve", s.approve)
-	apiMux.HandleFunc("POST /v1/incidents/{incidentId}/reject", s.reject)
-	apiMux.HandleFunc("POST /v1/incidents/{incidentId}/cancel", s.cancel)
+	s.handle(apiMux, "POST /v1/incidents", s.createIncident)
+	s.handle(apiMux, "GET /v1/incidents/{incidentId}", s.getIncident)
+	s.handle(apiMux, "GET /v1/incidents/{incidentId}/events", s.listEvents)
+	s.handle(apiMux, "POST /v1/incidents/{incidentId}/approve", s.approve)
+	s.handle(apiMux, "POST /v1/incidents/{incidentId}/reject", s.reject)
+	s.handle(apiMux, "POST /v1/incidents/{incidentId}/cancel", s.cancel)
 	var apiHandler http.Handler = apiMux
 	if auth != nil {
 		apiHandler = auth.Wrap(apiHandler)
 	}
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/v1/", apiHandler)
-	rootMux.HandleFunc("GET /health/live", live)
-	rootMux.HandleFunc("GET /health/ready", readiness(ready, readyTimeout))
-	rootMux.HandleFunc("GET /metrics", metrics)
+	s.handle(rootMux, "GET /health/live", live)
+	s.handle(rootMux, "GET /health/ready", readiness(ready, readyTimeout))
+	// Requests matching no pattern (404/405 from the mux) are not
+	// instrumented: a catch-all route would turn 405 responses into 404s.
+	rootMux.Handle("GET /metrics", s.instrument("/metrics", s.metrics))
 	return requestIDMiddleware(rootMux)
+}
+
+// handle registers handler for pattern, instrumented under the pattern's
+// path, with the incident ID path value (when present) in the log
+// correlation of the request context.
+func (s *Server) handle(mux *http.ServeMux, pattern string, handler http.HandlerFunc) {
+	route := pattern
+	if _, path, found := strings.Cut(pattern, " "); found {
+		route = path
+	}
+	// Both wrappers run inside the mux, so path values are resolved; the
+	// correlation is set before the instrumentation logs the request.
+	mux.Handle(pattern, withPathCorrelation(s.instrument(route, handler)))
+}
+
+func withPathCorrelation(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if incidentID := r.PathValue("incidentId"); incidentID != "" {
+			r = r.WithContext(ports.WithCorrelation(r.Context(), ports.Correlation{IncidentID: domain.IncidentID(incidentID)}))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// emptyMetrics answers scrapes with an empty exposition when no registry is
+// wired (tests and tools that construct the server without telemetry).
+func emptyMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
 }
 
 func live(w http.ResponseWriter, _ *http.Request) {
@@ -76,13 +135,6 @@ func readiness(ready func(context.Context) error, readyTimeout time.Duration) ht
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	}
-}
-
-func metrics(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	if _, err := w.Write([]byte("# Placeholder metrics\nrollback_guard_build_info 1\n")); err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
 }
 
@@ -130,11 +182,17 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	summary, err := s.services.Queries.GetIncidentSummary(r.Context(), incident.ID())
+	ctx := ports.WithCorrelation(r.Context(), ports.Correlation{IncidentID: incident.ID()})
+	summary, err := s.services.Queries.GetIncidentSummary(ctx, incident.ID())
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
+	logAttrs := []any{"status", incident.Status().String()}
+	if summary.Investigation != nil {
+		ctx = ports.WithCorrelation(ctx, ports.Correlation{OperationID: summary.Investigation.OperationID, IdempotencyKey: summary.Investigation.IdempotencyKey})
+	}
+	s.logger.InfoContext(ctx, "incident created", logAttrs...)
 	w.Header().Set("Location", "/v1/incidents/"+string(incident.ID()))
 	writeJSON(w, http.StatusAccepted, summaryResponse(summary))
 }
@@ -186,7 +244,10 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	if _, err := s.services.Executions.Execute(r.Context(), incidentID, domain.IdempotencyKey("approval:"+string(approval.ID()))); err != nil {
+	idempotencyKey := domain.IdempotencyKey("approval:" + string(approval.ID()))
+	executionCtx := ports.WithCorrelation(r.Context(), ports.Correlation{IdempotencyKey: string(idempotencyKey)})
+	s.logger.InfoContext(executionCtx, "rollback approved; executing")
+	if _, err := s.services.Executions.Execute(executionCtx, incidentID, idempotencyKey); err != nil {
 		if s.writeCommittedExecutionFailure(w, r, incidentID) {
 			return
 		}
