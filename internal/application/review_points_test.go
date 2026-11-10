@@ -40,16 +40,13 @@ func TestRecoveredPendingExecutionRetryInvokesExecutorBeforeCompletion(t *testin
 		completedAt: now,
 	}
 	svc := &ExecutionService{
-		workflow: &workflow{
-			uow:            uow,
-			inspector:      inspector,
-			executor:       executor,
-			approvalPolicy: policy,
-			clock:          clock,
-			ids:            &testkit.IDGenerator{},
-			config:         WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Minute, SystemActor: systemActor},
-			systemActor:    systemActor,
-		},
+		uow:            uow,
+		inspector:      inspector,
+		executor:       executor,
+		approvalPolicy: policy,
+		clock:          clock,
+		audit:          audit{ids: &testkit.IDGenerator{}, systemActor: systemActor},
+		cleanupTimeout: time.Minute,
 	}
 
 	clock.Advance(20 * time.Minute)
@@ -113,16 +110,13 @@ func TestExecutorFailureReasonIsRedactedBeforePersistence(t *testing.T) {
 	}
 	executor := &failingRollbackExecutor{err: errors.New("executor leaked secret token=abc123")}
 	svc := &ExecutionService{
-		workflow: &workflow{
-			uow:            uow,
-			inspector:      inspector,
-			executor:       executor,
-			approvalPolicy: domain.ApprovalAuthorizer{},
-			clock:          testkit.NewClock(now),
-			ids:            &testkit.IDGenerator{},
-			config:         WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Minute, SystemActor: systemActor},
-			systemActor:    systemActor,
-		},
+		uow:            uow,
+		inspector:      inspector,
+		executor:       executor,
+		approvalPolicy: domain.ApprovalAuthorizer{},
+		clock:          testkit.NewClock(now),
+		audit:          audit{ids: &testkit.IDGenerator{}, systemActor: systemActor},
+		cleanupTimeout: time.Minute,
 	}
 
 	execution, err := svc.Execute(context.Background(), incidentID, "execute-2")
@@ -157,7 +151,7 @@ func TestUnknownRollbackOutcomeLeavesDurableAttemptPending(t *testing.T) {
 	incidentID, proposal := seedApprovedRollbackState(t, uow, now)
 	systemActor := mustActor(t, "guardian", domain.ActorSystem)
 	inspector := &fake.Infrastructure{Deployment: domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: proposal.CurrentRevision(), PreviousStableRevision: proposal.TargetRevision(), RolloutAt: now.Add(-time.Minute)}}
-	svc := &ExecutionService{workflow: &workflow{uow: uow, inspector: inspector, executor: &failingRollbackExecutor{err: ports.ErrRollbackOutcomeUnknown}, approvalPolicy: domain.ApprovalAuthorizer{}, clock: testkit.NewClock(now), ids: &testkit.IDGenerator{}, config: WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Minute, SystemActor: systemActor}, systemActor: systemActor}}
+	svc := &ExecutionService{audit: audit{ids: &testkit.IDGenerator{}, systemActor: systemActor}, uow: uow, inspector: inspector, executor: &failingRollbackExecutor{err: ports.ErrRollbackOutcomeUnknown}, approvalPolicy: domain.ApprovalAuthorizer{}, clock: testkit.NewClock(now), cleanupTimeout: time.Minute}
 
 	_, err := svc.Execute(context.Background(), incidentID, "unknown-outcome")
 	if !errors.Is(err, ports.ErrRollbackOutcomeUnknown) {
@@ -196,13 +190,10 @@ func TestApprovalRetryAfterProposalExpiryReturnsExpiry(t *testing.T) {
 	incidentID, proposal := seedAwaitingApprovalIncidentWithExpiredProposal(t, uow, now)
 	systemActor := mustActor(t, "guardian", domain.ActorSystem)
 	svc := &ApprovalService{
-		workflow: &workflow{
-			uow:         uow,
-			clock:       testkit.NewClock(now),
-			ids:         &testkit.IDGenerator{},
-			config:      WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Minute, SystemActor: systemActor},
-			systemActor: systemActor,
-		},
+		uow:         uow,
+		clock:       testkit.NewClock(now),
+		audit:       audit{ids: &testkit.IDGenerator{}, systemActor: systemActor},
+		approvalTTL: time.Minute,
 	}
 	command := ApprovalCommand{
 		IncidentID:   incidentID,
@@ -236,12 +227,7 @@ func TestCancelRejectsBlankReasonBeforeTransaction(t *testing.T) {
 
 	clock := testkit.NewClock(time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
 	uow := &transactionSpyUnitOfWork{}
-	svc := &IncidentService{
-		workflow: &workflow{
-			uow:   uow,
-			clock: clock,
-		},
-	}
+	svc := &IncidentService{uow: uow, clock: clock}
 
 	for _, reason := range []string{"", "   ", "\n\t"} {
 		t.Run("reason="+reason, func(t *testing.T) {

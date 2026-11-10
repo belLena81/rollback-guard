@@ -57,16 +57,13 @@ func TestAuthorizationFailureReasonIsFixedBeforePersistence(t *testing.T) {
 			incidentID, proposal := seedApprovedRollbackState(t, uow, now)
 			systemActor := mustActor(t, "guardian", domain.ActorSystem)
 			svc := &ExecutionService{
-				workflow: &workflow{
-					uow:            uow,
-					inspector:      &fake.Infrastructure{Deployment: domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: proposal.CurrentRevision()}},
-					executor:       &failingRollbackExecutor{err: errors.New("executor must not be called")},
-					approvalPolicy: rejectingApprovalPolicy{err: test.authorize},
-					clock:          testkit.NewClock(now),
-					ids:            &testkit.IDGenerator{},
-					config:         WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Minute, SystemActor: systemActor},
-					systemActor:    systemActor,
-				},
+				uow:            uow,
+				inspector:      &fake.Infrastructure{Deployment: domain.DeploymentEvidence{Target: proposal.Target(), CurrentRevision: proposal.CurrentRevision()}},
+				executor:       &failingRollbackExecutor{err: errors.New("executor must not be called")},
+				approvalPolicy: rejectingApprovalPolicy{err: test.authorize},
+				clock:          testkit.NewClock(now),
+				audit:          audit{ids: &testkit.IDGenerator{}, systemActor: systemActor},
+				cleanupTimeout: time.Minute,
 			}
 
 			_, err := svc.Execute(context.Background(), incidentID, "execute-audit-reason")

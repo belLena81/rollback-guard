@@ -9,6 +9,9 @@ import (
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
+// QueryService reads incidents and their records.
+type QueryService struct{ uow ports.UnitOfWork }
+
 type IncidentSummary struct {
 	Incident      domain.Incident
 	Investigation *domain.InvestigationDispatch
@@ -20,9 +23,8 @@ type IncidentSummary struct {
 }
 
 func (s *QueryService) GetIncident(ctx context.Context, incidentID domain.IncidentID) (domain.Incident, error) {
-	c := s.workflow
 	var incident domain.Incident
-	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		var err error
 		incident, err = repositories.Incidents().Get(incidentID)
 		return err
@@ -34,9 +36,8 @@ func (s *QueryService) GetIncident(ctx context.Context, incidentID domain.Incide
 }
 
 func (s *QueryService) GetIncidentSummary(ctx context.Context, incidentID domain.IncidentID) (IncidentSummary, error) {
-	c := s.workflow
 	var summary IncidentSummary
-	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		incident, err := repositories.Incidents().Get(incidentID)
 		if err != nil {
 			return err
@@ -81,9 +82,8 @@ func (s *QueryService) GetIncidentSummary(ctx context.Context, incidentID domain
 }
 
 func (s *QueryService) GetProposal(ctx context.Context, incidentID domain.IncidentID) (domain.RollbackProposal, error) {
-	c := s.workflow
 	var proposal domain.RollbackProposal
-	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		var err error
 		proposal, err = repositories.Proposals().GetByIncident(incidentID)
 		return err
@@ -95,9 +95,8 @@ func (s *QueryService) GetProposal(ctx context.Context, incidentID domain.Incide
 }
 
 func (s *QueryService) ListEvents(ctx context.Context, incidentID domain.IncidentID) ([]domain.OperationEvent, error) {
-	c := s.workflow
 	var events []domain.OperationEvent
-	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		var err error
 		events, err = repositories.Events().List(incidentID)
 		return err

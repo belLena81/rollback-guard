@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -15,6 +14,18 @@ const investigationFailureAuditReason = "investigation failed"
 const executionFailureAuditReason = "rollback execution failed"
 const authorizationFailureAuditReason = "rollback authorization failed"
 const authorizationExpiredAuditReason = "rollback authorization expired"
+
+// ExecutionService runs an approved rollback exactly once per idempotency key,
+// re-checking authorization immediately before calling the executor.
+type ExecutionService struct {
+	audit
+	uow            ports.UnitOfWork
+	clock          ports.Clock
+	inspector      ports.DeploymentInspector
+	executor       ports.RollbackExecutor
+	approvalPolicy ports.ApprovalPolicy
+	cleanupTimeout time.Duration
+}
 
 func (s *ExecutionService) Execute(ctx context.Context, incidentID domain.IncidentID, key domain.IdempotencyKey) (domain.RollbackExecution, error) {
 	if key == "" {
@@ -65,9 +76,8 @@ type loadedExecution struct {
 }
 
 func (s *ExecutionService) loadExecution(ctx context.Context, incidentID domain.IncidentID, key domain.IdempotencyKey) (loadedExecution, error) {
-	c := s.workflow
 	var loaded loadedExecution
-	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		var err error
 		loaded.incident, err = repositories.Incidents().Get(incidentID)
 		if err != nil {
@@ -121,19 +131,18 @@ func (s *ExecutionService) loadExecution(ctx context.Context, incidentID domain.
 }
 
 func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedExecution, key domain.IdempotencyKey) (executionPreparation, error) {
-	c := s.workflow
-	startedAt := c.clock.Now()
+	startedAt := s.clock.Now()
 	if loaded.resume {
 		return s.revalidatePendingExecution(ctx, loaded, key)
 	}
-	freshDeployment, err := c.inspector.InspectDeployment(ctx, loaded.proposal.Target())
+	freshDeployment, err := s.inspector.InspectDeployment(ctx, loaded.proposal.Target())
 	if err != nil {
 		return executionPreparation{}, fmt.Errorf("reinspect deployment: %w", err)
 	}
-	startedAt = c.clock.Now()
-	approvedRollback, err := c.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, startedAt)
+	startedAt = s.clock.Now()
+	approvedRollback, err := s.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, startedAt)
 	if err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CleanupTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cleanupTimeout)
 		defer cancel()
 		// Terminate only the incident this request authorized against. If a
 		// concurrent request for the same approval has moved it on (started
@@ -142,9 +151,9 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 		// incident whose rollback is in flight or applied.
 		var cleanupErr error
 		if errors.Is(err, domain.ErrExpired) {
-			cleanupErr = c.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Expire, domain.EventIncidentExpired, authorizationExpiredAuditReason)
+			cleanupErr = s.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Expire, domain.EventIncidentExpired, authorizationExpiredAuditReason)
 		} else {
-			cleanupErr = c.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Fail, domain.EventIncidentFailed, authorizationFailureAuditReason)
+			cleanupErr = s.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Fail, domain.EventIncidentFailed, authorizationFailureAuditReason)
 		}
 		return executionPreparation{}, errors.Join(err, cleanupErr)
 	}
@@ -152,7 +161,7 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 	if err != nil {
 		return executionPreparation{}, fmt.Errorf("create idempotency attempt: %w", err)
 	}
-	err = c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+	err = s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		fresh, err := repositories.Incidents().Get(loaded.incident.ID())
 		if err != nil {
 			return err
@@ -160,7 +169,7 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 		if fresh.Version() != loaded.incident.Version() {
 			return &domain.VersionConflictError{Expected: loaded.incident.Version(), Actual: fresh.Version()}
 		}
-		if _, err := c.transition(ctx, repositories, fresh, startedAt, (*domain.Incident).StartExecution, statusChanged(c.systemActor)); err != nil {
+		if _, err := s.transition(ctx, repositories, fresh, startedAt, (*domain.Incident).StartExecution, statusChanged(s.systemActor)); err != nil {
 			return err
 		}
 		return repositories.Idempotency().Create(record)
@@ -172,13 +181,12 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 }
 
 func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loaded loadedExecution, key domain.IdempotencyKey) (executionPreparation, error) {
-	c := s.workflow
 	startedAt := loaded.record.StartedAt()
 	resumed, err := domain.ResumeApprovedRollback(loaded.proposal, loaded.decision, loaded.approval, loaded.record, key)
 	if err != nil {
 		return s.completePendingRevalidationFailure(ctx, loaded, startedAt, fmt.Errorf("resume approved rollback: %w", err)), nil
 	}
-	freshDeployment, err := c.inspector.InspectDeployment(ctx, loaded.proposal.Target())
+	freshDeployment, err := s.inspector.InspectDeployment(ctx, loaded.proposal.Target())
 	if err != nil {
 		return executionPreparation{}, fmt.Errorf("reinspect pending deployment: %w", err)
 	}
@@ -187,7 +195,7 @@ func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loade
 		if !deploymentRecovered(freshDeployment) {
 			return executionPreparation{approved: resumed, record: loaded.record, startedAt: startedAt}, nil
 		}
-		if _, err := c.approvalPolicy.Authorize(
+		if _, err := s.approvalPolicy.Authorize(
 			loaded.proposal,
 			loaded.decision,
 			loaded.approval,
@@ -198,7 +206,7 @@ func (s *ExecutionService) revalidatePendingExecution(ctx context.Context, loade
 		}
 		return executionPreparation{approved: resumed, record: loaded.record, startedAt: startedAt}, nil
 	}
-	approvedRollback, err := c.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, c.clock.Now())
+	approvedRollback, err := s.approvalPolicy.Authorize(loaded.proposal, loaded.decision, loaded.approval, freshDeployment, s.clock.Now())
 	if err != nil {
 		return s.completePendingRevalidationFailure(ctx, loaded, startedAt, err), nil
 	}
@@ -212,12 +220,11 @@ func deploymentRecovered(deployment domain.DeploymentEvidence) bool {
 }
 
 func (s *ExecutionService) completePendingRevalidationFailure(ctx context.Context, loaded loadedExecution, startedAt time.Time, cause error) executionPreparation {
-	c := s.workflow
 	execution, createErr := s.newFailedExecution(loaded.proposal, loaded.record, startedAt, cause)
 	if createErr != nil {
 		return executionPreparation{executionErr: errors.Join(cause, createErr), completed: true}
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CleanupTimeout)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cleanupTimeout)
 	defer cancel()
 	completionErr := s.completeExecution(cleanupCtx, loaded.proposal, loaded.record, execution)
 	return executionPreparation{
@@ -228,8 +235,7 @@ func (s *ExecutionService) completePendingRevalidationFailure(ctx context.Contex
 }
 
 func (s *ExecutionService) invokeExecutor(ctx context.Context, approved domain.ApprovedRollback, proposal domain.RollbackProposal, record domain.IdempotencyRecord, startedAt time.Time) (domain.RollbackExecution, error) {
-	c := s.workflow
-	execution, executeErr := c.executor.ExecuteApprovedRollback(ctx, approved, record.Key())
+	execution, executeErr := s.executor.ExecuteApprovedRollback(ctx, approved, record.Key())
 	if errors.Is(executeErr, ports.ErrRollbackOutcomeUnknown) {
 		return domain.RollbackExecution{}, fmt.Errorf("execute approved rollback: %w", executeErr)
 	}
@@ -248,14 +254,14 @@ func (s *ExecutionService) invokeExecutor(ctx context.Context, approved domain.A
 
 func (s *ExecutionService) newFailedExecution(proposal domain.RollbackProposal, record domain.IdempotencyRecord, startedAt time.Time, cause error) (domain.RollbackExecution, error) {
 	return domain.NewRollbackExecution(
-		domain.ExecutionID(s.workflow.ids.NewID("execution")),
+		domain.ExecutionID(s.ids.NewID("execution")),
 		proposal.IncidentID(),
 		record.Key(),
 		proposal.CurrentRevision(),
 		proposal.TargetRevision(),
 		domain.ExecutionFailed,
 		startedAt,
-		s.workflow.clock.Now(),
+		s.clock.Now(),
 		executionFailureAuditReason,
 	)
 }
@@ -268,13 +274,12 @@ func executionOutcomeError(execution domain.RollbackExecution) error {
 }
 
 func (s *ExecutionService) completeExecution(ctx context.Context, proposal domain.RollbackProposal, record domain.IdempotencyRecord, execution domain.RollbackExecution) error {
-	c := s.workflow
-	completedAt := c.clock.Now()
+	completedAt := s.clock.Now()
 	completedRecord, err := record.Complete(execution.ID(), completedAt)
 	if err != nil {
 		return fmt.Errorf("complete idempotency attempt: %w", err)
 	}
-	err = c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+	err = s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		fresh, err := repositories.Incidents().Get(proposal.IncidentID())
 		if err != nil {
 			return err
@@ -287,7 +292,7 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 		if execution.Outcome() != domain.ExecutionSucceeded {
 			apply = (*domain.Incident).Fail
 		}
-		if _, err := c.transition(ctx, repositories, fresh, completedAt, apply, c.executionEvents(execution)); err != nil {
+		if _, err := s.transition(ctx, repositories, fresh, completedAt, apply, s.executionEvents(execution)); err != nil {
 			return err
 		}
 		if err := repositories.Executions().Save(execution); err != nil {
@@ -304,13 +309,13 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 // executionEvents audits a completed execution, then the incident outcome it
 // caused: verification starts, or the incident fails with the execution's
 // failure reason.
-func (c *workflow) executionEvents(execution domain.RollbackExecution) eventsFor {
+func (s *ExecutionService) executionEvents(execution domain.RollbackExecution) eventsFor {
 	return func(from, to domain.Status) []auditEvent {
-		completed := c.systemEvent(domain.EventExecutionCompleted, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()})
+		completed := s.systemEvent(domain.EventExecutionCompleted, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()})
 		if to == domain.StatusFailed {
-			return []auditEvent{completed, c.systemEvent(domain.EventIncidentFailed, domain.TerminalDetail{Reason: execution.FailureReason()})}
+			return []auditEvent{completed, s.systemEvent(domain.EventIncidentFailed, domain.TerminalDetail{Reason: execution.FailureReason()})}
 		}
-		return []auditEvent{completed, statusChangeEvent(c.systemActor, from, to)}
+		return []auditEvent{completed, statusChangeEvent(s.systemActor, from, to)}
 	}
 }
 
@@ -326,174 +331,13 @@ func validateExecutionResult(execution domain.RollbackExecution, proposal domain
 	return nil
 }
 
-// awaitRecovery evaluates recovery until it passes or the wait is used up,
-// and returns the passing or the last failing evaluation. The wait ends after
-// 1 + RecoveryTimeout/RecoveryPollInterval checks or once RecoveryTimeout has
-// elapsed on the workflow clock, whichever comes first, so slow checks cannot
-// stretch it past RecoveryTimeout.
-//
-// A check whose deployment or metric read fails is neither a pass nor a
-// failure: right after the pod switch the metric can be briefly unreadable,
-// so the wait continues. If the last allowed check also fails to read, or the
-// context ends, that error is returned. Nothing is persisted here, so on an
-// error the incident stays verifying and a retry of the approval resumes it.
-func (s *VerificationService) awaitRecovery(ctx context.Context, incident domain.Incident, proposal domain.RollbackProposal, execution domain.RollbackExecution) (domain.RecoveryVerification, error) {
-	c := s.workflow
-	checks := 1
-	if c.config.RecoveryTimeout > 0 {
-		checks += int(c.config.RecoveryTimeout / c.config.RecoveryPollInterval)
-	}
-	deadline := c.clock.Now().Add(c.config.RecoveryTimeout)
-	for check := 1; ; check++ {
-		verification, err := s.checkRecovery(ctx, incident, proposal, execution)
-		last := check >= checks || !c.clock.Now().Before(deadline)
-		if err == nil && (verification.Passed() || last) {
-			return verification, nil
-		}
-		if err != nil && (last || ctx.Err() != nil) {
-			return domain.RecoveryVerification{}, err
-		}
-		if err := waitFor(ctx, c.config.RecoveryPollInterval); err != nil {
-			return domain.RecoveryVerification{}, fmt.Errorf("await recovery: %w", err)
-		}
-	}
-}
-
-// checkRecovery reads the deployment and the recovery metric once and
-// evaluates them against the proposal's target revision.
-func (s *VerificationService) checkRecovery(ctx context.Context, incident domain.Incident, proposal domain.RollbackProposal, execution domain.RollbackExecution) (domain.RecoveryVerification, error) {
-	c := s.workflow
-	deployment, err := c.inspector.InspectDeployment(ctx, incident.Target())
-	if err != nil {
-		return domain.RecoveryVerification{}, fmt.Errorf("inspect recovery deployment: %w", err)
-	}
-	metric, err := c.metrics.Observe(ctx, incident.Target(), incident.Symptom())
-	if err != nil {
-		return domain.RecoveryVerification{}, fmt.Errorf("observe recovery metric: %w", err)
-	}
-	return domain.EvaluateRecovery(incident.Target(), proposal.TargetRevision(), deployment, metric, incident.Symptom(), incident.ID(), execution.ID(), c.clock.Now())
-}
-
-// waitFor blocks for d or until ctx ends, whichever comes first.
-func waitFor(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func (s *VerificationService) Verify(ctx context.Context, incidentID domain.IncidentID) (domain.RecoveryVerification, error) {
-	c := s.workflow
-	var incident domain.Incident
-	var proposal domain.RollbackProposal
-	var execution domain.RollbackExecution
-	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		var err error
-		incident, err = repositories.Incidents().Get(incidentID)
-		if err != nil {
-			return err
-		}
-		proposal, err = repositories.Proposals().GetByIncident(incidentID)
-		if err != nil {
-			return err
-		}
-		execution, err = repositories.Executions().GetByIncident(incidentID)
-		return err
-	})
-	if err != nil {
-		return domain.RecoveryVerification{}, fmt.Errorf("load recovery verification: %w", err)
-	}
-	if incident.Status() != domain.StatusVerifying {
-		return domain.RecoveryVerification{}, &domain.IllegalTransitionError{From: incident.Status(), To: domain.StatusResolved}
-	}
-
-	verification, err := s.awaitRecovery(ctx, incident, proposal, execution)
-	if err != nil {
-		return domain.RecoveryVerification{}, err
-	}
-	now := verification.CheckedAt()
-	err = c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		fresh, err := repositories.Incidents().Get(incidentID)
-		if err != nil {
-			return err
-		}
-		if fresh.Version() != incident.Version() {
-			return &domain.VersionConflictError{Expected: incident.Version(), Actual: fresh.Version()}
-		}
-		if err := repositories.Verifications().Save(verification); err != nil {
-			return err
-		}
-		if err := c.appendEvents(ctx, repositories, incidentID, now, c.systemEvent(domain.EventVerificationCompleted, domain.VerificationCompletedDetail{Passed: verification.Passed(), Revision: verification.Revision()})); err != nil {
-			return err
-		}
-		if verification.Passed() {
-			_, err = c.transition(ctx, repositories, fresh, now, (*domain.Incident).Resolve, statusChanged(c.systemActor))
-		} else {
-			_, err = c.transition(ctx, repositories, fresh, now, (*domain.Incident).Fail, terminated(c.systemActor, domain.EventIncidentFailed, verification.FailureReason()))
-		}
-		return err
-	})
-	if err != nil {
-		return domain.RecoveryVerification{}, fmt.Errorf("persist recovery verification: %w", err)
-	}
-	if !verification.Passed() {
-		return verification, fmt.Errorf("recovery verification failed: %s", verification.FailureReason())
-	}
-	return verification, nil
-}
-
-type CancelIncidentCommand struct {
-	IncidentID domain.IncidentID
-	Actor      domain.Actor
-	Reason     string
-}
-
-func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentCommand) (domain.Incident, error) {
-	if strings.TrimSpace(command.Reason) == "" {
-		return domain.Incident{}, &domain.ValidationError{Field: "cancel.reason", Reason: "must not be empty"}
-	}
-	c := s.workflow
-	now := c.clock.Now()
-	var result domain.Incident
-	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		incident, err := repositories.Incidents().Get(command.IncidentID)
-		if err != nil {
-			return err
-		}
-		incident, err = c.transition(ctx, repositories, incident, now, (*domain.Incident).Cancel, terminated(command.Actor, domain.EventIncidentCanceled, command.Reason))
-		if err != nil {
-			return err
-		}
-		dispatch, dispatchErr := repositories.InvestigationTasks().GetByIncident(command.IncidentID)
-		if dispatchErr == nil && !dispatch.State.Terminal() {
-			expectedDispatchVersion := dispatch.Version
-			dispatch.CancelPending(now)
-			if err := repositories.InvestigationTasks().Update(dispatch, expectedDispatchVersion); err != nil {
-				return err
-			}
-		} else if dispatchErr != nil && !errors.Is(dispatchErr, domain.ErrNotFound) {
-			return dispatchErr
-		}
-		result = incident
-		return nil
-	})
-	if err != nil {
-		return domain.Incident{}, fmt.Errorf("cancel incident: %w", err)
-	}
-	return result, nil
-}
-
 // terminateIfUnchanged applies a terminal transition and its audit event in
 // one transaction, but only while the incident is still at version. When the
 // incident has changed since then it writes nothing and returns nil: the
 // caller's failure belongs to a superseded view and the newer state wins.
-func (c *workflow) terminateIfUnchanged(ctx context.Context, incidentID domain.IncidentID, version uint64, apply func(*domain.Incident, time.Time) error, kind domain.EventKind, reason string) error {
-	now := c.clock.Now()
-	return c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
+func (s *ExecutionService) terminateIfUnchanged(ctx context.Context, incidentID domain.IncidentID, version uint64, apply func(*domain.Incident, time.Time) error, kind domain.EventKind, reason string) error {
+	now := s.clock.Now()
+	return s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		incident, err := repositories.Incidents().Get(incidentID)
 		if err != nil {
 			return err
@@ -501,28 +345,7 @@ func (c *workflow) terminateIfUnchanged(ctx context.Context, incidentID domain.I
 		if incident.Version() != version {
 			return nil
 		}
-		_, err = c.transition(ctx, repositories, incident, now, apply, terminated(c.systemActor, kind, reason))
-		return err
-	})
-}
-
-func (c *workflow) failAfterExternalError(ctx context.Context, incidentID domain.IncidentID, cause error) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CleanupTimeout)
-	defer cancel()
-	if err := c.failIncident(cleanupCtx, incidentID, investigationFailureAuditReason); err != nil {
-		return errors.Join(cause, err)
-	}
-	return cause
-}
-
-func (c *workflow) failIncident(ctx context.Context, incidentID domain.IncidentID, reason string) error {
-	now := c.clock.Now()
-	return c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		incident, err := repositories.Incidents().Get(incidentID)
-		if err != nil {
-			return err
-		}
-		_, err = c.transition(ctx, repositories, incident, now, (*domain.Incident).Fail, terminated(c.systemActor, domain.EventIncidentFailed, reason))
+		_, err = s.transition(ctx, repositories, incident, now, apply, terminated(s.systemActor, kind, reason))
 		return err
 	})
 }

@@ -37,21 +37,6 @@ type WorkflowConfig struct {
 	RecoveryPollInterval time.Duration
 }
 
-type workflow struct {
-	uow            ports.UnitOfWork
-	inspector      ports.DeploymentInspector
-	metrics        ports.MetricsPort
-	investigator   ports.Investigator
-	executor       ports.RollbackExecutor
-	rollbackPolicy ports.RollbackPolicy
-	approvalPolicy ports.ApprovalPolicy
-	clock          ports.Clock
-	ids            ports.IDGenerator
-	tracer         ports.Tracer
-	config         WorkflowConfig
-	systemActor    domain.Actor
-}
-
 func (c WorkflowConfig) validate() error {
 	if c.ProposalTTL <= 0 || c.ApprovalTTL <= 0 || c.CleanupTimeout <= 0 {
 		return &domain.ValidationError{Field: "workflow_config", Reason: "durations must be positive"}
@@ -77,13 +62,6 @@ type Services struct {
 	ApproveAndExecute *ApproveAndExecuteService
 }
 
-type IncidentService struct{ workflow *workflow }
-type InvestigationService struct{ workflow *workflow }
-type ApprovalService struct{ workflow *workflow }
-type ExecutionService struct{ workflow *workflow }
-type VerificationService struct{ workflow *workflow }
-type QueryService struct{ workflow *workflow }
-
 func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, error) {
 	if dependencies.UnitOfWork == nil || dependencies.Inspector == nil || dependencies.Metrics == nil || dependencies.Diagnoser == nil || dependencies.Executor == nil || dependencies.RollbackPolicy == nil || dependencies.ApprovalPolicy == nil || dependencies.Clock == nil || dependencies.IDGenerator == nil {
 		return Services{}, fmt.Errorf("all service dependencies are required")
@@ -99,17 +77,24 @@ func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, er
 	if tracer == nil {
 		tracer = ports.NoopTracer{}
 	}
-	w := &workflow{
-		tracer: tracer,
-		uow:    dependencies.UnitOfWork, inspector: dependencies.Inspector, metrics: dependencies.Metrics,
-		investigator: investigator, executor: dependencies.Executor, rollbackPolicy: dependencies.RollbackPolicy,
-		approvalPolicy: dependencies.ApprovalPolicy, clock: dependencies.Clock, ids: dependencies.IDGenerator,
-		config: config, systemActor: config.SystemActor,
-	}
+	trail := audit{ids: dependencies.IDGenerator, systemActor: config.SystemActor}
+	uow, clock := dependencies.UnitOfWork, dependencies.Clock
 	services := Services{
-		Incidents: &IncidentService{workflow: w}, Investigations: &InvestigationService{workflow: w},
-		Approvals: &ApprovalService{workflow: w}, Executions: &ExecutionService{workflow: w},
-		Verifications: &VerificationService{workflow: w}, Queries: &QueryService{workflow: w},
+		Incidents: &IncidentService{audit: trail, uow: uow, clock: clock, tracer: tracer},
+		Investigations: &InvestigationService{
+			audit: trail, uow: uow, clock: clock, investigator: investigator,
+			rollbackPolicy: dependencies.RollbackPolicy, proposalTTL: config.ProposalTTL, cleanupTimeout: config.CleanupTimeout,
+		},
+		Approvals: &ApprovalService{audit: trail, uow: uow, clock: clock, approvalTTL: config.ApprovalTTL},
+		Executions: &ExecutionService{
+			audit: trail, uow: uow, clock: clock, inspector: dependencies.Inspector, executor: dependencies.Executor,
+			approvalPolicy: dependencies.ApprovalPolicy, cleanupTimeout: config.CleanupTimeout,
+		},
+		Verifications: &VerificationService{
+			audit: trail, uow: uow, clock: clock, inspector: dependencies.Inspector, metrics: dependencies.Metrics,
+			recoveryTimeout: config.RecoveryTimeout, recoveryPollInterval: config.RecoveryPollInterval,
+		},
+		Queries: &QueryService{uow: uow},
 	}
 	services.ApproveAndExecute = &ApproveAndExecuteService{
 		approvals: services.Approvals, executions: services.Executions,

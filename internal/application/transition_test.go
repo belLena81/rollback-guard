@@ -12,7 +12,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/testkit"
 )
 
-func newTransitionFixture(t *testing.T) (*workflow, *memory.UnitOfWork, domain.Incident, time.Time) {
+func newTransitionFixture(t *testing.T) (audit, *memory.UnitOfWork, domain.Incident, time.Time) {
 	t.Helper()
 	now := time.Date(2026, 8, 3, 13, 0, 0, 0, time.UTC)
 	uow := memory.NewUnitOfWork()
@@ -28,7 +28,7 @@ func newTransitionFixture(t *testing.T) (*workflow, *memory.UnitOfWork, domain.I
 	if err := uow.WithinTransaction(context.Background(), func(r ports.Repositories) error { return r.Incidents().Create(incident) }); err != nil {
 		t.Fatal(err)
 	}
-	w := &workflow{uow: uow, clock: testkit.NewClock(now), ids: &testkit.IDGenerator{}, systemActor: mustActor(t, "guardian", domain.ActorSystem)}
+	w := audit{ids: &testkit.IDGenerator{}, systemActor: mustActor(t, "guardian", domain.ActorSystem)}
 	return w, uow, incident, now
 }
 

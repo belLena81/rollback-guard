@@ -9,6 +9,14 @@ import (
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
+// audit is what every service that changes an incident shares: the ID source
+// for audit events and the system actor that performs automated transitions.
+// Services embed it to get transition and appendEvents.
+type audit struct {
+	ids         ports.IDGenerator
+	systemActor domain.Actor
+}
+
 // auditEvent is one operation event to append for an incident. The event ID,
 // sequence, and time are assigned when it is appended.
 type auditEvent struct {
@@ -65,7 +73,7 @@ func terminated(actor domain.Actor, kind domain.EventKind, reason string) events
 // The incident write comes first: a concurrent request that already moved the
 // incident on fails here with a version conflict, before the caller writes
 // anything else that could collide with the winner's rows.
-func (c *workflow) transition(ctx context.Context, repositories ports.Repositories, incident domain.Incident, now time.Time, apply func(*domain.Incident, time.Time) error, events eventsFor) (domain.Incident, error) {
+func (a audit) transition(ctx context.Context, repositories ports.Repositories, incident domain.Incident, now time.Time, apply func(*domain.Incident, time.Time) error, events eventsFor) (domain.Incident, error) {
 	expected, from := incident.Version(), incident.Status()
 	if err := apply(&incident, now); err != nil {
 		return domain.Incident{}, err
@@ -73,20 +81,20 @@ func (c *workflow) transition(ctx context.Context, repositories ports.Repositori
 	if err := repositories.Incidents().Update(incident, expected); err != nil {
 		return domain.Incident{}, err
 	}
-	if err := c.appendEvents(ctx, repositories, incident.ID(), now, events(from, incident.Status())...); err != nil {
+	if err := a.appendEvents(ctx, repositories, incident.ID(), now, events(from, incident.Status())...); err != nil {
 		return domain.Incident{}, err
 	}
 	return incident, nil
 }
 
 // appendEvents appends the events to the incident's audit trail in order.
-func (c *workflow) appendEvents(ctx context.Context, repositories ports.Repositories, incidentID domain.IncidentID, now time.Time, events ...auditEvent) error {
+func (a audit) appendEvents(ctx context.Context, repositories ports.Repositories, incidentID domain.IncidentID, now time.Time, events ...auditEvent) error {
 	for _, e := range events {
 		sequence, err := repositories.Events().NextSequence(ctx, incidentID)
 		if err != nil {
 			return fmt.Errorf("get next event sequence: %w", err)
 		}
-		event, err := domain.NewOperationEvent(domain.EventID(c.ids.NewID("event")), incidentID, sequence, e.kind, now, e.actor, e.detail)
+		event, err := domain.NewOperationEvent(domain.EventID(a.ids.NewID("event")), incidentID, sequence, e.kind, now, e.actor, e.detail)
 		if err != nil {
 			return err
 		}
@@ -97,7 +105,7 @@ func (c *workflow) appendEvents(ctx context.Context, repositories ports.Reposito
 	return nil
 }
 
-// systemEvent is an audit event performed by the workflow's system actor.
-func (c *workflow) systemEvent(kind domain.EventKind, detail domain.EventDetail) auditEvent {
-	return auditEvent{kind: kind, actor: c.systemActor, detail: detail}
+// systemEvent is an audit event performed by the system actor.
+func (a audit) systemEvent(kind domain.EventKind, detail domain.EventDetail) auditEvent {
+	return auditEvent{kind: kind, actor: a.systemActor, detail: detail}
 }

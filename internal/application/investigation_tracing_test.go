@@ -59,7 +59,7 @@ func TestCreateIncidentAsyncPersistsRequestTraceCarrier(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			services, _, target, symptom, actor := asyncHarness(t)
-			services.Incidents.workflow.tracer = &recordingTracer{requestTrace: test.requestTrace}
+			services.Incidents.tracer = &recordingTracer{requestTrace: test.requestTrace}
 			incident, err := services.Incidents.CreateIncidentAsync(context.Background(), CreateIncidentCommand{Target: target, Symptom: symptom, Actor: actor})
 			if err != nil {
 				t.Fatal(err)
@@ -79,7 +79,7 @@ func TestCoordinatorResumesPersistedTraceWithCorrelation(t *testing.T) {
 	services, coordinator, target, symptom, actor := asyncHarness(t)
 	const requestTrace = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 	tracer := &recordingTracer{requestTrace: requestTrace}
-	services.Incidents.workflow.tracer = tracer
+	services.Incidents.tracer = tracer
 	coordinator.config.Tracer = tracer
 	gateway, ok := coordinator.gateway.(*localInvestigationGateway)
 	if !ok {
