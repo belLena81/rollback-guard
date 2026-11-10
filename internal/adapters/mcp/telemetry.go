@@ -79,7 +79,7 @@ func (c observedCaller) CallTool(ctx context.Context, params *mcpsdk.CallToolPar
 	ctx, finish := c.observer.ObserveToolCall(ctx, c.server, tool)
 	result, err := c.next.CallTool(ctx, params)
 	finish(callOutcome(result, err))
-	return result, err
+	return result, err //nolint:wrapcheck // decorator: the wrapped Caller owns the error
 }
 
 func callOutcome(result *mcpsdk.CallToolResult, err error) string {

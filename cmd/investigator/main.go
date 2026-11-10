@@ -43,16 +43,16 @@ func main() {
 func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 	cfg, err := config.LoadInvestigator()
 	if err != nil {
-		return err
+		return fmt.Errorf("load investigator: %w", err)
 	}
 	tel, stopTelemetry, err := bootstrap.StartTelemetry(ctx, cfg.Telemetry, logger, level)
 	if err != nil {
-		return err
+		return fmt.Errorf("start telemetry: %w", err)
 	}
 	defer stopTelemetry()
 	pool, err := bootstrap.NewPool(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
-		return err
+		return fmt.Errorf("connect database: %w", err)
 	}
 	defer pool.Close()
 	clients, err := buildMCP(ctx, cfg, tel, logger)
@@ -66,7 +66,7 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 	}
 	ready := func(ctx context.Context) error {
 		if err := pool.Ping(ctx); err != nil {
-			return err
+			return fmt.Errorf("ping database: %w", err)
 		}
 		return clients.ping(ctx)
 	}
@@ -75,7 +75,10 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 		return err
 	}
 	logger.Info("investigator agent card", "public_url", cfg.PublicURL)
-	return httpserver.Serve(ctx, httpserver.Config{Name: serviceName, Addr: cfg.HTTPAddr}, handler, logger)
+	if err := httpserver.Serve(ctx, httpserver.Config{Name: serviceName, Addr: cfg.HTTPAddr}, handler, logger); err != nil {
+		return fmt.Errorf("serve investigator: %w", err)
+	}
+	return nil
 }
 
 // mcpClients are the investigator's two read-only MCP sessions.
@@ -91,9 +94,12 @@ func (c mcpClients) close(logger *slog.Logger) {
 
 func (c mcpClients) ping(ctx context.Context) error {
 	if err := c.read.Ping(ctx); err != nil {
-		return err
+		return fmt.Errorf("ping mcp server: %w", err)
 	}
-	return c.observability.Ping(ctx)
+	if err := c.observability.Ping(ctx); err != nil {
+		return fmt.Errorf("ping observability mcp: %w", err)
+	}
+	return nil
 }
 
 // buildMCP connects the two MCP sessions the investigator collects evidence
@@ -116,14 +122,17 @@ func buildMCP(ctx context.Context, cfg config.InvestigatorConfig, tel *telemetry
 		Tools:    mcpadapter.KubernetesReadonlyCatalog(),
 	})
 	if err != nil {
-		return clients, err
+		return clients, fmt.Errorf("connect mcp: %w", err)
 	}
 	clients.observability, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientInvestigator, httpClient, bootstrap.MCPServer{
 		Name:     "observability",
 		Endpoint: cfg.ObservabilityMCPURL,
 		Tools:    mcpadapter.ObservabilityCatalog(),
 	})
-	return clients, err
+	if err != nil {
+		return clients, fmt.Errorf("connect observability mcp: %w", err)
+	}
+	return clients, nil
 }
 
 // buildServices wires the investigation use case: evidence through MCP,
@@ -131,35 +140,35 @@ func buildMCP(ctx context.Context, cfg config.InvestigatorConfig, tel *telemetry
 func buildServices(cfg config.InvestigatorConfig, pool *pgxpool.Pool, clients mcpClients, tel *telemetry.Provider) (ports.Investigator, error) {
 	read, err := bootstrap.ObservedCalls(clients.read, cfg.MCPCallTimeout, mcpadapter.ServerKubernetesReadonly, tel)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("observe mcp calls: %w", err)
 	}
 	observability, err := bootstrap.ObservedCalls(clients.observability, cfg.MCPCallTimeout, mcpadapter.ServerObservability, tel)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("observe mcp calls: %w", err)
 	}
 	rawInspector, err := mcpadapter.NewDeploymentInspector(read)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create deployment inspector: %w", err)
 	}
 	rawMetrics, err := mcpadapter.NewMetricsAdapter(observability, cfg.MetricsWindow)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create metrics adapter: %w", err)
 	}
 	readProtector, err := bootstrap.NewProtector(resilience.DependencyKubernetesReadonlyMCP, cfg.Resilience, tel)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create protector: %w", err)
 	}
 	observabilityProtector, err := bootstrap.NewProtector(resilience.DependencyObservabilityMCP, cfg.Resilience, tel)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create protector: %w", err)
 	}
 	inspector, err := resilience.NewInspector(rawInspector, readProtector)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("protect deployment inspector: %w", err)
 	}
 	metrics, err := resilience.NewMetrics(rawMetrics, observabilityProtector)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("protect metrics port: %w", err)
 	}
 	ids := &runtime.IDGenerator{}
 	// The LLM provider client is deliberately not traced: its requests carry
@@ -170,17 +179,21 @@ func buildServices(cfg config.InvestigatorConfig, pool *pgxpool.Pool, clients mc
 	}
 	diagnoser, err := tel.ObserveDiagnoser(strategyDiagnoser, cfg.DiagnosisStrategy)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("observe diagnoser provider: %w", err)
 	}
 	runner, err := application.NewInvestigationRunner(inspector, metrics, diagnoser, runtime.Clock{}, ids)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create investigation runner: %w", err)
 	}
 	ledger, err := postgres.NewInvestigationRequestLedger(pool)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create investigation request ledger: %w", err)
 	}
-	return a2aadapter.NewIdempotentInvestigator(ledger, runner, cfg.TaskTimeout, runtime.Clock{})
+	investigator, err := a2aadapter.NewIdempotentInvestigator(ledger, runner, cfg.TaskTimeout, runtime.Clock{})
+	if err != nil {
+		return nil, fmt.Errorf("create idempotent investigator: %w", err)
+	}
+	return investigator, nil
 }
 
 // buildHTTP assembles the A2A server with durable task storage.
@@ -194,11 +207,11 @@ func buildHTTP(
 ) (http.Handler, error) {
 	records, err := postgres.NewA2ATaskRecords(pool)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create a2a task records: %w", err)
 	}
 	store, err := a2aadapter.NewDurableTaskStore(records, runtime.Clock{})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create durable task store: %w", err)
 	}
 	handler, err := a2aadapter.NewServerHandler(investigator, store, logger, a2aadapter.ServerConfig{
 		PublicURL:    cfg.PublicURL,
@@ -209,7 +222,7 @@ func buildHTTP(
 		Metrics:      tel.MetricsHandler(),
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create server handler: %w", err)
 	}
 	return tel.InstrumentServer(handler, a2aadapter.RouteOf), nil
 }
@@ -225,7 +238,7 @@ func newDiagnoser(
 ) (ports.Diagnoser, error) {
 	rules, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: cfg.RuleCorrelationWindow})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create rule diagnoser: %w", err)
 	}
 	if cfg.DiagnosisStrategy == domain.StrategyRules {
 		return rules, nil
@@ -235,15 +248,15 @@ func newDiagnoser(
 		MaxOutputTokens: cfg.LLMMaxOutputTokens, HTTPClient: providerHTTPClient,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create open ai compatible reasoner: %w", err)
 	}
 	llmProtector, err := bootstrap.NewLLMProtector(cfg.Resilience, observer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create llm protector: %w", err)
 	}
 	reasoner, err := resilience.NewReasoner(rawReasoner, llmProtector)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create reasoner: %w", err)
 	}
 	modelConfig := application.ModelDiagnoserConfig{
 		Model: cfg.LLMModel, PromptVersion: application.DiagnosisPromptVersion, Timeout: cfg.LLMTimeout,
@@ -252,10 +265,19 @@ func newDiagnoser(
 	case domain.StrategyRules:
 		return rules, nil
 	case domain.StrategyLLM:
-		return application.NewLLMDiagnoser(reasoner, rules, ids, modelConfig)
+		return wrapDiagnoser(application.NewLLMDiagnoser(reasoner, rules, ids, modelConfig))
 	case domain.StrategyHybrid:
-		return application.NewHybridDiagnoser(reasoner, rules, ids, modelConfig)
+		return wrapDiagnoser(application.NewHybridDiagnoser(reasoner, rules, ids, modelConfig))
 	default:
 		return nil, fmt.Errorf("unsupported diagnosis strategy %q", cfg.DiagnosisStrategy)
 	}
+}
+
+// wrapDiagnoser adds the operation name to a diagnoser constructor failure and
+// keeps a nil concrete pointer from becoming a non-nil interface.
+func wrapDiagnoser[T ports.Diagnoser](diagnoser T, err error) (ports.Diagnoser, error) {
+	if err != nil {
+		return nil, fmt.Errorf("create model diagnoser: %w", err)
+	}
+	return diagnoser, nil
 }

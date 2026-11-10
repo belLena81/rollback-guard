@@ -4,6 +4,7 @@ package mcptest
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"slices"
 	"sync"
@@ -88,6 +89,8 @@ func NewSlowServer(t *testing.T, delay time.Duration, tools ...string) *Server {
 // Call invokes tool with empty arguments on client and reports only whether
 // the call completed, so callers outside the adapter need no SDK types.
 func Call(ctx context.Context, client *protocol.Client, tool string) error {
-	_, err := client.CallTool(ctx, &mcpsdk.CallToolParams{Name: tool, Arguments: input{}})
-	return err
+	if _, err := client.CallTool(ctx, &mcpsdk.CallToolParams{Name: tool, Arguments: input{}}); err != nil {
+		return fmt.Errorf("call mcp tool %q: %w", tool, err)
+	}
+	return nil
 }

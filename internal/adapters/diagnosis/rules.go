@@ -3,6 +3,7 @@ package diagnosis
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -30,7 +31,7 @@ func NewRuleDiagnoser(ids ports.IDGenerator, config RuleDiagnoserConfig) (*RuleD
 
 func (d *RuleDiagnoser) Diagnose(ctx context.Context, input ports.InvestigationInput) (domain.InvestigationConclusion, error) {
 	if err := ctx.Err(); err != nil {
-		return domain.InvestigationConclusion{}, err
+		return domain.InvestigationConclusion{}, fmt.Errorf("context ended: %w", err)
 	}
 
 	delta := input.Incident.Symptom().StartedAt().Sub(input.Deployment.RolloutAt)

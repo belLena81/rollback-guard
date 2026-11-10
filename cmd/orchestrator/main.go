@@ -43,25 +43,25 @@ func main() {
 func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		return fmt.Errorf("load: %w", err)
 	}
 	tel, stopTelemetry, err := bootstrap.StartTelemetry(ctx, cfg.Telemetry, logger, level)
 	if err != nil {
-		return err
+		return fmt.Errorf("start telemetry: %w", err)
 	}
 	defer stopTelemetry()
 	pool, err := bootstrap.NewPool(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
-		return err
+		return fmt.Errorf("connect database: %w", err)
 	}
 	defer pool.Close()
 	store, err := postgres.NewUnitOfWork(pool)
 	if err != nil {
-		return err
+		return fmt.Errorf("create unit of work: %w", err)
 	}
 	uow, err := tel.ObserveUnitOfWork(store)
 	if err != nil {
-		return err
+		return fmt.Errorf("observe unit of work provider: %w", err)
 	}
 	clients, err := buildMCP(ctx, cfg, tel, logger)
 	if err != nil {
@@ -79,7 +79,7 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 	defer closeGateway()
 	ready := func(ctx context.Context) error {
 		if err := pool.Ping(ctx); err != nil {
-			return err
+			return fmt.Errorf("ping database: %w", err)
 		}
 		return clients.ping(ctx)
 	}
@@ -106,7 +106,7 @@ func (c mcpClients) close(logger *slog.Logger) {
 func (c mcpClients) ping(ctx context.Context) error {
 	for _, client := range []*mcpadapter.Client{c.read, c.write, c.observability} {
 		if err := client.Ping(ctx); err != nil {
-			return err
+			return fmt.Errorf("ping mcp server: %w", err)
 		}
 	}
 	return nil
@@ -132,7 +132,7 @@ func buildMCP(ctx context.Context, cfg config.Config, tel *telemetry.Provider, l
 		Tools:    mcpadapter.KubernetesReadonlyCatalog(),
 	})
 	if err != nil {
-		return clients, err
+		return clients, fmt.Errorf("connect mcp: %w", err)
 	}
 	clients.write, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientOrchestrator, httpClient, bootstrap.MCPServer{
 		Name:     "rollback kubernetes",
@@ -140,68 +140,71 @@ func buildMCP(ctx context.Context, cfg config.Config, tel *telemetry.Provider, l
 		Tools:    mcpadapter.KubernetesRollbackCatalog(),
 	})
 	if err != nil {
-		return clients, err
+		return clients, fmt.Errorf("connect mcp: %w", err)
 	}
 	clients.observability, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientOrchestrator, httpClient, bootstrap.MCPServer{
 		Name:     "observability",
 		Endpoint: cfg.ObservabilityMCPURL,
 		Tools:    mcpadapter.ObservabilityCatalog(),
 	})
-	return clients, err
+	if err != nil {
+		return clients, fmt.Errorf("connect observability mcp: %w", err)
+	}
+	return clients, nil
 }
 
 // buildServices wires the application use cases onto the MCP-backed ports.
 func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, tel *telemetry.Provider) (application.Services, error) {
 	read, err := bootstrap.ObservedCalls(clients.read, cfg.MCPCallTimeout, mcpadapter.ServerKubernetesReadonly, tel)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("observe mcp calls: %w", err)
 	}
 	write, err := bootstrap.ObservedCalls(clients.write, cfg.MCPCallTimeout, mcpadapter.ServerKubernetesRollback, tel)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("observe mcp calls: %w", err)
 	}
 	observability, err := bootstrap.ObservedCalls(clients.observability, cfg.MCPCallTimeout, mcpadapter.ServerObservability, tel)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("observe mcp calls: %w", err)
 	}
 	inspector, err := mcpadapter.NewDeploymentInspector(read)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("create deployment inspector: %w", err)
 	}
 	metrics, err := mcpadapter.NewMetricsAdapter(observability, cfg.MetricsWindow)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("create metrics adapter: %w", err)
 	}
 	executor, err := mcpadapter.NewRollbackExecutor(write, read, cfg.MCPWatchTimeout, runtime.Clock{})
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("create rollback executor: %w", err)
 	}
 	// Reads retry transient failures behind one breaker per MCP server; the
 	// rollback executor gets only the narrow not-sent retry (see
 	// resilience.NewExecutor).
 	readProtector, err := bootstrap.NewProtector(resilience.DependencyKubernetesReadonlyMCP, cfg.Resilience, tel)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("create protector: %w", err)
 	}
 	observabilityProtector, err := bootstrap.NewProtector(resilience.DependencyObservabilityMCP, cfg.Resilience, tel)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("create protector: %w", err)
 	}
 	mutationRetrier, err := bootstrap.NewMutationRetrier(resilience.DependencyKubernetesRollbackMCP, cfg.Resilience, tel)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("create mutation retrier: %w", err)
 	}
 	protectedInspector, err := resilience.NewInspector(inspector, readProtector)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("protect deployment inspector: %w", err)
 	}
 	protectedMetrics, err := resilience.NewMetrics(metrics, observabilityProtector)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("protect metrics port: %w", err)
 	}
 	protectedExecutor, err := resilience.NewExecutor(executor, mutationRetrier)
 	if err != nil {
-		return application.Services{}, err
+		return application.Services{}, fmt.Errorf("create executor: %w", err)
 	}
 	ids := &runtime.IDGenerator{}
 	policy, err := domain.NewEligibilityPolicy(domain.EligibilityPolicyConfig{
@@ -216,7 +219,7 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 	if err != nil {
 		return application.Services{}, err
 	}
-	return application.NewServices(application.Dependencies{
+	services, err := application.NewServices(application.Dependencies{
 		UnitOfWork:     uow,
 		Inspector:      protectedInspector,
 		Metrics:        protectedMetrics,
@@ -234,6 +237,10 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 		RecoveryTimeout:      cfg.RecoveryTimeout,
 		RecoveryPollInterval: cfg.RecoveryPollInterval,
 	})
+	if err != nil {
+		return application.Services{}, fmt.Errorf("create application services: %w", err)
+	}
+	return services, nil
 }
 
 // buildCoordinator connects the investigator over A2A and builds the
@@ -261,18 +268,18 @@ func buildCoordinator(
 	observedGateway, err := tel.ObserveGateway(a2aGateway)
 	if err != nil {
 		closeGateway()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("observe gateway provider: %w", err)
 	}
 	a2aProtector, err := bootstrap.NewProtector(resilience.DependencyA2AInvestigator, cfg.Resilience, tel)
 	if err != nil {
 		closeGateway()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("create protector: %w", err)
 	}
 	// Outside the observed gateway, so every attempt is counted as a call.
 	gateway, err := resilience.NewGateway(observedGateway, a2aProtector)
 	if err != nil {
 		closeGateway()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("create gateway: %w", err)
 	}
 	coordinator, err := application.NewInvestigationCoordinator(
 		uow,
@@ -294,7 +301,7 @@ func buildCoordinator(
 	)
 	if err != nil {
 		closeGateway()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("create investigation coordinator: %w", err)
 	}
 	return coordinator, closeGateway, nil
 }
@@ -313,11 +320,11 @@ func buildHTTP(
 	}
 	auth, err := httpserver.NewLocalAuthMiddleware(localActor)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create local auth middleware: %w", err)
 	}
 	api, err := httpapi.NewServer(services, logger, httpapi.WithRouteMiddleware(tel.Route), httpapi.WithMetricsHandler(tel.MetricsHandler()))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create api server: %w", err)
 	}
 	return api.Routes(ready, cfg.DBPingTimeout, auth), nil
 }

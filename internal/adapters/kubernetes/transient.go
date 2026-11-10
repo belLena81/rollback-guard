@@ -15,7 +15,7 @@ func MarkTransientAPIError(err error) error {
 	}
 	if apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err) ||
 		apierrors.IsServiceUnavailable(err) || apierrors.IsInternalError(err) {
-		return resilience.MarkTransient(err)
+		return resilience.MarkTransient(err) //nolint:wrapcheck // decorator: original error passes through for classification
 	}
 	return err
 }

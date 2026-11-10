@@ -2,6 +2,7 @@ package observabilityserver
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -19,7 +20,7 @@ func metricHandler(backend Backend, kind domain.SymptomKind) mcp.ToolHandlerFor[
 		}
 		target, err := input.Target.Domain()
 		if err != nil {
-			return protocol.MetricOutput{}, err
+			return protocol.MetricOutput{}, fmt.Errorf("convert target: %w", err)
 		}
 		sample, err := backend.QueryMetric(
 			ctx,
@@ -27,7 +28,7 @@ func metricHandler(backend Backend, kind domain.SymptomKind) mcp.ToolHandlerFor[
 			metricsprom.QueryRequest{Kind: kind, Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: 0.95},
 		)
 		if err != nil {
-			return protocol.MetricOutput{}, err
+			return protocol.MetricOutput{}, fmt.Errorf("query metric backend: %w", err)
 		}
 		return metricOutput(sample), nil
 	})
@@ -41,7 +42,7 @@ func compareWindows(backend Backend) mcp.ToolHandlerFor[protocol.CompareWindowsI
 		}
 		target, err := input.Target.Domain()
 		if err != nil {
-			return protocol.CompareWindowsOutput{}, err
+			return protocol.CompareWindowsOutput{}, fmt.Errorf("convert target: %w", err)
 		}
 		current, err := backend.QueryMetric(
 			ctx,
@@ -49,7 +50,7 @@ func compareWindows(backend Backend) mcp.ToolHandlerFor[protocol.CompareWindowsI
 			metricsprom.QueryRequest{Kind: domain.SymptomHTTPErrorRate, Window: time.Duration(input.CurrentWindowSeconds) * time.Second},
 		)
 		if err != nil {
-			return protocol.CompareWindowsOutput{}, err
+			return protocol.CompareWindowsOutput{}, fmt.Errorf("query metric backend: %w", err)
 		}
 		baseline, err := backend.QueryMetric(
 			ctx,
@@ -61,7 +62,7 @@ func compareWindows(backend Backend) mcp.ToolHandlerFor[protocol.CompareWindowsI
 			},
 		)
 		if err != nil {
-			return protocol.CompareWindowsOutput{}, err
+			return protocol.CompareWindowsOutput{}, fmt.Errorf("query metric backend: %w", err)
 		}
 		return protocol.CompareWindowsOutput{Current: metricOutput(current), Baseline: metricOutput(baseline), Delta: current.Value - baseline.Value}, nil
 	})
@@ -78,7 +79,7 @@ func latency(backend Backend) mcp.ToolHandlerFor[protocol.LatencyInput, protocol
 		}
 		target, err := input.Target.Domain()
 		if err != nil {
-			return protocol.MetricOutput{}, err
+			return protocol.MetricOutput{}, fmt.Errorf("convert target: %w", err)
 		}
 		sample, err := backend.QueryMetric(
 			ctx,
@@ -86,7 +87,7 @@ func latency(backend Backend) mcp.ToolHandlerFor[protocol.LatencyInput, protocol
 			metricsprom.QueryRequest{Kind: domain.SymptomRequestLatency, Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: percentile},
 		)
 		if err != nil {
-			return protocol.MetricOutput{}, err
+			return protocol.MetricOutput{}, fmt.Errorf("query metric backend: %w", err)
 		}
 		return metricOutput(sample), nil
 	})
@@ -105,7 +106,7 @@ func evaluateRecovery(backend Backend) mcp.ToolHandlerFor[protocol.RecoveryInput
 		}
 		target, err := input.Target.Domain()
 		if err != nil {
-			return protocol.RecoveryOutput{}, err
+			return protocol.RecoveryOutput{}, fmt.Errorf("convert target: %w", err)
 		}
 		sample, err := backend.QueryMetric(
 			ctx,
@@ -113,7 +114,7 @@ func evaluateRecovery(backend Backend) mcp.ToolHandlerFor[protocol.RecoveryInput
 			metricsprom.QueryRequest{Kind: domain.SymptomKind(input.MetricKind), Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: 0.95},
 		)
 		if err != nil {
-			return protocol.RecoveryOutput{}, err
+			return protocol.RecoveryOutput{}, fmt.Errorf("query metric backend: %w", err)
 		}
 		if sample.Unit != input.Unit || input.Threshold <= 0 {
 			return protocol.RecoveryOutput{}, &domain.ValidationError{Field: "recovery.metric", Reason: "unit or threshold is invalid"}

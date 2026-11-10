@@ -25,7 +25,7 @@ func NewUnitOfWork(pool *pgxpool.Pool) (*UnitOfWork, error) {
 
 func (u *UnitOfWork) WithinTransaction(ctx context.Context, fn func(ports.Repositories) error) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("context ended: %w", err)
 	}
 	// pgx.BeginFunc rolls back in a deferred call, so a panicking callback
 	// still ends the transaction and returns the connection to the pool.
@@ -46,7 +46,7 @@ func (u *UnitOfWork) WithinTransaction(ctx context.Context, fn func(ports.Reposi
 	case finished:
 		return fmt.Errorf("commit transaction: %w", err)
 	default:
-		return err
+		return err //nolint:wrapcheck // callback error keeps its domain identity; callers match it with errors.As
 	}
 }
 

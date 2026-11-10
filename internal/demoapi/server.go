@@ -124,7 +124,7 @@ func (h *workHandler) writeText(w http.ResponseWriter, r *http.Request, status i
 // SleepContext waits for d or until ctx is done, whichever comes first.
 func SleepContext(ctx context.Context, d time.Duration) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("context ended: %w", err)
 	}
 	if d <= 0 {
 		return nil
@@ -133,7 +133,7 @@ func SleepContext(ctx context.Context, d time.Duration) error {
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("context ended: %w", ctx.Err())
 	case <-timer.C:
 		return nil
 	}

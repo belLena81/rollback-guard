@@ -449,11 +449,11 @@ func strictDecode(value any, target any) error {
 func dataMap(value any) (map[string]any, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal wire payload: %w", err)
 	}
 	var result map[string]any
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unmarshal wire payload: %w", err)
 	}
 	return result, nil
 }

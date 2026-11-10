@@ -38,11 +38,11 @@ func BoundCalls(caller Caller, timeout time.Duration) (Caller, error) {
 
 func (c boundedCaller) CallTool(ctx context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
 	if params != nil && params.Name == ToolWatchRollout {
-		return c.next.CallTool(ctx, params)
+		return c.next.CallTool(ctx, params) //nolint:wrapcheck // decorator: the wrapped Caller owns the error
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	return c.next.CallTool(callCtx, params)
+	return c.next.CallTool(callCtx, params) //nolint:wrapcheck // decorator: the wrapped Caller owns the error
 }
 
 // MCP client implementation names, one per process that connects to the MCP
@@ -78,15 +78,25 @@ func Connect(ctx context.Context, endpoint string, httpClient *http.Client, clie
 }
 
 func (c *Client) CallTool(ctx context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
-	return c.session.CallTool(ctx, params)
+	result, err := c.session.CallTool(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("call mcp tool: %w", err)
+	}
+	return result, nil
 }
 
 func (c *Client) Ping(ctx context.Context) error {
-	return c.session.Ping(ctx, nil)
+	if err := c.session.Ping(ctx, nil); err != nil {
+		return fmt.Errorf("ping mcp session: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) Close() error {
-	return c.session.Close()
+	if err := c.session.Close(); err != nil {
+		return fmt.Errorf("close mcp session: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) RequireTools(ctx context.Context, expected []string) error {

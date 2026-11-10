@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -134,7 +135,7 @@ func (p RollbackProposal) computeHash() (ProposalHash, error) {
 	}
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("marshal proposal: %w", err)
 	}
 	sum := sha256.Sum256(encoded)
 	return ProposalHash(hex.EncodeToString(sum[:])), nil

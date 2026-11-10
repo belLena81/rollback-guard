@@ -98,7 +98,7 @@ func (r *OpenAICompatibleReasoner) Reason(ctx context.Context, request ports.Rea
 	})
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ports.ReasoningResult{}, ctxErr
+			return ports.ReasoningResult{}, fmt.Errorf("context ended: %w", ctxErr)
 		}
 		var sizeErr *http.MaxBytesError
 		if errors.As(err, &sizeErr) {
@@ -221,7 +221,11 @@ func encodeReasoningPrompt(request ports.ReasoningRequest) ([]byte, error) {
 			EvidenceIDs: request.RuleCandidate.EvidenceIDs, Recommendation: request.RuleCandidate.Recommendation,
 		}
 	}
-	return json.Marshal(prompt)
+	encoded, err := json.Marshal(prompt)
+	if err != nil {
+		return nil, fmt.Errorf("marshal reasoning prompt: %w", err)
+	}
+	return encoded, nil
 }
 
 func diagnosisSchema() map[string]any {
@@ -242,7 +246,7 @@ func strictDecodeCandidate(content string, target *reasoningCandidateDTO) error 
 	var fields map[string]json.RawMessage
 	fieldDecoder := json.NewDecoder(bytes.NewBufferString(content))
 	if err := fieldDecoder.Decode(&fields); err != nil {
-		return err
+		return fmt.Errorf("decode provider response: %w", err)
 	}
 	for _, name := range []string{"hypothesis", "confidence", "evidence_ids", "recommendation"} {
 		value, exists := fields[name]
@@ -253,7 +257,7 @@ func strictDecodeCandidate(content string, target *reasoningCandidateDTO) error 
 	decoder := json.NewDecoder(bytes.NewBufferString(content))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		return err
+		return fmt.Errorf("decode provider response: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.New("response contains trailing JSON")
@@ -272,7 +276,7 @@ func (t *boundedResponseTransport) RoundTrip(request *http.Request) (*http.Respo
 	if response != nil && response.Body != nil {
 		response.Body = http.MaxBytesReader(nil, response.Body, maxProviderResponseBytes)
 	}
-	return response, err
+	return response, err //nolint:wrapcheck // RoundTripper decorator: the transport error passes through unchanged
 }
 
 var _ ports.Reasoner = (*OpenAICompatibleReasoner)(nil)

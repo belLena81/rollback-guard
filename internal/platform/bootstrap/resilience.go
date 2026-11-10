@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"fmt"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 )
@@ -18,16 +19,20 @@ func newProtector(dependency resilience.Dependency, cfg config.ResilienceConfig,
 	timing := resilience.SystemTiming()
 	retrier, err := resilience.NewRetrier(dependency, retryPolicy(cfg, attempts), timing, observer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create retrier: %w", err)
 	}
 	breaker, err := resilience.NewBreaker(dependency, resilience.BreakerConfig{
 		FailureThreshold: cfg.BreakerFailureThreshold,
 		OpenTimeout:      cfg.BreakerOpenTimeout,
 	}, timing.Now, observer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create breaker: %w", err)
 	}
-	return resilience.NewProtector(retrier, breaker)
+	protector, err := resilience.NewProtector(retrier, breaker)
+	if err != nil {
+		return nil, fmt.Errorf("create protector: %w", err)
+	}
+	return protector, nil
 }
 
 // NewProtector builds the retry-plus-breaker protection for one external
@@ -45,5 +50,9 @@ func NewLLMProtector(cfg config.ResilienceConfig, observer resilience.Observer) 
 
 // NewMutationRetrier builds the retrier for resilience.NewExecutor.
 func NewMutationRetrier(dependency resilience.Dependency, cfg config.ResilienceConfig, observer resilience.Observer) (*resilience.Retrier, error) {
-	return resilience.NewRetrier(dependency, retryPolicy(cfg, min(cfg.RetryMaxAttempts, maxMutationAttempts)), resilience.SystemTiming(), observer)
+	retrier, err := resilience.NewRetrier(dependency, retryPolicy(cfg, min(cfg.RetryMaxAttempts, maxMutationAttempts)), resilience.SystemTiming(), observer)
+	if err != nil {
+		return nil, fmt.Errorf("create mutation retrier: %w", err)
+	}
+	return retrier, nil
 }

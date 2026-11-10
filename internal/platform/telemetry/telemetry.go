@@ -105,10 +105,10 @@ func New(ctx context.Context, settings Settings, opts ...Option) (*Provider, err
 	}
 	registry := prometheus.NewRegistry()
 	if err := registry.Register(collectors.NewGoCollector()); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("register telemetry metrics: %w", err)
 	}
 	if err := registry.Register(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("register telemetry metrics: %w", err)
 	}
 	m, err := newMetrics(registry)
 	if err != nil {
@@ -116,7 +116,7 @@ func New(ctx context.Context, settings Settings, opts ...Option) (*Provider, err
 	}
 	res, err := resource.Merge(resource.Empty(), resource.NewSchemaless(attribute.String("service.name", settings.ServiceName)))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("merge telemetry resource: %w", err)
 	}
 	providerOptions := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(res),

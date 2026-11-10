@@ -79,9 +79,13 @@ func ObservedCalls(client *mcpadapter.Client, timeout time.Duration, server stri
 	}
 	bounded, err := mcpadapter.BoundCalls(client, timeout)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("bound mcp calls: %w", err)
 	}
-	return mcpadapter.ObserveCalls(bounded, server, observer)
+	observed, err := mcpadapter.ObserveCalls(bounded, server, observer)
+	if err != nil {
+		return nil, fmt.Errorf("observe mcp calls: %w", err)
+	}
+	return observed, nil
 }
 
 // CloseMCP closes client (a nil client is ignored) and logs a failure under
@@ -106,7 +110,7 @@ func StartTelemetry(ctx context.Context, cfg config.TelemetryConfig, logger *slo
 	level.Set(cfg.LogLevel)
 	provider, err := telemetry.New(ctx, telemetry.SettingsFrom(cfg), telemetry.WithLogger(logger))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("create telemetry provider: %w", err)
 	}
 	stop := func() {
 		// ctx is cancelled by the exit signal, which must not cut the flush short; the

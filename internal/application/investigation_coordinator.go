@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -76,7 +77,7 @@ func (c *InvestigationCoordinator) Run(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("context ended: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -228,7 +229,7 @@ func (c *InvestigationCoordinator) handleWatchFailure(
 	watchErr error,
 ) error {
 	if errors.Is(ctx.Err(), context.Canceled) && errors.Is(taskCtx.Err(), context.Canceled) {
-		return ctx.Err()
+		return fmt.Errorf("context ended: %w", ctx.Err())
 	}
 	if latest, loadErr := c.loadDispatch(ctx, dispatch.IncidentID); loadErr == nil && latest.CancellationRequested() {
 		return c.cancelInvestigation(ctx, latest)
@@ -276,7 +277,7 @@ func (c *InvestigationCoordinator) watchInvestigation(
 	go func() {
 		result, err := c.gateway.Watch(watchCtx, ref, func(stage domain.InvestigationStage) error {
 			if err := taskCtx.Err(); err != nil {
-				return err
+				return fmt.Errorf("context ended: %w", err)
 			}
 			return c.recordProgress(watchCtx, dispatch.IncidentID, stage)
 		})
@@ -314,7 +315,7 @@ func (c *InvestigationCoordinator) watchInvestigation(
 			}
 		case <-taskCtx.Done():
 			cancelWatch()
-			return ports.InvestigationResult{}, false, taskCtx.Err()
+			return ports.InvestigationResult{}, false, fmt.Errorf("task context ended: %w", taskCtx.Err())
 		}
 	}
 }
@@ -335,7 +336,7 @@ func (c *InvestigationCoordinator) attachTaskRef(
 			return updated, err
 		}
 		if err := ctx.Err(); err != nil {
-			return domain.InvestigationDispatch{}, err
+			return domain.InvestigationDispatch{}, fmt.Errorf("context ended: %w", err)
 		}
 	}
 }

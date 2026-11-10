@@ -43,11 +43,11 @@ func main() {
 func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 	cfg, err := config.LoadKubernetesMCP()
 	if err != nil {
-		return err
+		return fmt.Errorf("load kubernetes mcp: %w", err)
 	}
 	tel, stopTelemetry, err := bootstrap.StartTelemetry(ctx, cfg.Telemetry, logger, level)
 	if err != nil {
-		return err
+		return fmt.Errorf("start telemetry: %w", err)
 	}
 	defer stopTelemetry()
 	clientset, err := buildKubernetes(cfg, tel)
@@ -75,7 +75,10 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 	if err != nil {
 		return err
 	}
-	return httpserver.Serve(ctx, httpserver.Config{Name: serviceName, Addr: cfg.HTTPAddr}, handler, logger)
+	if err := httpserver.Serve(ctx, httpserver.Config{Name: serviceName, Addr: cfg.HTTPAddr}, handler, logger); err != nil {
+		return fmt.Errorf("serve kubernetes mcp: %w", err)
+	}
+	return nil
 }
 
 // buildKubernetes creates the API client for the process's own service
@@ -101,14 +104,18 @@ func buildServices(cfg config.KubernetesMCPConfig, clientset kubernetes.Interfac
 	if pool != nil {
 		guard, err := postgresadapter.NewRollbackMutationGuard(pool)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("create rollback mutation guard: %w", err)
 		}
 		mutationGuard = guard
 	}
-	return kubernetesadapter.NewService(
+	service, err := kubernetesadapter.NewService(
 		clientset,
 		kubernetesadapter.Config{ClusterID: cfg.ClusterID, AllowedTargets: cfg.AllowedTargets, MutationGuard: mutationGuard},
 	)
+	if err != nil {
+		return nil, fmt.Errorf("create kubernetes service: %w", err)
+	}
+	return service, nil
 }
 
 // protectBackend retries transient Kubernetes API failures on the read tools
@@ -117,9 +124,13 @@ func buildServices(cfg config.KubernetesMCPConfig, clientset kubernetes.Interfac
 func protectBackend(cfg config.KubernetesMCPConfig, backend kubernetesserver.Backend, observer resilience.Observer) (kubernetesserver.Backend, error) {
 	protector, err := bootstrap.NewProtector(resilience.DependencyKubernetesAPI, cfg.Resilience, observer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create protector: %w", err)
 	}
-	return kubernetesserver.NewProtectedBackend(backend, protector)
+	protected, err := kubernetesserver.NewProtectedBackend(backend, protector)
+	if err != nil {
+		return nil, fmt.Errorf("create protected backend: %w", err)
+	}
+	return protected, nil
 }
 
 // readiness checks PostgreSQL (rollback mode only) and that the first
@@ -128,12 +139,14 @@ func readiness(cfg config.KubernetesMCPConfig, clientset kubernetes.Interface, p
 	return func(ctx context.Context) error {
 		if pool != nil {
 			if err := pool.Ping(ctx); err != nil {
-				return err
+				return fmt.Errorf("ping database: %w", err)
 			}
 		}
 		target := cfg.AllowedTargets[0]
-		_, err := clientset.AppsV1().Deployments(target.Namespace()).Get(ctx, target.Deployment(), metav1.GetOptions{})
-		return err
+		if _, err := clientset.AppsV1().Deployments(target.Namespace()).Get(ctx, target.Deployment(), metav1.GetOptions{}); err != nil {
+			return fmt.Errorf("get target deployment: %w", err)
+		}
+		return nil
 	}
 }
 
@@ -157,7 +170,7 @@ func buildHTTP(
 		protocol.WithReadyTimeout(cfg.DBPingTimeout),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create http handler: %w", err)
 	}
 	return tel.InstrumentServer(handler, protocol.RouteOf), nil
 }

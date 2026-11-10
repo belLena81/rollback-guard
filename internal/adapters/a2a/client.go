@@ -191,7 +191,7 @@ func (w *taskWatch) observeStatus(ctx context.Context, update *a2a.TaskStatusUpd
 	}
 	latest, err := w.gateway.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(w.ref.TaskID)})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get investigation task: %w", err)
 	}
 	result, err := resultFromTask(latest)
 	if err != nil {
@@ -235,7 +235,12 @@ func (g *Gateway) Cancel(ctx context.Context, ref domain.InvestigationTaskRef) e
 	return nil
 }
 
-func (g *Gateway) Close() error { return g.client.Destroy() }
+func (g *Gateway) Close() error {
+	if err := g.client.Destroy(); err != nil {
+		return fmt.Errorf("close a2a client: %w", err)
+	}
+	return nil
+}
 
 func stageFromParts(parts a2a.ContentParts) (domain.InvestigationStage, error) {
 	if len(parts) != 1 || parts[0].Data() == nil || parts[0].MediaType != JSONMediaType {

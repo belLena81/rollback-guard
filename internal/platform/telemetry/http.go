@@ -134,7 +134,7 @@ func (r *statusRecorder) WriteHeader(status int) {
 
 func (r *statusRecorder) Write(data []byte) (int, error) {
 	r.wroteHeader = true
-	return r.ResponseWriter.Write(data)
+	return r.ResponseWriter.Write(data) //nolint:wrapcheck // decorator: original error passes through for classification
 }
 
 // Flush keeps streaming responses (A2A SSE, MCP) working through the wrapper.
@@ -146,7 +146,7 @@ func (r *statusRecorder) Flush() {
 
 func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if hijacker, ok := r.ResponseWriter.(http.Hijacker); ok {
-		return hijacker.Hijack()
+		return hijacker.Hijack() //nolint:wrapcheck // decorator: original error passes through for classification
 	}
 	return nil, nil, errors.New("response writer does not support hijacking")
 }

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -80,7 +81,7 @@ func (repo investigationTaskRepo) Update(task domain.InvestigationDispatch, expe
 		return &domain.NotFoundError{Resource: "investigation", ID: string(task.IncidentID)}
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("read investigation task: %w", err)
 	}
 	return &domain.VersionConflictError{Expected: expected, Actual: actual}
 }

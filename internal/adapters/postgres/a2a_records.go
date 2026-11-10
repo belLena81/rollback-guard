@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -36,7 +37,7 @@ func (l *InvestigationRequestLedger) Claim(ctx context.Context, key, requestHash
 		now,
 	)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("write a2a investigation record: %w", err)
 	}
 	return command.RowsAffected() == 1, nil
 }
@@ -54,7 +55,7 @@ func (l *InvestigationRequestLedger) Reclaim(ctx context.Context, key, requestHa
 		taskID,
 	)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("write a2a investigation record: %w", err)
 	}
 	return command.RowsAffected() == 1, nil
 }
@@ -74,7 +75,7 @@ func (l *InvestigationRequestLedger) Fail(ctx context.Context, key, requestHash,
 		taskID,
 	)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("write a2a investigation record: %w", err)
 	}
 	return command.RowsAffected() == 1, nil
 }
@@ -93,7 +94,7 @@ func (l *InvestigationRequestLedger) Complete(ctx context.Context, key, requestH
 		taskID,
 	)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("write a2a investigation record: %w", err)
 	}
 	return command.RowsAffected() == 1, nil
 }
@@ -106,7 +107,7 @@ func (l *InvestigationRequestLedger) Lookup(ctx context.Context, key string) (re
 		return "", "", "", nil, false, nil
 	}
 	if err != nil {
-		return "", "", "", nil, false, err
+		return "", "", "", nil, false, fmt.Errorf("read a2a investigation record: %w", err)
 	}
 	return requestHash, state, failureCode, result, true, nil
 }
@@ -141,7 +142,10 @@ func (r *A2ATaskRecords) Insert(ctx context.Context, taskID, contextID, state st
 	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
 		return false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return false, fmt.Errorf("insert a2a task: %w", err)
+	}
+	return true, nil
 }
 
 // Update replaces the snapshot when the stored version equals expected and
@@ -166,7 +170,7 @@ func (r *A2ATaskRecords) Update(
 		expected,
 	)
 	if err != nil {
-		return false, false, err
+		return false, false, fmt.Errorf("write a2a investigation record: %w", err)
 	}
 	if command.RowsAffected() == 1 {
 		return true, true, nil
@@ -175,7 +179,10 @@ func (r *A2ATaskRecords) Update(
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, false, nil
 	}
-	return false, exists, err
+	if err != nil {
+		return false, exists, fmt.Errorf("check a2a task: %w", err)
+	}
+	return false, exists, nil
 }
 
 // Get reads one snapshot and its version. found is false when none exists.
@@ -185,7 +192,7 @@ func (r *A2ATaskRecords) Get(ctx context.Context, taskID string) (snapshot []byt
 		return nil, 0, false, nil
 	}
 	if err != nil {
-		return nil, 0, false, err
+		return nil, 0, false, fmt.Errorf("read a2a investigation record: %w", err)
 	}
 	return snapshot, version, true, nil
 }
@@ -204,15 +211,17 @@ func (r *A2ATaskRecords) List(ctx context.Context, contextID, state string, upda
 		limit,
 	)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("list a2a tasks: %w", err)
 	}
 	snapshots, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) ([]byte, error) {
 		var snapshot []byte
-		err := row.Scan(&snapshot, &total)
-		return snapshot, err
+		if err := row.Scan(&snapshot, &total); err != nil {
+			return nil, fmt.Errorf("scan a2a task: %w", err)
+		}
+		return snapshot, nil
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("collect a2a tasks: %w", err)
 	}
 	return snapshots, total, nil
 }

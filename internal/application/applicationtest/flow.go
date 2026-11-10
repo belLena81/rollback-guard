@@ -66,14 +66,14 @@ func (f Flow) Investigate(ctx context.Context, incidentID domain.IncidentID) (do
 	if err != nil {
 		return domain.Incident{}, f.failAfter(ctx, incidentID, err)
 	}
-	return f.Services.Investigations.Complete(ctx, incidentID, result)
+	return f.Services.Investigations.Complete(ctx, incidentID, result) //nolint:wrapcheck // test helper: the service error is asserted as-is
 }
 
 // Proposal returns the incident's rollback proposal, or a not-found error.
 func (f Flow) Proposal(ctx context.Context, incidentID domain.IncidentID) (domain.RollbackProposal, error) {
 	summary, err := f.Services.Queries.GetIncidentSummary(ctx, incidentID)
 	if err != nil {
-		return domain.RollbackProposal{}, err
+		return domain.RollbackProposal{}, fmt.Errorf("get incident summary query service: %w", err)
 	}
 	if summary.Proposal == nil {
 		return domain.RollbackProposal{}, &domain.NotFoundError{Resource: "proposal", ID: string(incidentID)}

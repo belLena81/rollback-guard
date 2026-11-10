@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/jackc/pgx/v5"
 )
 
 func statusText(status domain.Status) string {
@@ -80,7 +81,7 @@ type evidencePayload struct {
 
 func marshalEvidencePayload(evidence domain.Evidence) ([]byte, error) {
 	if value, ok := evidence.Deployment(); ok {
-		return json.Marshal(evidencePayload{
+		return marshalPayload(evidencePayload{
 			Target:                 targetJSON(value.Target),
 			CurrentRevision:        string(value.CurrentRevision),
 			PreviousStableRevision: string(value.PreviousStableRevision),
@@ -92,7 +93,7 @@ func marshalEvidencePayload(evidence domain.Evidence) ([]byte, error) {
 		})
 	}
 	if value, ok := evidence.Metric(); ok {
-		return json.Marshal(evidencePayload{
+		return marshalPayload(evidencePayload{
 			Name:       value.Name,
 			Value:      value.Value,
 			Threshold:  value.Threshold,
@@ -101,7 +102,7 @@ func marshalEvidencePayload(evidence domain.Evidence) ([]byte, error) {
 		})
 	}
 	if value, ok := evidence.Pod(); ok {
-		return json.Marshal(evidencePayload{
+		return marshalPayload(evidencePayload{
 			Pod:        value.Pod,
 			CrashLoop:  value.CrashLoop,
 			Restarts:   value.Restarts,
@@ -109,7 +110,7 @@ func marshalEvidencePayload(evidence domain.Evidence) ([]byte, error) {
 		})
 	}
 	if value, ok := evidence.KubernetesEvent(); ok {
-		return json.Marshal(evidencePayload{
+		return marshalPayload(evidencePayload{
 			Reason:     value.Reason,
 			Message:    value.Message,
 			ObservedAt: value.ObservedAt,
@@ -127,7 +128,7 @@ func unmarshalEvidencePayload(
 ) (domain.Evidence, error) {
 	var payload evidencePayload
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return domain.Evidence{}, err
+		return domain.Evidence{}, fmt.Errorf("decode stored payload: %w", err)
 	}
 	switch kind {
 	case domain.EvidenceDeployment:
@@ -191,27 +192,27 @@ type eventDetailPayload struct {
 func marshalEventDetail(detail domain.EventDetail) ([]byte, error) {
 	switch value := detail.(type) {
 	case domain.IncidentCreatedDetail:
-		return json.Marshal(eventDetailPayload{Target: targetJSON(value.Target)})
+		return marshalPayload(eventDetailPayload{Target: targetJSON(value.Target)})
 	case domain.StatusChangedDetail:
-		return json.Marshal(eventDetailPayload{From: value.From.String(), To: value.To.String()})
+		return marshalPayload(eventDetailPayload{From: value.From.String(), To: value.To.String()})
 	case domain.EvidenceCollectedDetail:
-		return json.Marshal(eventDetailPayload{EvidenceID: string(value.EvidenceID), Kind: value.Kind.String()})
+		return marshalPayload(eventDetailPayload{EvidenceID: string(value.EvidenceID), Kind: value.Kind.String()})
 	case domain.DiagnosisCompletedDetail:
-		return json.Marshal(eventDetailPayload{ConclusionID: string(value.ConclusionID), Recommendation: value.Recommendation.String()})
+		return marshalPayload(eventDetailPayload{ConclusionID: string(value.ConclusionID), Recommendation: value.Recommendation.String()})
 	case domain.PolicyEvaluatedDetail:
-		return json.Marshal(eventDetailPayload{DecisionID: string(value.DecisionID), Allowed: value.Allowed})
+		return marshalPayload(eventDetailPayload{DecisionID: string(value.DecisionID), Allowed: value.Allowed})
 	case domain.ProposalCreatedDetail:
-		return json.Marshal(eventDetailPayload{ActionID: string(value.ActionID), ProposalHash: string(value.ProposalHash)})
+		return marshalPayload(eventDetailPayload{ActionID: string(value.ActionID), ProposalHash: string(value.ProposalHash)})
 	case domain.ApprovalRecordedDetail:
-		return json.Marshal(eventDetailPayload{ApprovalID: string(value.ApprovalID), ActorID: string(value.Actor.ID()), ActorKind: value.Actor.Kind().String()})
+		return marshalPayload(eventDetailPayload{ApprovalID: string(value.ApprovalID), ActorID: string(value.Actor.ID()), ActorKind: value.Actor.Kind().String()})
 	case domain.RejectionRecordedDetail:
-		return json.Marshal(eventDetailPayload{ApprovalID: string(value.ApprovalID), Reason: value.Reason})
+		return marshalPayload(eventDetailPayload{ApprovalID: string(value.ApprovalID), Reason: value.Reason})
 	case domain.ExecutionCompletedDetail:
-		return json.Marshal(eventDetailPayload{ExecutionID: string(value.ExecutionID), Outcome: value.Outcome.String()})
+		return marshalPayload(eventDetailPayload{ExecutionID: string(value.ExecutionID), Outcome: value.Outcome.String()})
 	case domain.VerificationCompletedDetail:
-		return json.Marshal(eventDetailPayload{Passed: value.Passed, Revision: string(value.Revision)})
+		return marshalPayload(eventDetailPayload{Passed: value.Passed, Revision: string(value.Revision)})
 	case domain.TerminalDetail:
-		return json.Marshal(eventDetailPayload{Reason: value.Reason})
+		return marshalPayload(eventDetailPayload{Reason: value.Reason})
 	default:
 		return nil, fmt.Errorf("unsupported event detail %T", detail)
 	}
@@ -220,7 +221,7 @@ func marshalEventDetail(detail domain.EventDetail) ([]byte, error) {
 func unmarshalEventDetail(kind domain.EventKind, data []byte) (domain.EventDetail, error) {
 	var payload eventDetailPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode stored payload: %w", err)
 	}
 	switch kind {
 	case domain.EventIncidentCreated:
@@ -292,4 +293,23 @@ func approvalRecordedDetail(payload eventDetailPayload) (domain.EventDetail, err
 
 func eventKindText(kind domain.EventKind) string {
 	return kind.String()
+}
+
+// marshalPayload encodes a stored JSON payload, naming the operation on failure.
+func marshalPayload(value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshal stored payload: %w", err)
+	}
+	return encoded, nil
+}
+
+// collectRows reads every row with fn, naming the collection on failure. Errors
+// returned by fn (including domain errors) stay reachable through errors.Is/As.
+func collectRows[T any](rows pgx.Rows, what string, fn pgx.RowToFunc[T]) ([]T, error) {
+	items, err := pgx.CollectRows(rows, fn)
+	if err != nil {
+		return nil, fmt.Errorf("collect %s: %w", what, err)
+	}
+	return items, nil
 }

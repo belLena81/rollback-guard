@@ -48,7 +48,7 @@ func (h correlationHandler) Handle(ctx context.Context, record slog.Record) erro
 	if ctx != nil {
 		record.AddAttrs(correlationLogAttrs(ctx)...)
 	}
-	return h.next.Handle(ctx, record)
+	return h.next.Handle(ctx, record) //nolint:wrapcheck // decorator: original error passes through for classification
 }
 
 func (h correlationHandler) WithAttrs(attrs []slog.Attr) slog.Handler {

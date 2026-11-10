@@ -93,7 +93,7 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 			i.clock.Now().UTC().Add(-i.staleAfter),
 		)
 		if reclaimErr != nil {
-			return ports.InvestigationResult{}, reclaimErr
+			return ports.InvestigationResult{}, fmt.Errorf("reclaim request ledger: %w", reclaimErr)
 		}
 		if !reclaimed {
 			return i.waitForResult(ctx, request)
@@ -115,7 +115,7 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 	}
 	snapshot, err := json.Marshal(encodeResult(request.Incident.ID(), result))
 	if err != nil {
-		return ports.InvestigationResult{}, err
+		return ports.InvestigationResult{}, fmt.Errorf("marshal investigation result: %w", err)
 	}
 	recordCtx, cancel := terminalPersistenceContext(ctx)
 	defer cancel()
@@ -139,7 +139,7 @@ func (i *IdempotentInvestigator) waitForResult(ctx context.Context, request port
 	for {
 		hash, state, failure, result, found, err := i.ledger.Lookup(ctx, request.IdempotencyKey)
 		if err != nil {
-			return ports.InvestigationResult{}, err
+			return ports.InvestigationResult{}, fmt.Errorf("lookup request ledger: %w", err)
 		}
 		if !found {
 			return ports.InvestigationResult{}, errors.New("investigation idempotency record disappeared")
@@ -151,7 +151,7 @@ func (i *IdempotentInvestigator) waitForResult(ctx context.Context, request port
 		case "completed":
 			var wire resultDTO
 			if err := json.Unmarshal(result, &wire); err != nil {
-				return ports.InvestigationResult{}, err
+				return ports.InvestigationResult{}, fmt.Errorf("unmarshal investigation result: %w", err)
 			}
 			return decodeResult(wire)
 		case "failed", "canceled":
@@ -159,7 +159,7 @@ func (i *IdempotentInvestigator) waitForResult(ctx context.Context, request port
 		}
 		select {
 		case <-ctx.Done():
-			return ports.InvestigationResult{}, ctx.Err()
+			return ports.InvestigationResult{}, fmt.Errorf("context ended: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}

@@ -31,7 +31,7 @@ type Infrastructure struct {
 
 func (f *Infrastructure) InspectDeployment(ctx context.Context, target domain.DeploymentTarget) (domain.DeploymentEvidence, error) {
 	if err := ctx.Err(); err != nil {
-		return domain.DeploymentEvidence{}, err
+		return domain.DeploymentEvidence{}, fmt.Errorf("context ended: %w", err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -46,7 +46,7 @@ func (f *Infrastructure) InspectDeployment(ctx context.Context, target domain.De
 
 func (f *Infrastructure) Observe(ctx context.Context, target domain.DeploymentTarget, _ domain.Symptom) (domain.MetricEvidence, error) {
 	if err := ctx.Err(); err != nil {
-		return domain.MetricEvidence{}, err
+		return domain.MetricEvidence{}, fmt.Errorf("context ended: %w", err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -65,7 +65,7 @@ func (f *Infrastructure) ExecuteApprovedRollback(
 	key domain.IdempotencyKey,
 ) (domain.RollbackExecution, error) {
 	if err := ctx.Err(); err != nil {
-		return domain.RollbackExecution{}, err
+		return domain.RollbackExecution{}, fmt.Errorf("context ended: %w", err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

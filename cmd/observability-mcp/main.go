@@ -40,11 +40,11 @@ func main() {
 func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 	cfg, err := config.LoadObservabilityMCP()
 	if err != nil {
-		return err
+		return fmt.Errorf("load observability mcp: %w", err)
 	}
 	tel, stopTelemetry, err := bootstrap.StartTelemetry(ctx, cfg.Telemetry, logger, level)
 	if err != nil {
-		return err
+		return fmt.Errorf("start telemetry: %w", err)
 	}
 	defer stopTelemetry()
 	// Prometheus queries join the tool call's trace.
@@ -58,14 +58,19 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 		return err
 	}
 	ready := func(ctx context.Context) error {
-		_, err := api.Buildinfo(ctx)
-		return err
+		if _, err := api.Buildinfo(ctx); err != nil {
+			return fmt.Errorf("prometheus build info: %w", err)
+		}
+		return nil
 	}
 	handler, err := buildHTTP(cfg, backend, ready, tel, logger)
 	if err != nil {
 		return err
 	}
-	return httpserver.Serve(ctx, httpserver.Config{Name: serviceName, Addr: cfg.HTTPAddr}, handler, logger)
+	if err := httpserver.Serve(ctx, httpserver.Config{Name: serviceName, Addr: cfg.HTTPAddr}, handler, logger); err != nil {
+		return fmt.Errorf("serve observability mcp: %w", err)
+	}
+	return nil
 }
 
 // buildServices creates the Prometheus-backed metrics backend.
@@ -75,17 +80,21 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 func buildServices(cfg config.ObservabilityMCPConfig, api promv1.API, observer resilience.Observer) (*metricsprom.Client, error) {
 	protector, err := bootstrap.NewProtector(resilience.DependencyPrometheus, cfg.Resilience, observer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create protector: %w", err)
 	}
 	protected, err := metricsprom.NewProtectedQueryAPI(timeoutQueryAPI{api: api, timeout: cfg.RequestTimeout}, protector)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create protected query api: %w", err)
 	}
-	return metricsprom.NewClient(protected, metricsprom.Config{
+	client, err := metricsprom.NewClient(protected, metricsprom.Config{
 		AllowedTargets:    cfg.AllowedTargets,
 		ObservationWindow: cfg.MetricsWindow,
 		MaxSampleAge:      cfg.MaxSampleAge,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("create prometheus client: %w", err)
+	}
+	return client, nil
 }
 
 // buildHTTP assembles the MCP server; readiness is bounded like any other
@@ -103,7 +112,7 @@ func buildHTTP(
 		protocol.WithReadyTimeout(cfg.RequestTimeout),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create http handler: %w", err)
 	}
 	return tel.InstrumentServer(handler, protocol.RouteOf), nil
 }
@@ -116,5 +125,5 @@ type timeoutQueryAPI struct {
 func (a timeoutQueryAPI) Query(ctx context.Context, query string, at time.Time, options ...promv1.Option) (model.Value, promv1.Warnings, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
-	return a.api.Query(ctx, query, at, options...)
+	return a.api.Query(ctx, query, at, options...) //nolint:wrapcheck // decorator: the Prometheus error passes through for classification
 }

@@ -27,16 +27,19 @@ func main() {
 func run(ctx context.Context, logger *slog.Logger) error {
 	cfg, err := demoapi.LoadConfig(os.LookupEnv)
 	if err != nil {
-		return err
+		return fmt.Errorf("load config: %w", err)
 	}
 	handler, err := demoapi.NewHandler(cfg, demoapi.Deps{Sample: rand.Float64, Wait: demoapi.SleepContext, Logger: logger})
 	if err != nil {
-		return err
+		return fmt.Errorf("create handler: %w", err)
 	}
 	var listenConfig net.ListenConfig
 	listener, err := listenConfig.Listen(ctx, "tcp", cfg.HTTPAddr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.HTTPAddr, err)
 	}
-	return demoapi.Serve(ctx, listener, handler, cfg, logger)
+	if err := demoapi.Serve(ctx, listener, handler, cfg, logger); err != nil {
+		return fmt.Errorf("serve demo api: %w", err)
+	}
+	return nil
 }

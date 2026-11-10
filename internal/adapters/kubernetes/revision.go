@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
 	appsv1 "k8s.io/api/apps/v1"
@@ -19,7 +20,7 @@ func TemplateRevision(template corev1.PodTemplateSpec) (domain.Revision, error) 
 	normalized := normalizeTemplate(template)
 	encoded, err := json.Marshal(normalized)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("marshal pod template: %w", err)
 	}
 	sum := sha256.Sum256(encoded)
 	return domain.Revision("sha256:" + hex.EncodeToString(sum[:])), nil

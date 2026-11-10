@@ -36,7 +36,7 @@ func (a protectedAPI) Query(ctx context.Context, query string, ts time.Time, opt
 		value, warnings, err := a.next.Query(ctx, query, ts, opts...)
 		return queryResult{value: value, warnings: warnings}, markTransientQueryError(err)
 	})
-	return result.value, result.warnings, err
+	return result.value, result.warnings, err //nolint:wrapcheck // decorator: original error passes through for classification
 }
 
 // markTransientQueryError flags the Prometheus API error types that describe
@@ -46,7 +46,7 @@ func markTransientQueryError(err error) error {
 	if errors.As(err, &apiErr) {
 		switch apiErr.Type {
 		case v1.ErrServer, v1.ErrTimeout, v1.ErrBadResponse:
-			return resilience.MarkTransient(err)
+			return resilience.MarkTransient(err) //nolint:wrapcheck // decorator: original error passes through for classification
 		case v1.ErrBadData, v1.ErrExec, v1.ErrCanceled, v1.ErrClient:
 		}
 	}

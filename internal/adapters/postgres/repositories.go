@@ -60,7 +60,7 @@ func (repo incidentRepo) Update(incident domain.Incident, expected uint64) error
 		return &domain.NotFoundError{Resource: "incident", ID: string(s.ID)}
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("read incident version: %w", err)
 	}
 	return &domain.VersionConflictError{Expected: expected, Actual: actual}
 }
@@ -139,14 +139,14 @@ func (repo evidenceRepo) List(id domain.IncidentID) ([]domain.Evidence, error) {
 		ORDER BY collected_at, id
 	`, id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query evidence: %w", err)
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Evidence, error) {
+	return collectRows(rows, "evidence", func(row pgx.CollectableRow) (domain.Evidence, error) {
 		var evidenceID, incidentID, kindValue string
 		var collectedAt time.Time
 		var payload []byte
 		if err := row.Scan(&evidenceID, &incidentID, &kindValue, &collectedAt, &payload); err != nil {
-			return domain.Evidence{}, err
+			return domain.Evidence{}, fmt.Errorf("scan collectable row: %w", err)
 		}
 		kind, err := domain.ParseEvidenceKind(kindValue)
 		if err != nil {
@@ -212,7 +212,10 @@ func (repo conclusionRepo) Save(conclusion domain.InvestigationConclusion) error
 	if execErr != nil {
 		return execErr
 	}
-	return closeErr
+	if closeErr != nil {
+		return fmt.Errorf("close batch results: %w", closeErr)
+	}
+	return nil
 }
 
 func (repo conclusionRepo) Get(id domain.IncidentID) (domain.InvestigationConclusion, error) {
@@ -250,12 +253,14 @@ func (repo conclusionRepo) Get(id domain.IncidentID) (domain.InvestigationConclu
 		ORDER BY position
 	`, conclusionID)
 	if err != nil {
-		return domain.InvestigationConclusion{}, err
+		return domain.InvestigationConclusion{}, fmt.Errorf("query conclusion: %w", err)
 	}
-	evidenceIDs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.EvidenceID, error) {
+	evidenceIDs, err := collectRows(rows, "evidence ids", func(row pgx.CollectableRow) (domain.EvidenceID, error) {
 		var evidenceID string
-		err := row.Scan(&evidenceID)
-		return domain.EvidenceID(evidenceID), err
+		if err := row.Scan(&evidenceID); err != nil {
+			return "", fmt.Errorf("scan evidence id: %w", err)
+		}
+		return domain.EvidenceID(evidenceID), nil
 	})
 	if err != nil {
 		return domain.InvestigationConclusion{}, err
@@ -307,7 +312,7 @@ func (repo decisionRepo) Save(decision domain.PolicyDecision) error {
 	s := decision.Snapshot()
 	rules, err := json.Marshal(s.Rules)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal policy rules: %w", err)
 	}
 	_, err = repo.r.tx.Exec(repo.r.ctx, `
 		INSERT INTO policy_decisions (id, incident_id, allowed, rules, decided_at)
@@ -330,7 +335,7 @@ func (repo decisionRepo) Get(id domain.PolicyDecisionID) (domain.PolicyDecision,
 	}
 	var rules []domain.RuleResult
 	if err := json.Unmarshal(rulesData, &rules); err != nil {
-		return domain.PolicyDecision{}, err
+		return domain.PolicyDecision{}, fmt.Errorf("decode policy rules: %w", err)
 	}
 	decision, err := domain.RehydratePolicyDecision(domain.PolicyDecisionSnapshot{
 		ID:         domain.PolicyDecisionID(decisionID),
@@ -646,7 +651,10 @@ func (repo eventRepo) NextSequence(id domain.IncidentID) (uint64, error) {
 	err := repo.r.tx.QueryRow(repo.r.ctx, `
 		SELECT COALESCE(MAX(sequence), 0) + 1 FROM operation_events WHERE incident_id = $1
 	`, id).Scan(&sequence)
-	return sequence, err
+	if err != nil {
+		return 0, fmt.Errorf("read next event sequence: %w", err)
+	}
+	return sequence, nil
 }
 
 func (repo eventRepo) Append(event domain.OperationEvent) error {
@@ -685,15 +693,15 @@ func (repo eventRepo) List(id domain.IncidentID) ([]domain.OperationEvent, error
 		ORDER BY sequence
 	`, id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query events: %w", err)
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.OperationEvent, error) {
+	return collectRows(rows, "events", func(row pgx.CollectableRow) (domain.OperationEvent, error) {
 		var eventID, incidentID, kindValue, actorID, actorKindValue string
 		var sequence uint64
 		var occurredAt time.Time
 		var payload []byte
 		if err := row.Scan(&eventID, &incidentID, &sequence, &kindValue, &occurredAt, &actorID, &actorKindValue, &payload); err != nil {
-			return domain.OperationEvent{}, err
+			return domain.OperationEvent{}, fmt.Errorf("scan collectable row: %w", err)
 		}
 		kind, err := domain.ParseEventKind(kindValue)
 		if err != nil {

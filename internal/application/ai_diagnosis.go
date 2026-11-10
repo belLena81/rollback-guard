@@ -84,7 +84,7 @@ func (d *HybridDiagnoser) Diagnose(ctx context.Context, input ports.Investigatio
 
 func (d modelDiagnoser) diagnose(ctx context.Context, input ports.InvestigationInput) (domain.InvestigationConclusion, error) {
 	if err := ctx.Err(); err != nil {
-		return domain.InvestigationConclusion{}, err
+		return domain.InvestigationConclusion{}, fmt.Errorf("context ended: %w", err)
 	}
 	var ruleCandidate *domain.InvestigationConclusion
 	if d.includeRules {
@@ -104,7 +104,7 @@ func (d modelDiagnoser) diagnose(ctx context.Context, input ports.InvestigationI
 	callErr := callCtx.Err()
 	cancel()
 	if err := ctx.Err(); err != nil {
-		return domain.InvestigationConclusion{}, err
+		return domain.InvestigationConclusion{}, fmt.Errorf("context ended: %w", err)
 	}
 	if reasonErr != nil || callErr != nil {
 		reason := fallbackReason(reasonErr, callErr)
@@ -144,7 +144,7 @@ func (d modelDiagnoser) fallback(
 	initiatingErr error,
 ) (domain.InvestigationConclusion, error) {
 	if err := ctx.Err(); err != nil {
-		return domain.InvestigationConclusion{}, err
+		return domain.InvestigationConclusion{}, fmt.Errorf("context ended: %w", err)
 	}
 	var conclusion domain.InvestigationConclusion
 	if existing != nil {

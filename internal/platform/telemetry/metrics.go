@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -84,7 +85,7 @@ func newMetrics(registerer prometheus.Registerer) (*metrics, error) {
 		m.retries, m.breakerTransitions,
 	} {
 		if err := registerer.Register(collector); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("register metrics collector: %w", err)
 		}
 	}
 	return m, nil

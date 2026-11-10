@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"sync"
@@ -85,19 +86,19 @@ func NewUnitOfWork() *UnitOfWork {
 }
 func (u *UnitOfWork) WithinTransaction(ctx context.Context, fn func(ports.Repositories) error) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("context ended: %w", err)
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("context ended: %w", err)
 	}
 	tx := &repositories{data: u.data.clone()}
 	if err := fn(tx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("context ended: %w", err)
 	}
 	u.data = tx.data
 	return nil

@@ -45,7 +45,7 @@ func (s *DurableTaskStore) Create(ctx context.Context, task *a2a.Task) (taskstor
 	}
 	snapshot, err := json.Marshal(task)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("marshal task snapshot: %w", err)
 	}
 	const version taskstore.TaskVersion = 1
 	created, err := s.records.Insert(ctx, string(task.ID), task.ContextID, task.Status.State.String(), int64(version), snapshot, s.clock.Now().UTC())
@@ -64,7 +64,7 @@ func (s *DurableTaskStore) Update(ctx context.Context, request *taskstore.Update
 	}
 	snapshot, err := json.Marshal(request.Task)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("marshal task snapshot: %w", err)
 	}
 	expected := request.PrevVersion
 	if expected == taskstore.TaskVersionMissing {
@@ -132,13 +132,13 @@ func (s *DurableTaskStore) List(ctx context.Context, request *a2a.ListTasksReque
 	}
 	snapshots, total, err := s.records.List(ctx, request.ContextID, state, request.StatusTimestampAfter, pageSize)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list task records: %w", err)
 	}
 	tasks := make([]*a2a.Task, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		var task a2a.Task
 		if err := json.Unmarshal(snapshot, &task); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("unmarshal task snapshot: %w", err)
 		}
 		if !request.IncludeArtifacts {
 			task.Artifacts = nil

@@ -220,7 +220,7 @@ func (s *Service) ListPods(ctx context.Context, target domain.DeploymentTarget, 
 	}
 	selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("convert label selector: %w", err)
 	}
 	pods, err := s.client.CoreV1().Pods(target.Namespace()).List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
 	if err != nil {
@@ -362,7 +362,7 @@ func (s *Service) WatchRollout(ctx context.Context, target domain.DeploymentTarg
 		}
 		select {
 		case <-ctx.Done():
-			return RolloutStatus{}, ctx.Err()
+			return RolloutStatus{}, fmt.Errorf("context ended: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -553,17 +553,21 @@ func rollbackPatch(resourceVersion string, template corev1.PodTemplateSpec) ([]b
 	normalized := normalizeTemplate(template)
 	encoded, err := json.Marshal(normalized)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal rollback patch: %w", err)
 	}
 	var templatePatch map[string]any
 	if err := json.Unmarshal(encoded, &templatePatch); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unmarshal rollback patch: %w", err)
 	}
 	templatePatch["$patch"] = "replace"
-	return json.Marshal(map[string]any{
+	patch, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{"resourceVersion": resourceVersion},
 		"spec":     map[string]any{"template": templatePatch},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal rollback patch: %w", err)
+	}
+	return patch, nil
 }
 
 func containsReplaceDirective(patch []byte) bool {

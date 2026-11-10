@@ -91,7 +91,7 @@ func waitFor(ctx context.Context, d time.Duration) error {
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("context ended: %w", ctx.Err())
 	case <-timer.C:
 		return nil
 	}

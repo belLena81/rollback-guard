@@ -27,7 +27,7 @@ func NewProtectedBackend(next Backend, protector *resilience.Protector) (Backend
 }
 
 func read[T any](ctx context.Context, b protectedBackend, fn func(context.Context) (T, error)) (T, error) {
-	return resilience.Call(ctx, b.protector, func(ctx context.Context) (T, error) {
+	return resilience.Call(ctx, b.protector, func(ctx context.Context) (T, error) { //nolint:wrapcheck // decorator: error passes through unchanged
 		value, err := fn(ctx)
 		return value, kubernetes.MarkTransientAPIError(err)
 	})
@@ -53,7 +53,7 @@ type podList struct {
 func (b protectedBackend) ListPods(ctx context.Context, target domain.DeploymentTarget, limit int) ([]kubernetes.PodSummary, bool, error) {
 	list, err := read(ctx, b, func(ctx context.Context) (podList, error) {
 		pods, truncated, err := b.next.ListPods(ctx, target, limit)
-		return podList{pods: pods, truncated: truncated}, err
+		return podList{pods: pods, truncated: truncated}, err //nolint:wrapcheck // decorator: original error passes through for classification
 	})
 	return list.pods, list.truncated, err
 }
@@ -66,7 +66,7 @@ type eventList struct {
 func (b protectedBackend) PodEvents(ctx context.Context, target domain.DeploymentTarget, pod string, limit int) ([]kubernetes.EventSummary, bool, error) {
 	list, err := read(ctx, b, func(ctx context.Context) (eventList, error) {
 		events, truncated, err := b.next.PodEvents(ctx, target, pod, limit)
-		return eventList{events: events, truncated: truncated}, err
+		return eventList{events: events, truncated: truncated}, err //nolint:wrapcheck // decorator: original error passes through for classification
 	})
 	return list.events, list.truncated, err
 }
@@ -78,13 +78,13 @@ func (b protectedBackend) GetRolloutStatus(ctx context.Context, target domain.De
 }
 
 func (b protectedBackend) WatchRollout(ctx context.Context, target domain.DeploymentTarget, revision domain.Revision) (kubernetes.RolloutStatus, error) {
-	return b.next.WatchRollout(ctx, target, revision)
+	return b.next.WatchRollout(ctx, target, revision) //nolint:wrapcheck // decorator: original error passes through for classification
 }
 
 func (b protectedBackend) PrepareRollback(ctx context.Context, proposal domain.RollbackProposal) error {
-	return b.next.PrepareRollback(ctx, proposal)
+	return b.next.PrepareRollback(ctx, proposal) //nolint:wrapcheck // decorator: original error passes through for classification
 }
 
 func (b protectedBackend) ExecuteApprovedRollback(ctx context.Context, hash domain.ProposalHash, key domain.IdempotencyKey) (kubernetes.MutationResult, error) {
-	return b.next.ExecuteApprovedRollback(ctx, hash, key)
+	return b.next.ExecuteApprovedRollback(ctx, hash, key) //nolint:wrapcheck // decorator: original error passes through for classification
 }
