@@ -158,7 +158,7 @@ func decodeRequest(value any) (ports.InvestigationRequest, error) {
 	if err != nil {
 		return ports.InvestigationRequest{}, err
 	}
-	symptom, err := domain.NewSymptom(wire.Incident.Symptom.Kind, wire.Incident.Symptom.Observed, wire.Incident.Symptom.Threshold, wire.Incident.Symptom.Unit, wire.Incident.Symptom.StartedAt)
+	symptom, err := domain.NewSymptom(domain.SymptomKind(wire.Incident.Symptom.Kind), wire.Incident.Symptom.Observed, wire.Incident.Symptom.Threshold, wire.Incident.Symptom.Unit, wire.Incident.Symptom.StartedAt)
 	if err != nil {
 		return ports.InvestigationRequest{}, err
 	}
@@ -275,7 +275,7 @@ func encodeTarget(v domain.DeploymentTarget) targetDTO {
 	return targetDTO{v.Cluster(), v.Namespace(), v.Deployment(), v.Service()}
 }
 func encodeSymptom(v domain.Symptom) symptomDTO {
-	return symptomDTO{v.Kind(), v.Observed(), v.Threshold(), v.Unit(), v.StartedAt()}
+	return symptomDTO{v.Kind().String(), v.Observed(), v.Threshold(), v.Unit(), v.StartedAt()}
 }
 func encodeDeployment(v domain.DeploymentEvidence) deploymentDTO {
 	return deploymentDTO{encodeTarget(v.Target), string(v.CurrentRevision), string(v.PreviousStableRevision), v.DesiredReplicas, v.ReadyReplicas, v.AvailableReplicas, v.Healthy, v.RolloutAt}

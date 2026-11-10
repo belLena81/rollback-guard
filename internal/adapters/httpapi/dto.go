@@ -31,11 +31,11 @@ type symptomDTO struct {
 }
 
 func (d symptomDTO) domain() (domain.Symptom, error) {
-	return domain.NewSymptom(d.Kind, d.Observed, d.Threshold, d.Unit, d.StartedAt)
+	return domain.NewSymptom(domain.SymptomKind(d.Kind), d.Observed, d.Threshold, d.Unit, d.StartedAt)
 }
 
 func symptomResponse(symptom domain.Symptom) symptomDTO {
-	return symptomDTO{Kind: symptom.Kind(), Observed: symptom.Observed(), Threshold: symptom.Threshold(), Unit: symptom.Unit(), StartedAt: symptom.StartedAt()}
+	return symptomDTO{Kind: symptom.Kind().String(), Observed: symptom.Observed(), Threshold: symptom.Threshold(), Unit: symptom.Unit(), StartedAt: symptom.StartedAt()}
 }
 
 type actorDTO struct {

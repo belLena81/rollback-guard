@@ -1,6 +1,46 @@
 package domain
 
-import "testing"
+import (
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestSymptomKind(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	tests := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{"http error rate", "http_error_rate", true},
+		{"request latency", "request_latency", true},
+		{"pod cpu usage", "pod_cpu_usage", true},
+		{"pod memory usage", "pod_memory_usage", true},
+		{"empty", "", false},
+		{"unsupported", "error_rate", false},
+		{"wrong case", "HTTP_ERROR_RATE", false},
+		{"padded", " http_error_rate", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			kind, err := ParseSymptomKind(test.value)
+			if (err == nil) != test.valid {
+				t.Fatalf("ParseSymptomKind(%q) error = %v, want valid=%v", test.value, err, test.valid)
+			}
+			if !test.valid && !errors.Is(err, ErrValidation) {
+				t.Errorf("error %v is not a validation error", err)
+			}
+			_, symptomErr := NewSymptom(SymptomKind(test.value), 0.2, 0.1, "ratio", now)
+			if (symptomErr == nil) != test.valid {
+				t.Errorf("NewSymptom(%q) error = %v, want valid=%v", test.value, symptomErr, test.valid)
+			}
+			if test.valid && kind.String() != test.value {
+				t.Errorf("kind = %q, want %q", kind, test.value)
+			}
+		})
+	}
+}
 
 // enumCase describes one enumeration: its members and its Parse function.
 type enumCase[T enumValue] struct {

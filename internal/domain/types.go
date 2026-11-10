@@ -117,16 +117,49 @@ func (t DeploymentTarget) Valid() bool {
 	return t.cluster != "" && t.namespace != "" && t.deployment != "" && t.service != ""
 }
 
+// SymptomKind names the metric a symptom is measured by. It is a closed set:
+// each member is a series the observability backend can query, so an
+// unsupported kind is rejected when the symptom is built, not when the
+// investigation later asks for evidence.
+type SymptomKind string
+
+const (
+	SymptomHTTPErrorRate  SymptomKind = "http_error_rate"
+	SymptomRequestLatency SymptomKind = "request_latency"
+	SymptomPodCPUUsage    SymptomKind = "pod_cpu_usage"
+	SymptomPodMemoryUsage SymptomKind = "pod_memory_usage"
+)
+
+func (k SymptomKind) String() string { return string(k) }
+
+// Valid reports whether k is one of the supported kinds.
+func (k SymptomKind) Valid() bool {
+	switch k {
+	case SymptomHTTPErrorRate, SymptomRequestLatency, SymptomPodCPUUsage, SymptomPodMemoryUsage:
+		return true
+	default:
+		return false
+	}
+}
+
+// ParseSymptomKind returns the supported kind spelled value.
+func ParseSymptomKind(value string) (SymptomKind, error) {
+	if kind := SymptomKind(value); kind.Valid() {
+		return kind, nil
+	}
+	return "", invalid("symptom.kind", "unsupported symptom kind")
+}
+
 type Symptom struct {
-	kind                string
+	kind                SymptomKind
 	observed, threshold float64
 	unit                string
 	startedAt           time.Time
 }
 
-func NewSymptom(kind string, observed, threshold float64, unit string, startedAt time.Time) (Symptom, error) {
-	if err := requireText("symptom.kind", kind); err != nil {
-		return Symptom{}, err
+func NewSymptom(kind SymptomKind, observed, threshold float64, unit string, startedAt time.Time) (Symptom, error) {
+	if !kind.Valid() {
+		return Symptom{}, invalid("symptom.kind", "unsupported symptom kind")
 	}
 	if math.IsNaN(observed) || math.IsInf(observed, 0) {
 		return Symptom{}, invalid("symptom.observed", "must be finite")
@@ -142,7 +175,7 @@ func NewSymptom(kind string, observed, threshold float64, unit string, startedAt
 	}
 	return Symptom{kind: kind, observed: observed, threshold: threshold, unit: unit, startedAt: startedAt.UTC()}, nil
 }
-func (s Symptom) Kind() string {
+func (s Symptom) Kind() SymptomKind {
 	return s.kind
 }
 func (s Symptom) Observed() float64 {

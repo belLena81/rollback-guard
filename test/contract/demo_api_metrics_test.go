@@ -12,6 +12,7 @@ import (
 
 	metricsprom "github.com/belLena81/rollback-guard/internal/adapters/prometheus"
 	"github.com/belLena81/rollback-guard/internal/demoapi"
+	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/expfmt"
@@ -66,7 +67,7 @@ func TestDemoAPIMetricsMatchObservabilityQueries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := client.QueryMetric(t.Context(), target, metricsprom.QueryRequest{Kind: test.kind, Window: time.Minute, Percentile: 0.95}); err != nil {
+			if _, err := client.QueryMetric(t.Context(), target, metricsprom.QueryRequest{Kind: domain.SymptomKind(test.kind), Window: time.Minute, Percentile: 0.95}); err != nil {
 				t.Fatal(err)
 			}
 			selector := test.series + `{cluster="local",namespace="rollback-demo",deployment="demo-api",service="demo-api"`

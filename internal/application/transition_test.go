@@ -18,7 +18,7 @@ func newTransitionFixture(t *testing.T) (audit, *memory.UnitOfWork, domain.Incid
 	uow := memory.NewUnitOfWork()
 	incident, err := domain.NewIncident("incident-1",
 		mustTarget(t, "cluster", "shop", "checkout", "checkout"),
-		mustSymptom(t, "error_rate", 0.4, 0.05, "ratio", now), now)
+		mustSymptom(t, "http_error_rate", 0.4, 0.05, "ratio", now), now)
 	if err != nil {
 		t.Fatal(err)
 	}

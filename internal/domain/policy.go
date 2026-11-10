@@ -135,7 +135,7 @@ func (p EligibilityPolicy) Evaluate(candidate EligibilityCandidate) (PolicyDecis
 	}
 	metricMatches, metricBreached := false, false
 	if metric != nil {
-		metricMatches = metric.Name == candidate.Incident.Symptom().Kind() && metric.Unit == candidate.Incident.Symptom().Unit()
+		metricMatches = metric.Name == candidate.Incident.Symptom().Kind().String() && metric.Unit == candidate.Incident.Symptom().Unit()
 		metricBreached = metric.Value >= candidate.Incident.Symptom().Threshold()
 	}
 	rules := []RuleResult{
@@ -171,7 +171,7 @@ func RolloutRecent(rolloutAt, now time.Time, window time.Duration) bool {
 }
 
 func EvaluateRecovery(target DeploymentTarget, targetRevision Revision, deployment DeploymentEvidence, metric MetricEvidence, symptom Symptom, incidentID IncidentID, executionID ExecutionID, now time.Time) (RecoveryVerification, error) {
-	passed := deployment.Target.Equal(target) && deployment.CurrentRevision == targetRevision && deployment.Healthy && deployment.DesiredReplicas == deployment.ReadyReplicas && deployment.DesiredReplicas == deployment.AvailableReplicas && metric.Name == symptom.Kind() && metric.Unit == symptom.Unit() && metric.Value < symptom.Threshold()
+	passed := deployment.Target.Equal(target) && deployment.CurrentRevision == targetRevision && deployment.Healthy && deployment.DesiredReplicas == deployment.ReadyReplicas && deployment.DesiredReplicas == deployment.AvailableReplicas && metric.Name == symptom.Kind().String() && metric.Unit == symptom.Unit() && metric.Value < symptom.Threshold()
 	reason := ""
 	if !passed {
 		reason = "revision, replicas, rollout health, or recovery metric did not recover"

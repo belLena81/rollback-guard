@@ -140,7 +140,7 @@ func TestDeploymentTargetValidationOrderIsDeterministic(t *testing.T) {
 func TestDomainValuesExposeCompleteImmutableSnapshots(t *testing.T) {
 	now := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
 	target := mustTarget(t, "cluster", "namespace", "deployment", "service")
-	symptom, err := domain.NewSymptom("errors", .2, .1, "ratio", now)
+	symptom, err := domain.NewSymptom("http_error_rate", .2, .1, "ratio", now)
 	if err != nil {
 		t.Fatal(err)
 	}

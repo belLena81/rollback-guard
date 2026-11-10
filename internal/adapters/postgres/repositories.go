@@ -82,7 +82,7 @@ func scanIncident(row incidentScanner) (domain.Incident, error) {
 	if err != nil {
 		return domain.Incident{}, err
 	}
-	symptom, err := domain.NewSymptom(symptomKind, observed, threshold, symptomUnit, symptomStartedAt)
+	symptom, err := domain.NewSymptom(domain.SymptomKind(symptomKind), observed, threshold, symptomUnit, symptomStartedAt)
 	if err != nil {
 		return domain.Incident{}, err
 	}

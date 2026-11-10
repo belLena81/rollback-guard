@@ -23,7 +23,7 @@ func TestRESTGatewayRunsTypedInvestigationTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	symptom, err := domain.NewSymptom("error_rate", 0.2, 0.05, "ratio", now.Add(-time.Minute))
+	symptom, err := domain.NewSymptom("http_error_rate", 0.2, 0.05, "ratio", now.Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestRESTGatewayRunsTypedInvestigationTask(t *testing.T) {
 	if len(stages) > 0 && stages[len(stages)-1] != domain.InvestigationStageFinalizing {
 		t.Fatalf("last progress stage = %v", stages)
 	}
-	changedSymptom, err := domain.NewSymptom("error_rate", 0.3, 0.05, "ratio", now.Add(-time.Minute))
+	changedSymptom, err := domain.NewSymptom("http_error_rate", 0.3, 0.05, "ratio", now.Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -52,7 +52,7 @@ func (d *RuleDiagnoser) Diagnose(ctx context.Context, input ports.InvestigationI
 	// regression signal (see domain.EligibilityPolicy).
 	correlated := deploymentEvidenceFound &&
 		metricEvidenceFound &&
-		input.Metric.Name == input.Incident.Symptom().Kind() &&
+		input.Metric.Name == input.Incident.Symptom().Kind().String() &&
 		input.Metric.Value >= input.Incident.Symptom().Threshold() &&
 		delta >= 0 &&
 		delta <= d.correlationWindow &&

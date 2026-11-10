@@ -25,11 +25,11 @@ func New(backend Backend) (*mcp.Server, error) {
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "rollback-guardian-observability", Version: buildinfo.Version}, nil)
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPointer(false), IdempotentHint: true, OpenWorldHint: boolPointer(false)}
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetHTTPErrorRate, Description: "Read a fixed-window HTTP 5xx ratio", Annotations: annotations}, metricHandler(backend, "http_error_rate"))
+	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetHTTPErrorRate, Description: "Read a fixed-window HTTP 5xx ratio", Annotations: annotations}, metricHandler(backend, domain.SymptomHTTPErrorRate))
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolCompareErrorRateWindows, Description: "Compare current and baseline HTTP 5xx ratios", Annotations: annotations}, compareWindows(backend))
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetRequestLatency, Description: "Read a fixed request latency percentile", Annotations: annotations}, latency(backend))
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetPodCPUUsage, Description: "Read aggregate pod CPU usage for an allowed target", Annotations: annotations}, metricHandler(backend, "pod_cpu_usage"))
-	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetPodMemoryUsage, Description: "Read aggregate pod memory usage for an allowed target", Annotations: annotations}, metricHandler(backend, "pod_memory_usage"))
+	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetPodCPUUsage, Description: "Read aggregate pod CPU usage for an allowed target", Annotations: annotations}, metricHandler(backend, domain.SymptomPodCPUUsage))
+	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolGetPodMemoryUsage, Description: "Read aggregate pod memory usage for an allowed target", Annotations: annotations}, metricHandler(backend, domain.SymptomPodMemoryUsage))
 	mcp.AddTool(server, &mcp.Tool{Name: protocol.ToolEvaluateRecovery, Description: "Evaluate typed rollout and metric recovery signals", Annotations: annotations}, evaluateRecovery(backend))
 	return server, nil
 }
@@ -42,7 +42,7 @@ func NewHTTPHandler(backend Backend, ready func(context.Context) error, sessionT
 	return protocol.HTTPHandler(server, ready, protocol.DefaultMaxRequestBytes, sessionTimeout, logger, opts...), nil
 }
 
-func metricHandler(backend Backend, kind string) mcp.ToolHandlerFor[protocol.MetricInput, protocol.Response[protocol.MetricOutput]] {
+func metricHandler(backend Backend, kind domain.SymptomKind) mcp.ToolHandlerFor[protocol.MetricInput, protocol.Response[protocol.MetricOutput]] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, input protocol.MetricInput) (*mcp.CallToolResult, protocol.Response[protocol.MetricOutput], error) {
 		if !validWindow(input.WindowSeconds) || input.Threshold <= 0 || math.IsNaN(input.Threshold) || math.IsInf(input.Threshold, 0) {
 			result, response := protocol.Failure[protocol.MetricOutput](&domain.ValidationError{Field: "metric", Reason: "window or threshold is invalid"})
@@ -73,12 +73,12 @@ func compareWindows(backend Backend) mcp.ToolHandlerFor[protocol.CompareWindowsI
 			result, response := protocol.Failure[protocol.CompareWindowsOutput](err)
 			return result, response, nil
 		}
-		current, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: "http_error_rate", Window: time.Duration(input.CurrentWindowSeconds) * time.Second})
+		current, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: domain.SymptomHTTPErrorRate, Window: time.Duration(input.CurrentWindowSeconds) * time.Second})
 		if err != nil {
 			result, response := protocol.Failure[protocol.CompareWindowsOutput](err)
 			return result, response, nil
 		}
-		baseline, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: "http_error_rate", Window: time.Duration(input.BaselineWindowSeconds) * time.Second, Offset: time.Duration(input.BaselineOffsetSeconds) * time.Second})
+		baseline, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: domain.SymptomHTTPErrorRate, Window: time.Duration(input.BaselineWindowSeconds) * time.Second, Offset: time.Duration(input.BaselineOffsetSeconds) * time.Second})
 		if err != nil {
 			result, response := protocol.Failure[protocol.CompareWindowsOutput](err)
 			return result, response, nil
@@ -103,7 +103,7 @@ func latency(backend Backend) mcp.ToolHandlerFor[protocol.LatencyInput, protocol
 			result, response := protocol.Failure[protocol.MetricOutput](err)
 			return result, response, nil
 		}
-		sample, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: "request_latency", Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: percentile})
+		sample, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: domain.SymptomRequestLatency, Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: percentile})
 		if err != nil {
 			result, response := protocol.Failure[protocol.MetricOutput](err)
 			return result, response, nil
@@ -127,7 +127,7 @@ func evaluateRecovery(backend Backend) mcp.ToolHandlerFor[protocol.RecoveryInput
 			result, response := protocol.Failure[protocol.RecoveryOutput](err)
 			return result, response, nil
 		}
-		sample, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: input.MetricKind, Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: 0.95})
+		sample, err := backend.QueryMetric(ctx, target, metricsprom.QueryRequest{Kind: domain.SymptomKind(input.MetricKind), Window: time.Duration(input.WindowSeconds) * time.Second, Percentile: 0.95})
 		if err != nil {
 			result, response := protocol.Failure[protocol.RecoveryOutput](err)
 			return result, response, nil

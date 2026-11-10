@@ -59,7 +59,7 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	symptom, err := domain.NewSymptom("error_rate", 0.2, 0.05, "ratio", now.Add(-time.Minute))
+	symptom, err := domain.NewSymptom("http_error_rate", 0.2, 0.05, "ratio", now.Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

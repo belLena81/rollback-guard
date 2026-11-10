@@ -185,7 +185,7 @@ func encodeReasoningPrompt(request ports.ReasoningRequest) ([]byte, error) {
 			Deployment: request.Target.Deployment(), Service: request.Target.Service(),
 		},
 		Symptom: reasoningSymptomDTO{
-			Kind: request.Symptom.Kind(), Observed: request.Symptom.Observed(), Threshold: request.Symptom.Threshold(),
+			Kind: request.Symptom.Kind().String(), Observed: request.Symptom.Observed(), Threshold: request.Symptom.Threshold(),
 			Unit: request.Symptom.Unit(), StartedAt: request.Symptom.StartedAt(),
 		},
 		Evidence: make([]reasoningEvidenceDTO, 0, len(request.Evidence)),

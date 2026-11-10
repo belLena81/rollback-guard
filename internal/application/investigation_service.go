@@ -34,7 +34,7 @@ func InvestigationRequestHash(incident domain.Incident) string {
 		s.Target.Namespace(),
 		s.Target.Deployment(),
 		s.Target.Service(),
-		s.Symptom.Kind(),
+		s.Symptom.Kind().String(),
 		strconv.FormatFloat(s.Symptom.Observed(), 'g', -1, 64),
 		strconv.FormatFloat(s.Symptom.Threshold(), 'g', -1, 64),
 		s.Symptom.Unit(),

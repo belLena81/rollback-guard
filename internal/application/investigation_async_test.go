@@ -274,7 +274,7 @@ func TestInvestigationRequestHashUsesPostgresTimestampPrecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	newIncident := func(startedAt time.Time, observed float64) domain.Incident {
-		symptom, symptomErr := domain.NewSymptom("error_rate", observed, 0.05, "ratio", startedAt)
+		symptom, symptomErr := domain.NewSymptom("http_error_rate", observed, 0.05, "ratio", startedAt)
 		if symptomErr != nil {
 			t.Fatal(symptomErr)
 		}

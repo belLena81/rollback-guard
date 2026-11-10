@@ -25,13 +25,13 @@ func (a *MetricsAdapter) Observe(ctx context.Context, target domain.DeploymentTa
 	var output MetricOutput
 	var err error
 	switch symptom.Kind() {
-	case "http_error_rate":
+	case domain.SymptomHTTPErrorRate:
 		output, err = callTool[MetricInput, MetricOutput](ctx, a.caller, ToolGetHTTPErrorRate, input)
-	case "request_latency":
+	case domain.SymptomRequestLatency:
 		output, err = callTool[LatencyInput, MetricOutput](ctx, a.caller, ToolGetRequestLatency, LatencyInput{Target: input.Target, WindowSeconds: input.WindowSeconds, Threshold: input.Threshold, Percentile: "p95"})
-	case "pod_cpu_usage":
+	case domain.SymptomPodCPUUsage:
 		output, err = callTool[MetricInput, MetricOutput](ctx, a.caller, ToolGetPodCPUUsage, input)
-	case "pod_memory_usage":
+	case domain.SymptomPodMemoryUsage:
 		output, err = callTool[MetricInput, MetricOutput](ctx, a.caller, ToolGetPodMemoryUsage, input)
 	default:
 		return domain.MetricEvidence{}, &domain.ValidationError{Field: "symptom.kind", Reason: "unsupported metrics MCP tool"}
@@ -39,7 +39,7 @@ func (a *MetricsAdapter) Observe(ctx context.Context, target domain.DeploymentTa
 	if err != nil {
 		return domain.MetricEvidence{}, fmt.Errorf("observe metric through MCP: %w", err)
 	}
-	if output.Name != symptom.Kind() || output.Unit != symptom.Unit() || output.ObservedAt.IsZero() {
+	if output.Name != symptom.Kind().String() || output.Unit != symptom.Unit() || output.ObservedAt.IsZero() {
 		return domain.MetricEvidence{}, fmt.Errorf("metrics MCP returned inconsistent evidence")
 	}
 	return domain.MetricEvidence{Name: output.Name, Value: output.Value, Threshold: symptom.Threshold(), Unit: output.Unit, ObservedAt: output.ObservedAt.UTC()}, nil

@@ -567,7 +567,7 @@ func mustTarget(t *testing.T, cluster, namespace, deployment, service string) do
 	return target
 }
 
-func mustSymptom(t *testing.T, kind string, observed, threshold float64, unit string, observedAt time.Time) domain.Symptom {
+func mustSymptom(t *testing.T, kind domain.SymptomKind, observed, threshold float64, unit string, observedAt time.Time) domain.Symptom {
 	t.Helper()
 
 	symptom, err := domain.NewSymptom(kind, observed, threshold, unit, observedAt)

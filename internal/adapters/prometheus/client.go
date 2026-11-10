@@ -40,7 +40,7 @@ type Client struct {
 }
 
 type QueryRequest struct {
-	Kind       string
+	Kind       domain.SymptomKind
 	Window     time.Duration
 	Offset     time.Duration
 	Percentile float64
@@ -83,7 +83,7 @@ func (c *Client) Observe(ctx context.Context, target domain.DeploymentTarget, sy
 	if symptom.Unit() != sample.Unit {
 		return domain.MetricEvidence{}, &domain.ValidationError{Field: "symptom.unit", Reason: "does not match metric kind"}
 	}
-	return domain.MetricEvidence{Name: symptom.Kind(), Value: sample.Value, Threshold: symptom.Threshold(), Unit: sample.Unit, ObservedAt: sample.ObservedAt}, nil
+	return domain.MetricEvidence{Name: symptom.Kind().String(), Value: sample.Value, Threshold: symptom.Threshold(), Unit: sample.Unit, ObservedAt: sample.ObservedAt}, nil
 }
 
 func (c *Client) QueryMetric(ctx context.Context, target domain.DeploymentTarget, request QueryRequest) (MetricSample, error) {
@@ -131,7 +131,7 @@ func (c *Client) QueryMetric(ctx context.Context, target domain.DeploymentTarget
 	if err != nil {
 		return MetricSample{}, err
 	}
-	return MetricSample{Name: request.Kind, Value: float64(sample.Value), Unit: unit, ObservedAt: sourceObservedAt}, nil
+	return MetricSample{Name: request.Kind.String(), Value: float64(sample.Value), Unit: unit, ObservedAt: sourceObservedAt}, nil
 }
 
 func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (string, string, error) {
@@ -142,7 +142,7 @@ func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (st
 		offset = " offset " + durationLiteral(request.Offset)
 	}
 	switch request.Kind {
-	case "http_error_rate":
+	case domain.SymptomHTTPErrorRate:
 		all := "rollback_guardian_http_requests_total{" + matchers + "}"
 		errorsOnly := "rollback_guardian_http_requests_total{" + matchers + ",code=~\"5..\"}"
 		errorRate := fmt.Sprintf("sum(rate(%s[%s]%s))", errorsOnly, window, offset)
@@ -152,30 +152,30 @@ func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (st
 		// traffic yields no sample (an error), never a 0 error rate that
 		// would pass recovery on a service that serves nothing.
 		return fmt.Sprintf("(%s or (%s * 0)) / (%s > 0)", errorRate, totalRate, totalRate), "ratio", nil
-	case "request_latency":
+	case domain.SymptomRequestLatency:
 		if request.Percentile != 0.50 && request.Percentile != 0.95 && request.Percentile != 0.99 {
 			return "", "", &domain.ValidationError{Field: "percentile", Reason: "must be p50, p95, or p99"}
 		}
 		return fmt.Sprintf("histogram_quantile(%g, sum by (le) (rate(rollback_guardian_http_request_duration_seconds_bucket{%s}[%s]%s)))", request.Percentile, matchers, window, offset), "seconds", nil
-	case "pod_cpu_usage":
+	case domain.SymptomPodCPUUsage:
 		return "sum(rollback_guardian_pod_cpu_usage_cores{" + matchers + "}" + offset + ")", "cores", nil
-	case "pod_memory_usage":
+	case domain.SymptomPodMemoryUsage:
 		return "sum(rollback_guardian_pod_memory_usage_bytes{" + matchers + "}" + offset + ")", "bytes", nil
 	default:
 		return "", "", fmt.Errorf("metric %q: %w", request.Kind, ErrUnsupportedKind)
 	}
 }
 
-func (c *Client) sourceFreshnessQuery(target domain.DeploymentTarget, kind string) (string, error) {
+func (c *Client) sourceFreshnessQuery(target domain.DeploymentTarget, kind domain.SymptomKind) (string, error) {
 	var metric string
 	switch kind {
-	case "http_error_rate":
+	case domain.SymptomHTTPErrorRate:
 		metric = "rollback_guardian_http_requests_total"
-	case "request_latency":
+	case domain.SymptomRequestLatency:
 		metric = "rollback_guardian_http_request_duration_seconds_bucket"
-	case "pod_cpu_usage":
+	case domain.SymptomPodCPUUsage:
 		metric = "rollback_guardian_pod_cpu_usage_cores"
-	case "pod_memory_usage":
+	case domain.SymptomPodMemoryUsage:
 		metric = "rollback_guardian_pod_memory_usage_bytes"
 	default:
 		return "", fmt.Errorf("metric %q: %w", kind, ErrUnsupportedKind)

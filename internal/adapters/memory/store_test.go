@@ -249,7 +249,7 @@ func repositoryIncident(t *testing.T) domain.Incident {
 	if err != nil {
 		t.Fatal(err)
 	}
-	symptom, err := domain.NewSymptom("errors", 0.2, 0.1, "ratio", now)
+	symptom, err := domain.NewSymptom("http_error_rate", 0.2, 0.1, "ratio", now)
 	if err != nil {
 		t.Fatal(err)
 	}

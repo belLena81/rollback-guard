@@ -502,5 +502,5 @@ func (*kubernetesBackend) ExecuteApprovedRollback(context.Context, domain.Propos
 type metricsBackend struct{ now time.Time }
 
 func (b metricsBackend) QueryMetric(_ context.Context, _ domain.DeploymentTarget, request metricsprom.QueryRequest) (metricsprom.MetricSample, error) {
-	return metricsprom.MetricSample{Name: request.Kind, Value: .35, Unit: "ratio", ObservedAt: b.now}, nil
+	return metricsprom.MetricSample{Name: request.Kind.String(), Value: .35, Unit: "ratio", ObservedAt: b.now}, nil
 }

@@ -129,7 +129,7 @@ func TestSourceFreshnessQueriesUseFixedRawMetrics(t *testing.T) {
 		{kind: "pod_memory_usage", metric: "rollback_guardian_pod_memory_usage_bytes"},
 	} {
 		t.Run(test.kind, func(t *testing.T) {
-			query, err := client.sourceFreshnessQuery(target, test.kind)
+			query, err := client.sourceFreshnessQuery(target, domain.SymptomKind(test.kind))
 			if err != nil {
 				t.Fatal(err)
 			}
