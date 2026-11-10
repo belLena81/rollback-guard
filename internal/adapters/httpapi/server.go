@@ -23,6 +23,9 @@ type Server struct {
 	logger     *slog.Logger
 	instrument RouteMiddleware
 	metrics    http.Handler
+	// login serves the GitHub OAuth routes when set (WithGitHubLogin).
+	login        GitHubLogin
+	cookieSecure bool
 }
 
 // RouteMiddleware wraps the handler registered for one route pattern (for
@@ -71,6 +74,10 @@ func (s *Server) Routes(ready func(context.Context) error, readyTimeout time.Dur
 	s.handle(apiMux, "POST /v1/incidents/{incidentId}/approve", s.approve)
 	s.handle(apiMux, "POST /v1/incidents/{incidentId}/reject", s.reject)
 	s.handle(apiMux, "POST /v1/incidents/{incidentId}/cancel", s.cancel)
+	if s.login != nil {
+		s.handle(apiMux, http.MethodGet+" "+httpserver.GitHubLoginPath, s.githubLogin)
+		s.handle(apiMux, http.MethodGet+" "+httpserver.GitHubCallbackPath, s.githubCallback)
+	}
 	var apiHandler http.Handler = apiMux
 	if auth != nil {
 		apiHandler = auth.Wrap(apiHandler)

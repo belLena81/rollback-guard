@@ -179,7 +179,9 @@ paths:
       description: >-
         Completes the OAuth flow, checks organization membership, and issues a
         session. The session cookie is set and the same token is returned once
-        in the body for scripts; treat it as a secret.
+        in the body for scripts; treat it as a secret. The OAuth state cookie
+        is cleared on every outcome, and every response carries
+        Cache-Control no-store.
       security: []
       parameters:
         - name: code
@@ -201,14 +203,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionResponse'
-        '400': { $ref: '#/components/responses/BadRequest' }
+        '400':
+          description: >-
+            The state cookie is missing, tampered with or expired, the state
+            does not match, or GitHub rejected the code (error
+            validation_failed, fixed message). Start the login again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '403':
-          description: The GitHub user is not a member of the allowed organization (error forbidden). No session is issued.
+          description: >-
+            The GitHub user is not a member of the allowed organization, or
+            the user is disabled (error forbidden, fixed message). No session
+            is issued and, for a non-member, no user is stored.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '500': { $ref: '#/components/responses/InternalError' }
+        '502':
+          description: >-
+            GitHub was unreachable, timed out or answered unusably (error
+            bad_gateway, fixed message). The provider's response is never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /v1/auth/logout:
     post:
       operationId: logout
@@ -322,7 +344,7 @@ components:
     sessionCookie:
       type: apiKey
       in: cookie
-      name: rg_session
+      name: rollback_guard_session
       description: Opaque session token issued by the OAuth callback (HttpOnly cookie).
     bearerAuth:
       type: http
@@ -447,7 +469,7 @@ components:
         error:
           type: string
           description: Stable, machine-readable error code.
-          enum: [validation_failed, invalid_json, unauthenticated, forbidden, not_found, conflict, rollback_outcome_unknown, internal_error]
+          enum: [validation_failed, invalid_json, unauthenticated, forbidden, not_found, conflict, rollback_outcome_unknown, internal_error, bad_gateway]
         message:
           type: string
           description: Human-readable message; fixed per code except for validation_failed and not_found.
