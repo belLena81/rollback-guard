@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -74,8 +74,6 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) RequireTools(ctx context.Context, expected []string) error {
-	want := append([]string(nil), expected...)
-	sort.Strings(want)
 	var got []string
 	for tool, err := range c.session.Tools(ctx, nil) {
 		if err != nil {
@@ -83,9 +81,16 @@ func (c *Client) RequireTools(ctx context.Context, expected []string) error {
 		}
 		got = append(got, tool.Name)
 	}
-	sort.Strings(got)
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		return fmt.Errorf("MCP tool catalog = %v, want %v", got, want)
+	return requireToolCatalog(got, expected)
+}
+
+// requireToolCatalog fails closed unless the served tool names are exactly
+// the expected ones, in any order.
+func requireToolCatalog(served, expected []string) error {
+	want := slices.Sorted(slices.Values(expected))
+	got := slices.Sorted(slices.Values(served))
+	if !slices.Equal(got, want) {
+		return fmt.Errorf("MCP tool catalog = %q, want %q", got, want)
 	}
 	return nil
 }
