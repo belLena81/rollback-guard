@@ -1,0 +1,90 @@
+# Agent sandbox: `./.devcontainer/sandbox.sh up` (see .devcontainer/README.md).
+# Nothing here mounts the host Docker socket or the real checkout.
+name: rollback-guard-sandbox
+
+services:
+  dev:
+    build:
+      context: .
+      args:
+        USER_UID: ${SANDBOX_UID:-1000}
+        USER_GID: ${SANDBOX_GID:-1000}
+    init: true
+    working_dir: /workspace
+    volumes:
+      - ${SANDBOX_DIR:?run via sandbox.sh}:/workspace
+      - go-cache:/home/dev/.cache
+      - go-mod:/home/dev/go
+      - claude-home:/home/dev/.claude
+      - kube:/home/dev/.kube
+    environment:
+      # Throwaway credentials for the sandbox database only.
+      DATABASE_URL: postgres://rollback_guard:rollback_guard@postgres:5432/rollback_guard?sslmode=disable
+      PGHOST: postgres
+      PGUSER: rollback_guard
+      PGPASSWORD: rollback_guard
+      PGDATABASE: rollback_guard
+      # Testcontainers and kind run against the isolated dind daemon.
+      DOCKER_HOST: tcp://dind:2375
+      TESTCONTAINERS_HOST_OVERRIDE: dind
+      KUBECONFIG: /home/dev/.kube/config
+      PROMETHEUS_URL: http://prometheus:9090
+      # Free local LLM (start with `sandbox.sh up llm`); OpenAI-compatible API.
+      LLM_BASE_URL: http://ollama:11434/v1
+      LLM_MODEL: ${SANDBOX_LLM_MODEL:-qwen2.5:3b}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      IS_SANDBOX: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dind:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rollback_guard
+      POSTGRES_PASSWORD: rollback_guard
+      POSTGRES_DB: rollback_guard
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rollback_guard"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Isolated Docker daemon for testcontainers and the kind cluster.
+  dind:
+    image: docker:29-dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: ["--tls=false"]
+    volumes:
+      - dind-data:/var/lib/docker
+    healthcheck:
+      test: ["CMD", "docker", "-H", "tcp://127.0.0.1:2375", "info"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["llm"]
+    volumes:
+      - ollama-data:/root/.ollama
+
+volumes:
+  go-cache:
+  go-mod:
+  claude-home:
+  kube:
+  pg-data:
+  dind-data:
+  ollama-data:

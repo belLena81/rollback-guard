@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "gopls": {
+      "command": "gopls",
+      "args": ["mcp"]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "postgres": {
+      "command": "uvx",
+      "args": ["postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${DATABASE_URL:-postgres://rollback_guard:rollback_guard@postgres:5432/rollback_guard?sslmode=disable}"
+      }
+    },
+    "kubernetes": {
+      "command": "npx",
+      "args": ["-y", "kubernetes-mcp-server@latest", "--read-only"]
+    }
+  }
+}

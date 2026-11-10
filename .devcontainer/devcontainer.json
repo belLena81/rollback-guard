@@ -1,0 +1,8 @@
+{
+  "name": "rollback-guard-sandbox",
+  "dockerComposeFile": "compose.yaml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "dev",
+  "initializeCommand": "./.devcontainer/sandbox.sh init"
+}
