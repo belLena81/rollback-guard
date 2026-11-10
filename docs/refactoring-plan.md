@@ -20,7 +20,7 @@ Source: a code-quality audit of the `phase6` branch (production code under `cmd/
 | 4 | Phase 6 resilience decorators (done) | |
 | 5 | R3 Approve-and-execute use case (done) | The E2E flow drives exactly this path; fix its shape first. |
 | 6 | Phase 6 E2E flow and CI | CI enforces the ratcheted lint config from here on. |
-| 7 | R4-R8 (R4, R5, R6 done) | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
+| 7 | R4-R8 (R4-R7 done) | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
 
 ## R1. Correctness defects (done)
 
@@ -126,9 +126,21 @@ Known gap, unchanged by R6: the SDK reads `OPENAI_CUSTOM_HEADERS` from the envir
 4. **LLM adapter.** Replace the custom header-stripping `RoundTripper` with the SDK's `option.WithHeaderDel`, keeping the tests that prove no credentials leak.
 5. **Persistence placement.** SQL lives in `adapters/a2a` (`idempotent_investigator.go`, `postgres_task_store.go`). Move it under `adapters/postgres` behind a small port, or record the exception in an ADR.
 
-## R7. Standard-library modernisation
+## R7. Standard-library modernisation (done)
 
-Mechanical, no behaviour change: `slices.Clone` (10 places), `slices.SortFunc` (3), `slices.Contains` (6), `new(false)` for the two `boolPointer` helpers, `model.Duration` for `durationLiteral`, drop the dead `crypto/rand` error branch, plus the `modernize`, `intrange`, `perfsprint`, and `unconvert` hints. Run the linters' auto-fix, review the diff, enable the linters.
+Status: implemented on `refactor/r7-stdlib`, two code commits and one lint commit. `slices.Clone` replaces the ten append-copy idioms; `maps.Copy` the memory store's clone loop; `slices.SortFunc` the three `sort.Slice` calls in the kubernetes client; `slices.Contains` / `ContainsFunc` six membership loops; `new(false)` / `new(true)` replace the `boolPtr` and `boolPointer` helpers; `model.Duration` backs `durationLiteral`; `runtime.IDGenerator` drops the dead `crypto/rand` error branch. Also applied: `intrange`, `copyloopvar`, `perfsprint`, `unconvert`, `waitgroup.Go`, `stringsseq`, `testingcontext`. The five linters are ratcheted in `.golangci.yml`. No REST, MCP, A2A, migration, or stored-value change.
+
+Skipped, with reason:
+
+- `omitzero` on the `omitempty` tags of four struct and time fields in `postgres/codecs.go`. It would change the JSON persisted in the event and evidence payloads (zero times and structs stop being written). Suppressed with a `//nolint:modernize` reason.
+
+Behaviour notes (equivalent, not byte-identical):
+
+- `slices.Clone` returns an empty non-nil slice for an empty non-nil input, where the old idiom returned nil. No caller in the test suites depends on the difference.
+- `model.Duration` renders canonical PromQL durations, so a 2-minute window is sent as `[2m]` rather than `[2m0s]`. The `offset` text is unchanged for the values used.
+- `slices.SortFunc` is not stable, as `sort.Slice` was not. Ties (for example, events with equal `ObservedAt`) may order differently.
+
+Gates on the final tree: `make lint`, `make test-race`, `make contract-test`, phase3-5 integration (uncached, 0 skips), postgres integration (39 passed, 0 skipped), and `govulncheck` (no vulnerabilities).
 
 ## R8. Readability and error context
 
