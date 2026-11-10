@@ -118,7 +118,7 @@ Status: implemented on `refactor/r5-domain-vocabulary`, one commit per item. Dom
 
 1. **MCP tool handlers.** The three-line `protocol.Failure[T]` return appears 32 times. One generic `handle[In, Out]` wrapper. Tool names and schemas must not change; `test/contract/mcp_tools_test.go` is the guard.
 2. **pgx.** `pgx.CollectRows` for the four manual scan loops; batch or `unnest` the per-row evidence-reference inserts in `conclusionRepo.Save`.
-3. **`/metrics`.** Replace the hand-written exposition string with `promhttp.HandlerFor`. Expected to be absorbed by the telemetry task; verify at merge.
+3. **`/metrics`.** Replace the hand-written exposition string with `promhttp.HandlerFor`. Expected to be absorbed by the telemetry task; verify at merge. **Already done:** `telemetry.Provider.MetricsHandler` and `internal/demoapi` both use `promhttp.HandlerFor`; no hand-written exposition string remains (`httpapi.emptyMetrics` only answers an empty body when no registry is wired).
 4. **LLM adapter.** Replace the custom header-stripping `RoundTripper` with the SDK's `option.WithHeaderDel`, keeping the tests that prove no credentials leak.
 5. **Persistence placement.** SQL lives in `adapters/a2a` (`idempotent_investigator.go`, `postgres_task_store.go`). Move it under `adapters/postgres` behind a small port, or record the exception in an ADR.
 
