@@ -87,12 +87,12 @@ func (g *Gateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, pr
 	if task.Status.State.Terminal() {
 		return resultFromTask(task)
 	}
-	watch := &taskWatch{gateway: g, ctx: ctx, ref: ref, progress: progress}
+	watch := &taskWatch{gateway: g, ref: ref, progress: progress}
 	for event, eventErr := range g.client.SubscribeToTask(extensionContext(ctx), &a2a.SubscribeToTaskRequest{ID: a2a.TaskID(ref.TaskID)}) {
 		if eventErr != nil {
 			return g.resultAfterStreamError(ctx, ref, eventErr)
 		}
-		if final, err := watch.observe(event); final != nil || err != nil {
+		if final, err := watch.observe(ctx, event); final != nil || err != nil {
 			if err != nil {
 				return ports.InvestigationResult{}, err
 			}
@@ -119,7 +119,6 @@ func (g *Gateway) resultAfterStreamError(ctx context.Context, ref domain.Investi
 // taskWatch folds the events of one task subscription into a result.
 type taskWatch struct {
 	gateway  *Gateway
-	ctx      context.Context
 	ref      domain.InvestigationTaskRef
 	progress func(domain.InvestigationStage) error
 	result   *ports.InvestigationResult
@@ -127,7 +126,7 @@ type taskWatch struct {
 
 // observe handles one event. It returns the final result, or an error, once
 // the watch is over; it returns neither while the task is still running.
-func (w *taskWatch) observe(event a2a.Event) (*ports.InvestigationResult, error) {
+func (w *taskWatch) observe(ctx context.Context, event a2a.Event) (*ports.InvestigationResult, error) {
 	switch value := event.(type) {
 	case *a2a.Task:
 		if parsed, parseErr := resultFromArtifacts(value.Artifacts); parseErr == nil {
@@ -135,7 +134,7 @@ func (w *taskWatch) observe(event a2a.Event) (*ports.InvestigationResult, error)
 		}
 		return nil, failureOfState(value.Status.State)
 	case *a2a.TaskStatusUpdateEvent:
-		return w.observeStatus(value)
+		return w.observeStatus(ctx, value)
 	case *a2a.TaskArtifactUpdateEvent:
 		if value.Artifact == nil || value.Artifact.Name != ResultArtifactName {
 			return nil, errors.New("unexpected investigation artifact")
@@ -153,7 +152,7 @@ func (w *taskWatch) observe(event a2a.Event) (*ports.InvestigationResult, error)
 	}
 }
 
-func (w *taskWatch) observeStatus(update *a2a.TaskStatusUpdateEvent) (*ports.InvestigationResult, error) {
+func (w *taskWatch) observeStatus(ctx context.Context, update *a2a.TaskStatusUpdateEvent) (*ports.InvestigationResult, error) {
 	state := update.Status.State
 	if state == a2a.TaskStateWorking && update.Status.Message != nil {
 		if err := w.reportProgress(update.Status.Message.Parts); err != nil {
@@ -169,7 +168,7 @@ func (w *taskWatch) observeStatus(update *a2a.TaskStatusUpdateEvent) (*ports.Inv
 	if w.result != nil {
 		return w.result, nil
 	}
-	latest, err := w.gateway.client.GetTask(extensionContext(w.ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(w.ref.TaskID)})
+	latest, err := w.gateway.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(w.ref.TaskID)})
 	if err != nil {
 		return nil, err
 	}

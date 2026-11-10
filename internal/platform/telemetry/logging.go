@@ -73,7 +73,7 @@ func correlationLogAttrs(ctx context.Context) []slog.Attr {
 	add(FieldIdempotencyKey, c.IdempotencyKey)
 	if span := trace.SpanContextFromContext(ctx); span.IsValid() {
 		attrs = append(attrs, slog.String(FieldTraceID, span.TraceID().String()), slog.String(FieldSpanID, span.SpanID().String()))
-	} else if traceID := carrierTraceID(c.TraceID); traceID != "" {
+	} else if traceID := carrierTraceID(ctx, c.TraceID); traceID != "" {
 		attrs = append(attrs, slog.String(FieldTraceID, traceID))
 	}
 	return attrs
@@ -81,11 +81,11 @@ func correlationLogAttrs(ctx context.Context) []slog.Attr {
 
 // carrierTraceID returns the trace ID inside a persisted W3C carrier, or the
 // value itself for legacy non-W3C identifiers.
-func carrierTraceID(carrier string) string {
+func carrierTraceID(ctx context.Context, carrier string) string {
 	if carrier == "" {
 		return ""
 	}
-	ctx := propagation.TraceContext{}.Extract(context.Background(), propagation.MapCarrier{traceparentHeader: carrier})
+	ctx = propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{traceparentHeader: carrier})
 	if span := trace.SpanContextFromContext(ctx); span.IsValid() {
 		return span.TraceID().String()
 	}

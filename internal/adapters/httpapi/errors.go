@@ -174,9 +174,9 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 // logged internal_error response instead of a success status with a broken
 // body.
 func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, value any) {
-	id := requestID(r)
+	ctx, id := r.Context(), requestID(r)
 	writeJSONWith(w, status, value, id, func(err error) {
-		s.logger.ErrorContext(r.Context(), "encode response failed", "status", status, "request_id", id, "error", err)
+		s.logger.ErrorContext(ctx, "encode response failed", "status", status, "request_id", id, "error", err)
 	})
 }
 

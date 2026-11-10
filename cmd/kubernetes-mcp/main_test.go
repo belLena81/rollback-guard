@@ -59,7 +59,7 @@ func TestBuildHTTPServesHealthMetricsAndMCPForBothModes(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			cfg := testConfig(t, mode)
 			clientset := fake.NewClientset()
-			tel, err := telemetry.New(telemetry.Settings{ServiceName: "kubernetes-mcp-" + mode, SampleRatio: 1})
+			tel, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: "kubernetes-mcp-" + mode, SampleRatio: 1})
 			if err != nil {
 				t.Fatal(err)
 			}

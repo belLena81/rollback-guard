@@ -70,7 +70,7 @@ func TestBuildHTTPServesHealthAndMetrics(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tel, err := telemetry.New(telemetry.Settings{ServiceName: "observability-mcp", SampleRatio: 1})
+			tel, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: "observability-mcp", SampleRatio: 1})
 			if err != nil {
 				t.Fatal(err)
 			}

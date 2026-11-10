@@ -97,7 +97,7 @@ func TestRetainRollbackMutationLockIgnoresReplacedLockReleaseFailure(t *testing.
 	replacement := &rollbackMutationLock{key: key}
 	guard := &RollbackMutationGuard{locks: map[domain.IdempotencyKey]*rollbackMutationLock{key: previous}}
 
-	guard.retainRollbackMutationLock(key, replacement)
+	guard.retainRollbackMutationLock(t.Context(), key, replacement)
 
 	if got := guard.locks[key]; got != replacement {
 		t.Fatalf("retained lock = %p, want replacement %p", got, replacement)

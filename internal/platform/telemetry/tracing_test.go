@@ -200,7 +200,7 @@ func TestShutdownIsBoundedWhenCollectorHangs(t *testing.T) {
 	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
 	defer collector.Close()
 	defer close(release)
-	provider, err := telemetry.New(telemetry.Settings{ServiceName: "test", OTLPEndpoint: collector.URL, SampleRatio: 1, ShutdownTimeout: 200 * time.Millisecond})
+	provider, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: "test", OTLPEndpoint: collector.URL, SampleRatio: 1, ShutdownTimeout: 200 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestShutdownFlushesSpansToOTLPCollector(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer collector.Close()
-	provider, err := telemetry.New(telemetry.Settings{ServiceName: "test", OTLPEndpoint: collector.URL + "/otlp", SampleRatio: 1, ShutdownTimeout: 5 * time.Second})
+	provider, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: "test", OTLPEndpoint: collector.URL + "/otlp", SampleRatio: 1, ShutdownTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestShutdownFlushesSpansToOTLPCollector(t *testing.T) {
 
 func TestZeroSampleRatioRecordsNothing(t *testing.T) {
 	spans := tracetest.NewInMemoryExporter()
-	provider, err := telemetry.New(telemetry.Settings{ServiceName: "test", SampleRatio: 0}, telemetry.WithSyncExporter(spans))
+	provider, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: "test", SampleRatio: 0}, telemetry.WithSyncExporter(spans))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestNewRejectsInvalidSettings(t *testing.T) {
 		{ServiceName: "svc", SampleRatio: 1, OTLPEndpoint: "collector:4318"},
 	}
 	for _, settings := range tests {
-		if _, err := telemetry.New(settings); err == nil {
+		if _, err := telemetry.New(t.Context(), settings); err == nil {
 			t.Errorf("New(%+v) succeeded", settings)
 		}
 	}

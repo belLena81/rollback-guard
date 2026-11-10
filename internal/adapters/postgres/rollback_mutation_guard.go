@@ -39,7 +39,9 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 	releaseOnReturn := true
 	defer func() {
 		if releaseOnReturn {
-			resultErr = errors.Join(resultErr, lock.release(context.Background()))
+			// Detached on purpose: the lock must be dropped even if ctx is
+			// cancelled; release applies its own timeout.
+			resultErr = errors.Join(resultErr, lock.release(context.WithoutCancel(ctx)))
 		}
 	}()
 	tx, err := lock.conn.BeginTx(ctx, pgx.TxOptions{})
@@ -79,7 +81,7 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 		return ports.RollbackMutationAttempt{}, fmt.Errorf("commit rollback mutation start: %w", err)
 	}
 	releaseOnReturn = false
-	g.retainRollbackMutationLock(key, lock)
+	g.retainRollbackMutationLock(ctx, key, lock)
 	return ports.RollbackMutationAttempt{Mutation: existing, Approved: trusted.approved, Lease: lock.lease}, nil
 }
 
@@ -181,7 +183,9 @@ func (g *RollbackMutationGuard) Complete(ctx context.Context, attempt ports.Roll
 		return domain.RollbackMutation{}, fmt.Errorf("complete rollback mutation: %w", ports.ErrRollbackMutationLeaseNotHeld)
 	}
 	defer func() {
-		resultErr = errors.Join(resultErr, lock.release(context.Background()))
+		// Detached on purpose: the lock must be dropped even if ctx is
+		// cancelled; release applies its own timeout.
+		resultErr = errors.Join(resultErr, lock.release(context.WithoutCancel(ctx)))
 	}()
 	completed, err := pending.Complete(alreadyApplied, completedAt)
 	if err != nil {
@@ -226,14 +230,16 @@ func (g *RollbackMutationGuard) Complete(ctx context.Context, attempt ports.Roll
 
 // Release unlocks the lock acquired by attempt's lease. A lock held by any
 // other attempt for the same key, including a later replay, is left alone.
-func (g *RollbackMutationGuard) Release(_ context.Context, attempt ports.RollbackMutationAttempt) error {
+func (g *RollbackMutationGuard) Release(ctx context.Context, attempt ports.RollbackMutationAttempt) error {
 	lock := g.takeRollbackMutationLock(attempt.Mutation.Key(), attempt.Lease)
 	if lock == nil {
 		return nil
 	}
-	// Detached on purpose: the advisory lock must be dropped even when the
+	// Detached on purpose (WithoutCancel keeps the values, drops the
+	// cancellation; release bounds the unlock with its own timeout): the
+	// advisory lock must be dropped even when the
 	// caller's request has ended.
-	return lock.release(context.Background())
+	return lock.release(context.WithoutCancel(ctx))
 }
 
 // rollbackMutationLockCloseTimeout bounds the advisory unlock and, when the
@@ -272,16 +278,16 @@ func (g *RollbackMutationGuard) acquireRollbackMutationLock(ctx context.Context,
 	return &rollbackMutationLock{key: key, lease: newRollbackMutationLease(), conn: conn}, nil
 }
 
-func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.IdempotencyKey, lock *rollbackMutationLock) {
+func (g *RollbackMutationGuard) retainRollbackMutationLock(ctx context.Context, key domain.IdempotencyKey, lock *rollbackMutationLock) {
 	g.mu.Lock()
 	previous := g.locks[key]
 	g.locks[key] = lock
 	g.mu.Unlock()
 	if previous != nil {
-		// Begin has already committed by the time a lock is retained, so a failure to
+		// Detached on purpose, as in Release. Begin has already committed by the time a lock is retained, so a failure to
 		// unlock the stale, replaced lock must not fail the new attempt. On unlock
 		// failure release closes the session, which drops its advisory lock.
-		_ = previous.release(context.Background()) //nolint:errcheck // intentional: see comment above; covered by TestRetainRollbackMutationLockIgnoresReplacedLockReleaseFailure
+		_ = previous.release(context.WithoutCancel(ctx)) //nolint:errcheck // intentional: see comment above; covered by TestRetainRollbackMutationLockIgnoresReplacedLockReleaseFailure
 	}
 }
 

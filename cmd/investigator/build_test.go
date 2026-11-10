@@ -22,7 +22,7 @@ import (
 
 func testTelemetry(t *testing.T) *telemetry.Provider {
 	t.Helper()
-	tel, err := telemetry.New(telemetry.Settings{ServiceName: "investigator", SampleRatio: 1})
+	tel, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: "investigator", SampleRatio: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

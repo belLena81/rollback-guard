@@ -259,7 +259,7 @@ func newProcess(t *testing.T, name string, spans *tracetest.InMemoryExporter) *p
 	t.Helper()
 	logs := &syncBuffer{}
 	logger := telemetry.NewLogger(logs, slog.LevelInfo)
-	provider, err := telemetry.New(telemetry.Settings{ServiceName: name, SampleRatio: 1}, telemetry.WithSyncExporter(spans), telemetry.WithLogger(logger))
+	provider, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: name, SampleRatio: 1}, telemetry.WithSyncExporter(spans), telemetry.WithLogger(logger))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -50,7 +50,7 @@ func TestOpenAPIDescribesPrometheusMetricsEndpoint(t *testing.T) {
 }
 
 func TestOrchestratorMetricsEndpointMatchesContract(t *testing.T) {
-	provider, err := telemetry.New(telemetry.Settings{ServiceName: "orchestrator", SampleRatio: 1})
+	provider, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: "orchestrator", SampleRatio: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestOrchestratorMetricsEndpointMatchesContract(t *testing.T) {
 // TestMCPTelemetryOptionsKeepToolCatalogs proves instrumentation adds a
 // /metrics HTTP route but never a tool.
 func TestMCPTelemetryOptionsKeepToolCatalogs(t *testing.T) {
-	provider, err := telemetry.New(telemetry.Settings{ServiceName: "mcp", SampleRatio: 1})
+	provider, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: "mcp", SampleRatio: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

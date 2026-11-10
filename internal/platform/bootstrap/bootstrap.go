@@ -99,19 +99,19 @@ func CloseMCP(client *mcpadapter.Client, name string, logger *slog.Logger) {
 // process telemetry provider logging through logger. The returned stop
 // function flushes and shuts the provider down; call it when the process
 // exits.
-func StartTelemetry(cfg config.TelemetryConfig, logger *slog.Logger, level *slog.LevelVar) (*telemetry.Provider, func(), error) {
+func StartTelemetry(ctx context.Context, cfg config.TelemetryConfig, logger *slog.Logger, level *slog.LevelVar) (*telemetry.Provider, func(), error) {
 	if logger == nil || level == nil {
 		return nil, nil, errors.New("telemetry requires a logger and its level")
 	}
 	level.Set(cfg.LogLevel)
-	provider, err := telemetry.New(telemetry.SettingsFrom(cfg), telemetry.WithLogger(logger))
+	provider, err := telemetry.New(ctx, telemetry.SettingsFrom(cfg), telemetry.WithLogger(logger))
 	if err != nil {
 		return nil, nil, err
 	}
 	stop := func() {
-		// The process is exiting, so there is no request context left; the
+		// ctx is cancelled by the exit signal, which must not cut the flush short; the
 		// provider applies its own configured shutdown timeout.
-		if err := provider.Shutdown(context.Background()); err != nil {
+		if err := provider.Shutdown(context.WithoutCancel(ctx)); err != nil {
 			logger.Warn("telemetry shutdown incomplete", "error", err)
 		}
 	}

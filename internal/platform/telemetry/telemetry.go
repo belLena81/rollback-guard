@@ -86,7 +86,7 @@ type Provider struct {
 
 var _ ports.Tracer = (*Provider)(nil)
 
-func New(settings Settings, opts ...Option) (*Provider, error) {
+func New(ctx context.Context, settings Settings, opts ...Option) (*Provider, error) {
 	if strings.TrimSpace(settings.ServiceName) == "" {
 		return nil, errors.New("telemetry service name is required")
 	}
@@ -126,7 +126,7 @@ func New(settings Settings, opts ...Option) (*Provider, error) {
 	case o.exporter != nil:
 		providerOptions = append(providerOptions, sdktrace.WithSyncer(o.exporter))
 	case settings.OTLPEndpoint != "":
-		exporter, err := newOTLPExporter(settings.OTLPEndpoint)
+		exporter, err := newOTLPExporter(ctx, settings.OTLPEndpoint)
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +145,7 @@ func New(settings Settings, opts ...Option) (*Provider, error) {
 	}, nil
 }
 
-func newOTLPExporter(endpoint string) (sdktrace.SpanExporter, error) {
+func newOTLPExporter(ctx context.Context, endpoint string) (sdktrace.SpanExporter, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return nil, errors.New("invalid OTLP endpoint")
@@ -156,7 +156,7 @@ func newOTLPExporter(endpoint string) (sdktrace.SpanExporter, error) {
 		exporterOptions = append(exporterOptions, otlptracehttp.WithInsecure())
 	}
 	// The exporter connects lazily; creation never blocks on the collector.
-	exporter, err := otlptracehttp.New(context.Background(), exporterOptions...)
+	exporter, err := otlptracehttp.New(ctx, exporterOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP trace exporter: %w", err)
 	}

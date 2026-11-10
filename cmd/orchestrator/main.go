@@ -45,7 +45,7 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 	if err != nil {
 		return err
 	}
-	tel, stopTelemetry, err := bootstrap.StartTelemetry(cfg.Telemetry, logger, level)
+	tel, stopTelemetry, err := bootstrap.StartTelemetry(ctx, cfg.Telemetry, logger, level)
 	if err != nil {
 		return err
 	}

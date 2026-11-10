@@ -31,7 +31,7 @@ func TestBuildHTTPBoundsReadinessPerMode(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := testConfig(t, test.mode)
 			cfg.DBPingTimeout = test.dbPingTimeout
-			tel, err := telemetry.New(telemetry.Settings{ServiceName: "kubernetes-mcp", SampleRatio: 1})
+			tel, err := telemetry.New(t.Context(), telemetry.Settings{ServiceName: "kubernetes-mcp", SampleRatio: 1})
 			if err != nil {
 				t.Fatal(err)
 			}
