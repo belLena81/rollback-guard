@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,10 +17,11 @@ import (
 type authData struct {
 	users    map[domain.UserID]domain.User
 	sessions map[domain.SessionID]domain.Session
+	audit    []domain.AuthAuditEvent
 }
 
 func (d *authData) clone() *authData {
-	return &authData{users: maps.Clone(d.users), sessions: maps.Clone(d.sessions)}
+	return &authData{users: maps.Clone(d.users), sessions: maps.Clone(d.sessions), audit: slices.Clone(d.audit)}
 }
 
 // AuthUnitOfWork is the in-process ports.AuthUnitOfWork. It mirrors the
@@ -58,6 +60,7 @@ type authRepositories struct{ data *authData }
 
 func (r authRepositories) Users() ports.UserRepository       { return userRepo(r) }
 func (r authRepositories) Sessions() ports.SessionRepository { return sessionRepo(r) }
+func (r authRepositories) Audit() ports.AuthAuditRepository  { return authAuditRepo(r) }
 
 type userRepo struct{ data *authData }
 

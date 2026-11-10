@@ -286,6 +286,19 @@ type UserRepository interface {
 	GetByID(domain.UserID) (domain.User, error)
 	GetByGitHubID(int64) (domain.User, error)
 	Update(user domain.User, expectedVersion uint64) error
+	// LockActiveAdministrators returns the IDs of enabled administrators and
+	// locks them until the transaction ends, so two concurrent demotions
+	// cannot both observe the other administrator and leave none.
+	LockActiveAdministrators() ([]domain.UserID, error)
+}
+
+// AuthAuditRepository is append-only: there is no update or delete.
+type AuthAuditRepository interface {
+	// Append returns *domain.AlreadyExistsError for a duplicate ID and
+	// *domain.ValidationError for an event no constructor built.
+	Append(domain.AuthAuditEvent) error
+	// ListRecent returns at most limit events, newest first.
+	ListRecent(limit int) ([]domain.AuthAuditEvent, error)
 }
 
 // SessionRepository stores sessions by token hash; it never sees a raw token.
@@ -318,6 +331,7 @@ type SessionRepository interface {
 type AuthRepositories interface {
 	Users() UserRepository
 	Sessions() SessionRepository
+	Audit() AuthAuditRepository
 }
 
 // AuthUnitOfWork runs fn in one atomic transaction over users and sessions,

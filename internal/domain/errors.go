@@ -21,7 +21,19 @@ var (
 	ErrUserDisabled             = errors.New("user disabled")
 	ErrNoActiveSession          = errors.New("no active session")
 	ErrUnauthenticated          = errors.New("unauthenticated")
+	ErrLastAdministrator        = errors.New("last administrator")
 )
+
+// LastAdministratorError reports that a change would leave no enabled
+// administrator.
+type LastAdministratorError struct{}
+
+func (*LastAdministratorError) Error() string {
+	return "the change would leave no active administrator"
+}
+func (*LastAdministratorError) Unwrap() error {
+	return ErrLastAdministrator
+}
 
 // UnauthenticatedError reports that a request presented no usable session.
 // Every reason (missing, malformed, unknown, expired or revoked token, or a

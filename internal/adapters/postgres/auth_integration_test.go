@@ -23,6 +23,7 @@ var allUpMigrations = []string{
 	"000003_a2a_investigation.up.sql",
 	"000004_ai_diagnosis.up.sql",
 	"000005_auth_users_sessions.up.sql",
+	"000006_auth_audit_events.up.sql",
 }
 
 var authNow = time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)

@@ -37,6 +37,7 @@ type authRepositories struct {
 
 func (a authRepositories) Users() ports.UserRepository       { return userRepo(a) }
 func (a authRepositories) Sessions() ports.SessionRepository { return sessionRepo(a) }
+func (a authRepositories) Audit() ports.AuthAuditRepository  { return authAuditRepo(a) }
 
 // userColumns are read through the alias u, both alone and in the session join.
 const userColumns = `u.id, u.github_id, u.login, u.email, u.organizations, u.role, u.disabled, u.version, u.created_at, u.updated_at`

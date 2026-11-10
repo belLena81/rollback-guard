@@ -45,7 +45,7 @@ func (p *RoleAccessPolicy) Authorize(ctx context.Context, actor domain.Actor, ac
 		// A system or agent actor never performs a human use case.
 		return &domain.ForbiddenError{Action: action}
 	}
-	githubID, ok := githubIDOf(actor)
+	githubID, ok := githubIDOf(actor.ID())
 	if !ok {
 		return &domain.UnauthenticatedError{}
 	}
@@ -67,16 +67,16 @@ func (p *RoleAccessPolicy) Authorize(ctx context.Context, actor domain.Actor, ac
 }
 
 // githubIDOf parses the canonical "github:<positive decimal>" actor ID.
-func githubIDOf(actor domain.Actor) (int64, bool) {
-	raw, ok := strings.CutPrefix(string(actor.ID()), githubActorPrefix)
+func githubIDOf(id domain.ActorID) (int64, bool) {
+	raw, ok := strings.CutPrefix(string(id), githubActorPrefix)
 	if !ok {
 		return 0, false
 	}
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 || strconv.FormatInt(id, 10) != raw {
+	githubID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || githubID <= 0 || strconv.FormatInt(githubID, 10) != raw {
 		return 0, false
 	}
-	return id, true
+	return githubID, true
 }
 
 // LocalAccessPolicy is the AUTH_MODE=local policy: the one configured local

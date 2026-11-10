@@ -103,6 +103,7 @@ const (
 	messageNotFound          = "resource not found"
 	messageForbidden         = "only a human actor can decide approvals"
 	messageRoleForbidden     = "your role does not allow this operation"
+	messageLastAdministrator = "the change would leave no active administrator"
 	messageUnauthenticated   = "authentication required"
 	messageIllegalTransition = "the incident is not in a state that allows this operation"
 	messageVersionConflict   = "the incident was changed by another request; reload and retry"
@@ -168,6 +169,8 @@ func errorResponse(err error) (int, string, string) {
 		return http.StatusConflict, codeConflict, messageExpired
 	case errors.Is(err, domain.ErrPolicyDenied):
 		return http.StatusConflict, codeConflict, messagePolicyDenied
+	case errors.Is(err, domain.ErrLastAdministrator):
+		return http.StatusConflict, codeConflict, messageLastAdministrator
 	default:
 		return http.StatusInternalServerError, codeInternal, messageInternal
 	}
