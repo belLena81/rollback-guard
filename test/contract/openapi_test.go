@@ -76,14 +76,112 @@ func TestOpenAPIDocumentsTheErrorBody(t *testing.T) {
 			t.Fatalf("path %s = %#v", path, item)
 		}
 		for method := range operations {
-			responses := requireObject(t, requireObject(t, operations, method), "responses")
-			for _, status := range []string{"400", "500"} {
+			operation := requireObject(t, operations, method)
+			responses := requireObject(t, operation, "responses")
+			statuses := []string{"500"}
+			// 400 is required wherever the client supplies input.
+			_, hasParameters := operation["parameters"]
+			_, hasBody := operation["requestBody"]
+			if hasParameters || hasBody {
+				statuses = append(statuses, "400")
+			}
+			for _, status := range statuses {
 				if !refersToError(t, components(t, document), responses[status]) {
 					t.Errorf("%s %s: response %s does not use the Error schema", method, path, status)
 				}
 			}
 		}
 	}
+}
+
+// authRoutes are the Phase 7 operations the spec documents. The httpapi router
+// does not serve them yet: implemented in 7.3-7.5. No test compares the spec
+// to the router today; any such comparison must exempt exactly this list.
+var authRoutes = map[string][]string{
+	"/v1/auth/github/login":              {"get"},
+	"/v1/auth/github/callback":           {"get"},
+	"/v1/auth/logout":                    {"post"},
+	"/v1/me":                             {"get"},
+	"/v1/users/{userId}/role":            {"patch"},
+	"/v1/users/{userId}/sessions:revoke": {"post"},
+}
+
+// publicOperations are the only operations that may omit a session: the OAuth
+// entry points. /health/* and /metrics are unauthenticated by design.
+var publicOperations = map[string]bool{
+	"/v1/auth/github/login":    true,
+	"/v1/auth/github/callback": true,
+}
+
+func TestOpenAPIDocumentsAuthRoutes(t *testing.T) {
+	paths := requireObject(t, loadOpenAPI(t), "paths")
+	for path, methods := range authRoutes {
+		item := requireObject(t, paths, path)
+		for _, method := range methods {
+			requireObject(t, item, method)
+		}
+	}
+}
+
+func TestOpenAPISecuresEveryV1OperationExceptOAuthEntryPoints(t *testing.T) {
+	document := loadOpenAPI(t)
+	schemes := requireObject(t, components(t, document), "securitySchemes")
+	cookie := requireObject(t, schemes, "sessionCookie")
+	if cookie["type"] != "apiKey" || cookie["in"] != "cookie" {
+		t.Fatalf("sessionCookie = %v, want apiKey in cookie", cookie)
+	}
+	bearer := requireObject(t, schemes, "bearerAuth")
+	if bearer["type"] != "http" || bearer["scheme"] != "bearer" {
+		t.Fatalf("bearerAuth = %v, want http bearer", bearer)
+	}
+	if _, global := document["security"]; global {
+		t.Fatal("security must be declared per operation, not globally")
+	}
+
+	for path, item := range requireObject(t, document, "paths") {
+		methods, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("path %s = %#v", path, item)
+		}
+		for method := range methods {
+			operation := requireObject(t, methods, method)
+			security, declared := operation["security"].([]any)
+			switch {
+			case strings.HasPrefix(path, "/v1/") && !publicOperations[path]:
+				if !declared || !containsSchemes(security, "sessionCookie", "bearerAuth") {
+					t.Errorf("%s %s: security = %v, want sessionCookie or bearerAuth", method, path, operation["security"])
+				}
+				responses := requireObject(t, operation, "responses")
+				for _, status := range []string{"401", "403"} {
+					if !refersToError(t, components(t, document), responses[status]) {
+						t.Errorf("%s %s: response %s does not use the Error schema", method, path, status)
+					}
+				}
+			default:
+				// OAuth entry points, /health/* and /metrics: explicitly open.
+				if !declared || len(security) != 0 {
+					t.Errorf("%s %s: security = %v, want explicit empty list", method, path, operation["security"])
+				}
+			}
+		}
+	}
+}
+
+func containsSchemes(requirements []any, want ...string) bool {
+	for _, name := range want {
+		found := false
+		for _, requirement := range requirements {
+			if object, ok := requirement.(map[string]any); ok {
+				if _, exists := object[name]; exists {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // approve documents rollback_outcome_unknown as a 503 with Retry-After that

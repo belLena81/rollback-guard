@@ -10,6 +10,10 @@ paths:
   /v1/incidents:
     post:
       operationId: createIncident
+      description: Requires the operator role.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -29,6 +33,7 @@ paths:
                 $ref: '#/components/schemas/IncidentSummary'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409':
           description: >-
             A non-terminal incident already exists for this deployment target
@@ -41,6 +46,9 @@ paths:
   /v1/incidents/{incidentId}:
     get:
       operationId: getIncident
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/IncidentId'
       responses:
@@ -51,22 +59,33 @@ paths:
               schema:
                 $ref: '#/components/schemas/IncidentSummary'
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
   /v1/incidents/{incidentId}/events:
     get:
       operationId: listIncidentEvents
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/IncidentId'
       responses:
         '200':
           description: Ordered audit events
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
   /v1/incidents/{incidentId}/approve:
     post:
       operationId: approveIncident
+      description: Requires the administrator role.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/IncidentId'
       requestBody:
@@ -91,6 +110,10 @@ paths:
   /v1/incidents/{incidentId}/reject:
     post:
       operationId: rejectIncident
+      description: Requires the operator role.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/IncidentId'
       requestBody:
@@ -111,6 +134,10 @@ paths:
   /v1/incidents/{incidentId}/cancel:
     post:
       operationId: cancelIncident
+      description: Requires the operator role.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/IncidentId'
       requestBody:
@@ -124,18 +151,149 @@ paths:
           description: Incident canceled
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/auth/github/login:
+    get:
+      operationId: githubLogin
+      description: >-
+        Starts the GitHub OAuth authorization-code flow (state and PKCE).
+        Redirects to GitHub and sets a short-lived HttpOnly state cookie.
+      security: []
+      responses:
+        '302':
+          description: Redirect to GitHub's authorization endpoint.
+          headers:
+            Location:
+              description: GitHub authorization URL.
+              schema: { type: string }
+            Set-Cookie:
+              description: Short-lived HttpOnly OAuth state cookie.
+              schema: { type: string }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/auth/github/callback:
+    get:
+      operationId: githubCallback
+      description: >-
+        Completes the OAuth flow, checks organization membership, and issues a
+        session. The session cookie is set and the same token is returned once
+        in the body for scripts; treat it as a secret.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Session issued.
+          headers:
+            Set-Cookie:
+              description: HttpOnly session cookie.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403':
+          description: The GitHub user is not a member of the allowed organization (error forbidden). No session is issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      description: Revokes the caller's current session and clears the session cookie.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Session revoked.
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/me:
+    get:
+      operationId: getMe
+      description: The authenticated actor and its current role.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/users/{userId}/role:
+    patch:
+      operationId: setUserRole
+      description: Requires the administrator role. Applies from the target user's next request.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetRoleRequest'
+      responses:
+        '200':
+          description: Role updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/users/{userId}/sessions:revoke:
+    post:
+      operationId: revokeUserSessions
+      description: Requires the administrator role. Revokes every session of the user; effective on their next request.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '204':
+          description: All sessions of the user revoked.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
   /health/live:
     get:
       operationId: live
+      security: []
       responses:
         '200':
           description: Process is alive
   /health/ready:
     get:
       operationId: ready
+      security: []
       responses:
         '200':
           description: Service is ready
@@ -144,6 +302,7 @@ paths:
   /metrics:
     get:
       operationId: metrics
+      security: []
       description: >-
         Prometheus metrics for this orchestrator process (per-process registry).
         Labels are bounded: route patterns, enum outcomes, and tool names only;
@@ -159,6 +318,16 @@ paths:
                 # TYPE rollback_guardian_incidents_total counter
                 rollback_guardian_incidents_total 3
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: rg_session
+      description: Opaque session token issued by the OAuth callback (HttpOnly cookie).
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The same opaque session token as `Authorization Bearer`.
   responses:
     BadRequest:
       description: >-
@@ -170,13 +339,17 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     Unauthenticated:
-      description: No request actor (error unauthenticated).
+      description: >-
+        No request actor, or the session is missing, expired, revoked or
+        belongs to a disabled user (error unauthenticated).
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     Forbidden:
-      description: Only a human actor can decide approvals (error forbidden).
+      description: >-
+        The actor's current role does not allow this action, or a non-human
+        actor tried to decide an approval (error forbidden).
       content:
         application/json:
           schema:
@@ -228,7 +401,44 @@ components:
       required: true
       schema:
         type: string
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: Actor id of the user, for example github:12345.
+      schema:
+        type: string
   schemas:
+    Role:
+      type: string
+      enum: [viewer, operator, administrator]
+    Me:
+      type: object
+      required: [actorId, login, role]
+      additionalProperties: false
+      properties:
+        actorId: { type: string, description: 'For example github:12345.' }
+        login: { type: string }
+        role:
+          $ref: '#/components/schemas/Role'
+    SetRoleRequest:
+      type: object
+      required: [role]
+      additionalProperties: false
+      properties:
+        role:
+          $ref: '#/components/schemas/Role'
+    SessionResponse:
+      type: object
+      required: [token, expiresAt, actorId, login, role]
+      additionalProperties: false
+      properties:
+        token: { type: string, description: Returned once; never stored in clear by the server. }
+        expiresAt: { type: string, format: date-time }
+        actorId: { type: string }
+        login: { type: string }
+        role:
+          $ref: '#/components/schemas/Role'
     Error:
       type: object
       required: [error, message]
