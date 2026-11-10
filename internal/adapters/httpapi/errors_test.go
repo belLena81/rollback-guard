@@ -37,7 +37,10 @@ func TestWriteErrorNeverEchoesWrappedErrorText(t *testing.T) {
 		{name: "bare validation sentinel", err: fmt.Errorf("decode %s: %w", secret, domain.ErrValidation), wantStatus: http.StatusBadRequest, wantCode: "validation_failed", wantMessage: messageValidation},
 		{name: "bare not-found sentinel", err: fmt.Errorf("lookup %s: %w", secret, domain.ErrNotFound), wantStatus: http.StatusNotFound, wantCode: "not_found", wantMessage: messageNotFound},
 		{name: "internal", err: leak, wantStatus: http.StatusInternalServerError, wantCode: "internal_error", wantMessage: messageInternal},
-		{name: "unknown rollback outcome", err: fmt.Errorf("execute approved rollback: %w", errors.Join(ports.ErrRollbackOutcomeUnknown, leak)), wantStatus: http.StatusInternalServerError, wantCode: "internal_error", wantMessage: messageInternal},
+		{name: "unknown rollback outcome", err: fmt.Errorf("execute approved rollback: %w", errors.Join(ports.ErrRollbackOutcomeUnknown, leak)), wantStatus: http.StatusServiceUnavailable, wantCode: "rollback_outcome_unknown", wantMessage: messageRollbackOutcomeUnknown},
+		// The outcome-unknown classification wins over any domain error
+		// joined into the same chain: the client must retry, not give up.
+		{name: "unknown rollback outcome joined with a conflict", err: errors.Join(ports.ErrRollbackOutcomeUnknown, &domain.VersionConflictError{Expected: 1, Actual: 2}), wantStatus: http.StatusServiceUnavailable, wantCode: "rollback_outcome_unknown", wantMessage: messageRollbackOutcomeUnknown},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -59,8 +62,15 @@ func TestWriteErrorNeverEchoesWrappedErrorText(t *testing.T) {
 					t.Fatalf("error text leaked: %s", output)
 				}
 			}
-			if test.wantStatus == http.StatusInternalServerError && !strings.Contains(logs.String(), `"request_id":"req-42"`) {
-				t.Fatalf("internal error not logged with the request ID: %s", logs.String())
+			if test.wantStatus >= http.StatusInternalServerError && !strings.Contains(logs.String(), `"request_id":"req-42"`) {
+				t.Fatalf("server error not logged with the request ID: %s", logs.String())
+			}
+			wantRetryAfter := ""
+			if test.wantCode == "rollback_outcome_unknown" {
+				wantRetryAfter = rollbackOutcomeRetryAfter
+			}
+			if got := recorder.Header().Get("Retry-After"); got != wantRetryAfter {
+				t.Fatalf("Retry-After = %q, want %q", got, wantRetryAfter)
 			}
 		})
 	}

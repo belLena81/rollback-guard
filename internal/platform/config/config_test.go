@@ -69,6 +69,48 @@ func TestLoadRejectsSubSecondMCPWatchTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadRecoveryWait(t *testing.T) {
+	tests := []struct {
+		name         string
+		env          map[string]string
+		wantTimeout  time.Duration
+		wantInterval time.Duration
+		wantErr      string
+	}{
+		{name: "default follows the default metrics window", wantTimeout: 5*time.Minute + 30*time.Second, wantInterval: 5 * time.Second},
+		{name: "default follows a short metrics window", env: map[string]string{"METRICS_WINDOW": "30s"}, wantTimeout: time.Minute, wantInterval: 5 * time.Second},
+		{name: "default is capped below the approve request budget", env: map[string]string{"METRICS_WINDOW": "1h"}, wantTimeout: 7 * time.Minute, wantInterval: 5 * time.Second},
+		{name: "explicit values", env: map[string]string{"RECOVERY_TIMEOUT": "90s", "RECOVERY_POLL_INTERVAL": "2s"}, wantTimeout: 90 * time.Second, wantInterval: 2 * time.Second},
+		{name: "zero timeout", env: map[string]string{"RECOVERY_TIMEOUT": "0s"}, wantErr: "RECOVERY_TIMEOUT"},
+		{name: "timeout above the cap", env: map[string]string{"RECOVERY_TIMEOUT": "8m"}, wantErr: "RECOVERY_TIMEOUT"},
+		{name: "negative timeout", env: map[string]string{"RECOVERY_TIMEOUT": "-1s"}, wantErr: "RECOVERY_TIMEOUT"},
+		{name: "poll interval too short", env: map[string]string{"RECOVERY_POLL_INTERVAL": "100ms"}, wantErr: "RECOVERY_POLL_INTERVAL"},
+		{name: "poll interval too long", env: map[string]string{"RECOVERY_POLL_INTERVAL": "2m"}, wantErr: "RECOVERY_POLL_INTERVAL"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnvironment(t)
+			t.Setenv("DATABASE_URL", "postgres://rollback@database/rollback_guard")
+			for key, value := range test.env {
+				t.Setenv(key, value)
+			}
+			cfg, err := Load()
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("Load() error = %v, want %s error", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.RecoveryTimeout != test.wantTimeout || cfg.RecoveryPollInterval != test.wantInterval {
+				t.Fatalf("recovery wait = %s every %s, want %s every %s", cfg.RecoveryTimeout, cfg.RecoveryPollInterval, test.wantTimeout, test.wantInterval)
+			}
+		})
+	}
+}
+
 func TestLoadRequiresA2ALeaseToCoverCancellationCleanup(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -231,7 +273,7 @@ func TestLoadInvestigatorValidatesModelDiagnosisConfiguration(t *testing.T) {
 
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"ALLOWED_TARGETS", "CLUSTER_ID", "KUBERNETES_MCP_MODE", "MCP_REQUEST_TIMEOUT", "MCP_SESSION_TIMEOUT", "METRICS_WINDOW", "METRICS_MAX_SAMPLE_AGE", "PROMETHEUS_TIMEOUT", "DATABASE_URL", "DB_MAX_CONNS", "DB_PING_TIMEOUT", "MCP_CONNECT_TIMEOUT", "MCP_CALL_TIMEOUT", "MCP_WATCH_TIMEOUT", "A2A_CONNECT_TIMEOUT", "A2A_TASK_TIMEOUT", "A2A_CANCEL_TIMEOUT", "A2A_POLL_INTERVAL", "A2A_LEASE_TTL", "A2A_MAX_ATTEMPTS", "INVESTIGATOR_URL", "A2A_WORKER_ID", "DIAGNOSIS_STRATEGY", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "LLM_TIMEOUT", "LLM_MAX_OUTPUT_TOKENS", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME", "OTEL_TRACES_SAMPLE_RATIO", "TELEMETRY_SHUTDOWN_TIMEOUT", "LOG_LEVEL", "RESILIENCE_RETRY_MAX_ATTEMPTS", "RESILIENCE_RETRY_BASE_DELAY", "RESILIENCE_RETRY_MAX_DELAY", "RESILIENCE_LLM_RETRY_MAX_ATTEMPTS", "RESILIENCE_BREAKER_FAILURE_THRESHOLD", "RESILIENCE_BREAKER_OPEN_TIMEOUT"} {
+	for _, key := range []string{"ALLOWED_TARGETS", "CLUSTER_ID", "KUBERNETES_MCP_MODE", "MCP_REQUEST_TIMEOUT", "MCP_SESSION_TIMEOUT", "METRICS_WINDOW", "METRICS_MAX_SAMPLE_AGE", "PROMETHEUS_TIMEOUT", "DATABASE_URL", "DB_MAX_CONNS", "DB_PING_TIMEOUT", "MCP_CONNECT_TIMEOUT", "MCP_CALL_TIMEOUT", "MCP_WATCH_TIMEOUT", "A2A_CONNECT_TIMEOUT", "A2A_TASK_TIMEOUT", "A2A_CANCEL_TIMEOUT", "A2A_POLL_INTERVAL", "A2A_LEASE_TTL", "A2A_MAX_ATTEMPTS", "INVESTIGATOR_URL", "A2A_WORKER_ID", "DIAGNOSIS_STRATEGY", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "LLM_TIMEOUT", "LLM_MAX_OUTPUT_TOKENS", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME", "OTEL_TRACES_SAMPLE_RATIO", "TELEMETRY_SHUTDOWN_TIMEOUT", "LOG_LEVEL", "RESILIENCE_RETRY_MAX_ATTEMPTS", "RESILIENCE_RETRY_BASE_DELAY", "RESILIENCE_RETRY_MAX_DELAY", "RESILIENCE_LLM_RETRY_MAX_ATTEMPTS", "RESILIENCE_BREAKER_FAILURE_THRESHOLD", "RESILIENCE_BREAKER_OPEN_TIMEOUT", "RECOVERY_TIMEOUT", "RECOVERY_POLL_INTERVAL"} {
 		t.Setenv(key, "")
 	}
 }

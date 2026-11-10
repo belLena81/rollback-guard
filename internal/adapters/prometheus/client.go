@@ -147,7 +147,11 @@ func (c *Client) query(target domain.DeploymentTarget, request QueryRequest) (st
 		errorsOnly := "rollback_guardian_http_requests_total{" + matchers + ",code=~\"5..\"}"
 		errorRate := fmt.Sprintf("sum(rate(%s[%s]%s))", errorsOnly, window, offset)
 		totalRate := fmt.Sprintf("sum(rate(%s[%s]%s))", all, window, offset)
-		return fmt.Sprintf("(%s / (%s > 0)) or (%s * 0)", errorRate, totalRate, totalRate), "ratio", nil
+		// A healthy pod has no 5xx series, so the numerator falls back to
+		// 0 x total. The denominator drops windows without traffic, so zero
+		// traffic yields no sample (an error), never a 0 error rate that
+		// would pass recovery on a service that serves nothing.
+		return fmt.Sprintf("(%s or (%s * 0)) / (%s > 0)", errorRate, totalRate, totalRate), "ratio", nil
 	case "request_latency":
 		if request.Percentile != 0.50 && request.Percentile != 0.95 && request.Percentile != 0.99 {
 			return "", "", &domain.ValidationError{Field: "percentile", Reason: "must be p50, p95, or p99"}

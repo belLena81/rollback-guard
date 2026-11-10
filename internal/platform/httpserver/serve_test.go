@@ -172,9 +172,11 @@ func TestWriteTimeoutExceedsLongestConfigurableResponse(t *testing.T) {
 	// its rollout watch (inspect, prepare, execute, verify), with headroom.
 	const approveCalls = 8
 	longest := map[string]time.Duration{
-		"MCP watch_rollout":    domain.MaxRolloutWatch + config.MaxMCPCallTimeout,
-		"A2A task stream":      config.MaxA2ATaskTimeout + config.MaxA2ACancelTimeout,
-		"orchestrator approve": domain.MaxRolloutWatch + approveCalls*config.MaxMCPCallTimeout,
+		"MCP watch_rollout": domain.MaxRolloutWatch + config.MaxMCPCallTimeout,
+		"A2A task stream":   config.MaxA2ATaskTimeout + config.MaxA2ACancelTimeout,
+		// The recovery wait stops starting checks at RECOVERY_TIMEOUT; the
+		// checks themselves are among the bounded MCP calls.
+		"orchestrator approve": domain.MaxRolloutWatch + config.MaxRecoveryTimeout + approveCalls*config.MaxMCPCallTimeout,
 		"Prometheus queries":   approveCalls * config.MaxPrometheusTimeout,
 	}
 	for name, duration := range longest {

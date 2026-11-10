@@ -13,6 +13,19 @@ curl=${CURL:-curl}
 
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
+# Stopping the script (make e2e stops it when the scenario ends) must stop the
+# background workers too; otherwise they keep sending load until their own
+# deadline.
+stop_workers() {
+  local pids
+  pids=$(jobs -p)
+  if [[ -n "$pids" ]]; then
+    # shellcheck disable=SC2086 # one PID per word
+    kill $pids 2>/dev/null || true
+  fi
+  exit 143
+}
+trap stop_workers TERM INT
 
 worker() {
   local deadline=$((SECONDS + duration))

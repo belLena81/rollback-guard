@@ -338,6 +338,66 @@ func validateExecutionResult(execution domain.RollbackExecution, proposal domain
 	return nil
 }
 
+// awaitRecovery evaluates recovery until it passes or the wait is used up,
+// and returns the passing or the last failing evaluation. The wait ends after
+// 1 + RecoveryTimeout/RecoveryPollInterval checks or once RecoveryTimeout has
+// elapsed on the workflow clock, whichever comes first, so slow checks cannot
+// stretch it past RecoveryTimeout.
+//
+// A check whose deployment or metric read fails is neither a pass nor a
+// failure: right after the pod switch the metric can be briefly unreadable,
+// so the wait continues. If the last allowed check also fails to read, or the
+// context ends, that error is returned. Nothing is persisted here, so on an
+// error the incident stays verifying and a retry of the approval resumes it.
+func (s *VerificationService) awaitRecovery(ctx context.Context, incident domain.Incident, proposal domain.RollbackProposal, execution domain.RollbackExecution) (domain.RecoveryVerification, error) {
+	c := s.workflow
+	checks := 1
+	if c.config.RecoveryTimeout > 0 {
+		checks += int(c.config.RecoveryTimeout / c.config.RecoveryPollInterval)
+	}
+	deadline := c.clock.Now().Add(c.config.RecoveryTimeout)
+	for check := 1; ; check++ {
+		verification, err := s.checkRecovery(ctx, incident, proposal, execution)
+		last := check >= checks || !c.clock.Now().Before(deadline)
+		if err == nil && (verification.Passed() || last) {
+			return verification, nil
+		}
+		if err != nil && (last || ctx.Err() != nil) {
+			return domain.RecoveryVerification{}, err
+		}
+		if err := waitFor(ctx, c.config.RecoveryPollInterval); err != nil {
+			return domain.RecoveryVerification{}, fmt.Errorf("await recovery: %w", err)
+		}
+	}
+}
+
+// checkRecovery reads the deployment and the recovery metric once and
+// evaluates them against the proposal's target revision.
+func (s *VerificationService) checkRecovery(ctx context.Context, incident domain.Incident, proposal domain.RollbackProposal, execution domain.RollbackExecution) (domain.RecoveryVerification, error) {
+	c := s.workflow
+	deployment, err := c.inspector.InspectDeployment(ctx, incident.Target())
+	if err != nil {
+		return domain.RecoveryVerification{}, fmt.Errorf("inspect recovery deployment: %w", err)
+	}
+	metric, err := c.metrics.Observe(ctx, incident.Target(), incident.Symptom())
+	if err != nil {
+		return domain.RecoveryVerification{}, fmt.Errorf("observe recovery metric: %w", err)
+	}
+	return domain.EvaluateRecovery(incident.Target(), proposal.TargetRevision(), deployment, metric, incident.Symptom(), incident.ID(), execution.ID(), c.clock.Now())
+}
+
+// waitFor blocks for d or until ctx ends, whichever comes first.
+func waitFor(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (s *VerificationService) Verify(ctx context.Context, incidentID domain.IncidentID) (domain.RecoveryVerification, error) {
 	c := s.workflow
 	var incident domain.Incident
@@ -363,19 +423,11 @@ func (s *VerificationService) Verify(ctx context.Context, incidentID domain.Inci
 		return domain.RecoveryVerification{}, &domain.IllegalTransitionError{From: incident.Status(), To: domain.StatusResolved}
 	}
 
-	deployment, err := c.inspector.InspectDeployment(ctx, incident.Target())
-	if err != nil {
-		return domain.RecoveryVerification{}, fmt.Errorf("inspect recovery deployment: %w", err)
-	}
-	metric, err := c.metrics.Observe(ctx, incident.Target(), incident.Symptom())
-	if err != nil {
-		return domain.RecoveryVerification{}, fmt.Errorf("observe recovery metric: %w", err)
-	}
-	now := c.clock.Now()
-	verification, err := domain.EvaluateRecovery(incident.Target(), proposal.TargetRevision(), deployment, metric, incident.Symptom(), incidentID, execution.ID(), now)
+	verification, err := s.awaitRecovery(ctx, incident, proposal, execution)
 	if err != nil {
 		return domain.RecoveryVerification{}, err
 	}
+	now := verification.CheckedAt()
 	err = c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		fresh, err := repositories.Incidents().Get(incidentID)
 		if err != nil {

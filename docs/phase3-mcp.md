@@ -38,6 +38,10 @@ The orchestrator requires `DATABASE_URL` and accepts:
 | `MCP_CALL_TIMEOUT` | `10s` |
 | `MCP_WATCH_TIMEOUT` | `90s` |
 | `METRICS_WINDOW` | `5m` |
+| `RECOVERY_TIMEOUT` | `METRICS_WINDOW` + 30s, at most `7m` |
+| `RECOVERY_POLL_INTERVAL` | `5s` (1s..1m) |
+
+Recovery verification runs right after the rollout watch, when the metrics window still holds the errors from before the rollback. It therefore checks once and then every `RECOVERY_POLL_INTERVAL` until recovery passes or `RECOVERY_TIMEOUT` is used up, and records the first passing or the last failing result. A check that cannot read the deployment or the metric (for example no fresh series right after the pod switch) counts as neither; if the last check cannot read either, the error is returned and the incident stays `verifying` until the approval is retried. `RECOVERY_TIMEOUT` is capped so that an approve request (rollout watch plus recovery wait) stays inside the 10m server write timeout.
 
 Both Kubernetes processes use `ALLOWED_TARGETS` in `cluster/namespace/deployment/service` form, `CLUSTER_ID`, optional `KUBECONFIG`, `MCP_REQUEST_TIMEOUT`, and `MCP_SESSION_TIMEOUT`. Their `HTTP_ADDR` defaults to `127.0.0.1:8091` in readonly mode and `127.0.0.1:8092` in rollback mode. Rollback mode additionally requires `DATABASE_URL` and accepts `DB_MAX_CONNS` (default `4`) and `DB_PING_TIMEOUT` (default `2s`); readonly mode does not connect to PostgreSQL. The observability process uses `HTTP_ADDR` (default `127.0.0.1:8093`), `PROMETHEUS_URL`, `PROMETHEUS_TIMEOUT`, `METRICS_MAX_SAMPLE_AGE`, the same target allow-list, and metrics window.
 

@@ -47,13 +47,16 @@ func (d *RuleDiagnoser) Diagnose(ctx context.Context, input ports.InvestigationI
 			metricEvidenceFound = true
 		}
 	}
-	correlated := !input.Deployment.Healthy &&
-		deploymentEvidenceFound &&
+	// Rollout health is not required: a build that serves errors but passes
+	// readiness completes its rollout, and the breached metric is the
+	// regression signal (see domain.EligibilityPolicy).
+	correlated := deploymentEvidenceFound &&
 		metricEvidenceFound &&
 		input.Metric.Name == input.Incident.Symptom().Kind() &&
 		input.Metric.Value >= input.Incident.Symptom().Threshold() &&
 		delta >= 0 &&
 		delta <= d.correlationWindow &&
+		domain.RolloutRecent(input.Deployment.RolloutAt, input.Now, d.correlationWindow) &&
 		input.Deployment.PreviousStableRevision != "" &&
 		input.Deployment.PreviousStableRevision != input.Deployment.CurrentRevision
 

@@ -1,9 +1,11 @@
 .PHONY: fmt-check test test-race vet lint contract-test phase3-integration phase4-integration phase5-integration postgres-integration integration phase6-telemetry images images-services images-demo-api \
-	kind-create kind-delete kind-load deploy demo-v1 demo-v2-broken generate-load rbac-check kubeconfigs phase6-kind-check
+	kind-create kind-delete kind-load deploy demo-v1 demo-v2-broken generate-load rbac-check kubeconfigs phase6-kind-check \
+	demo-reset services-build migrate-up services-up services-down services-status compose-up compose-down \
+	create-incident approve-latest-action verify e2e e2e-decline e2e-test
 
 # Build tags of every tagged test file, so vet and lint also cover the
 # integration and kind suites that plain `go test ./...` skips.
-LINT_TAGS ?= integration,kind
+LINT_TAGS ?= integration,kind,e2e
 
 DOCKER ?= docker
 IMAGE_PREFIX ?= rollback-guardian
@@ -37,6 +39,28 @@ LOAD_CONCURRENCY ?= 4
 # Service-account kubeconfigs for the host-run Kubernetes MCP processes.
 DEMO_STATE_DIR ?= .demo
 SA_TOKEN_DURATION ?= 8h
+
+# Local service processes (make services-up, docs/local-demo-env.md).
+SERVICES_BIN_DIR ?= bin/demo
+MIGRATE ?= migrate
+# The demo uses a short metrics window so detection and recovery are visible
+# within a minute of a rollout instead of five (domain minimum: 30s).
+METRICS_WINDOW ?= 30s
+SERVICES_ENV = DEMO_STATE_DIR=$(DEMO_STATE_DIR) SERVICES_BIN_DIR=$(SERVICES_BIN_DIR) METRICS_WINDOW=$(METRICS_WINDOW)
+COMPOSE ?= docker compose
+COMPOSE_FILE ?= deploy/compose/compose.yaml
+# Set to `--profile tracing` to also start Jaeger (OTLP on 4318, UI/API on 16686).
+COMPOSE_PROFILES ?=
+
+# REST demo steps (create-incident, approve-latest-action, verify, e2e).
+ORCHESTRATOR_URL ?= http://127.0.0.1:8080
+INCIDENT_THRESHOLD ?= 0.1
+# verify: `resolved` (default) or `declined`.
+VERIFY_EXPECT ?= resolved
+STABLE_IMAGE ?= demo-api:v1-healthy
+DEMO_API_ENV = DEMO_STATE_DIR=$(DEMO_STATE_DIR) ORCHESTRATOR_URL=$(ORCHESTRATOR_URL) \
+	KUBECTL=$(KUBECTL) KUBE_CONTEXT=$(KUBE_CONTEXT) DEMO_NAMESPACE=$(DEMO_NAMESPACE) DEMO_DEPLOYMENT=$(DEMO_DEPLOYMENT) \
+	DEMO_URL=$(DEMO_URL) METRICS_WINDOW=$(METRICS_WINDOW) INCIDENT_THRESHOLD=$(INCIDENT_THRESHOLD) STABLE_IMAGE=$(STABLE_IMAGE)
 
 fmt-check:
 	@test -z "$$(gofmt -l $$(find . -name '*.go'))"
@@ -141,3 +165,68 @@ rbac-check:
 kubeconfigs:
 	KUBECTL=$(KUBECTL) KUBE_CONTEXT=$(KUBE_CONTEXT) bash scripts/demo/sa-kubeconfig.sh $(DEMO_NAMESPACE) rollback-guardian-kubernetes-readonly $(SA_TOKEN_DURATION) $(DEMO_STATE_DIR)/kubeconfig-readonly
 	KUBECTL=$(KUBECTL) KUBE_CONTEXT=$(KUBE_CONTEXT) bash scripts/demo/sa-kubeconfig.sh $(DEMO_NAMESPACE) rollback-guardian-kubernetes-rollback $(SA_TOKEN_DURATION) $(DEMO_STATE_DIR)/kubeconfig-rollback
+
+# Return the demo to a clean v1 state: roll to v1-healthy, mark it stable, and
+# delete the scaled-down ReplicaSets of earlier broken rollouts so the next
+# demo-v2-broken creates a fresh ReplicaSet (docs/local-demo-env.md, "Reset").
+demo-reset: demo-v1
+	KUBECTL=$(KUBECTL) KUBE_CONTEXT=$(KUBE_CONTEXT) bash scripts/demo/prune-replicasets.sh $(DEMO_NAMESPACE) $(DEMO_DEPLOYMENT)
+
+# The five Rollback Guardian processes as local binaries against the kind
+# cluster (scripts/demo/services.sh). DATABASE_URL and PROMETHEUS_URL come
+# from the environment (the sandbox sets both; `make compose-up` provides
+# them elsewhere, see docs/local-demo-env.md).
+services-build:
+	@mkdir -p $(SERVICES_BIN_DIR)
+	@set -e; for service in $(SERVICES); do \
+		echo "==> go build $(SERVICES_BIN_DIR)/$$service"; \
+		go build -o $(SERVICES_BIN_DIR)/$$service ./cmd/$$service; \
+	done
+
+# The command line names $$DATABASE_URL, never its value.
+migrate-up:
+	@test -n "$$DATABASE_URL" || { echo "DATABASE_URL is required" >&2; exit 1; }
+	@$(MIGRATE) -path migrations -database "$$DATABASE_URL" up
+
+services-up: services-build migrate-up kubeconfigs
+	$(SERVICES_ENV) bash scripts/demo/services.sh up
+
+services-down:
+	$(SERVICES_ENV) bash scripts/demo/services.sh down
+
+services-status:
+	$(SERVICES_ENV) bash scripts/demo/services.sh status
+
+# PostgreSQL, Prometheus (scraping demo-api on the kind node), and an optional
+# Jaeger for developers outside the agent sandbox. Prometheus joins the
+# `kind` Docker network, so run `make kind-create` first.
+compose-up:
+	$(COMPOSE) -f $(COMPOSE_FILE) $(COMPOSE_PROFILES) up -d --wait
+
+compose-down:
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile tracing down
+
+# Scripted REST steps of the demo (scripts/demo/{create-incident,approve-latest-action,verify}.sh).
+create-incident:
+	$(DEMO_API_ENV) bash scripts/demo/create-incident.sh
+
+approve-latest-action:
+	$(DEMO_API_ENV) bash scripts/demo/approve-latest-action.sh
+
+verify:
+	$(DEMO_API_ENV) bash scripts/demo/verify.sh $(VERIFY_EXPECT)
+
+# Unattended Phase 6 exit gate: healthy -> load -> broken -> threshold in
+# Prometheus -> incident -> awaiting_approval -> approve -> verify.
+e2e: services-up
+	$(DEMO_API_ENV) MAKE="$(MAKE)" bash scripts/demo/e2e.sh rollback
+
+# Policy-decline scenario: a crashlooping rollout that never serves errors is
+# declined without any mutation (docs/local-demo-env.md, "Decline scenario").
+e2e-decline: services-up
+	$(DEMO_API_ENV) MAKE="$(MAKE)" bash scripts/demo/e2e.sh decline
+
+# The same flow as an automated Go test against a running stack (make
+# services-up first). The e2e build tag keeps it out of `go test ./...`.
+e2e-test:
+	$(DEMO_API_ENV) MAKE="$(MAKE)" go test -tags=e2e -count=1 -timeout=40m -v ./test/e2e/...

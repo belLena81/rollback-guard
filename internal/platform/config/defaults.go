@@ -55,6 +55,20 @@ const (
 	defaultMetricsWindow         = 5 * time.Minute
 )
 
+// Recovery verification wait (RECOVERY_TIMEOUT, RECOVERY_POLL_INTERVAL).
+// Right after a rollback the metrics window still holds the errors from
+// before it, so by default verification keeps checking for one metrics window
+// plus a margin. The cap keeps an approve request (rollout watch of at most
+// domain.MaxRolloutWatch, its MCP calls, and this wait) inside
+// httpserver.WriteTimeout (pinned by its tests).
+const (
+	defaultRecoveryMargin       = 30 * time.Second
+	MaxRecoveryTimeout          = 7 * time.Minute
+	defaultRecoveryPollInterval = 5 * time.Second
+	minRecoveryPollInterval     = time.Second
+	maxRecoveryPollInterval     = time.Minute
+)
+
 // MCP client and server. The metrics window and rollout watch bounds live in
 // internal/domain because the adapters validate against them too.
 const (

@@ -86,6 +86,8 @@ func TestOrchestratorDefaults(t *testing.T) {
 		MCPCallTimeout:        10 * time.Second,
 		MCPWatchTimeout:       90 * time.Second,
 		MetricsWindow:         5 * time.Minute,
+		RecoveryTimeout:       5*time.Minute + 30*time.Second,
+		RecoveryPollInterval:  5 * time.Second,
 		InvestigatorURL:       "http://127.0.0.1:8094",
 		A2AConnectTimeout:     5 * time.Second,
 		A2ATaskTimeout:        45 * time.Second,

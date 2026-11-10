@@ -26,11 +26,11 @@ const (
 	// legitimate response of any service: the MCP watch_rollout call (one
 	// buffered JSON reply after up to domain.MaxRolloutWatch), an A2A task
 	// stream (open for up to the maximum A2A_TASK_TIMEOUT), and the
-	// orchestrator approve request (one rollout watch plus a handful of
-	// bounded MCP calls). All of those are capped by configuration at a few
-	// minutes; TestWriteTimeoutExceedsLongestConfigurableResponse pins the
-	// relation.
-	WriteTimeout = 10 * time.Minute
+	// orchestrator approve request (one rollout watch, a handful of bounded
+	// MCP calls, and the recovery wait of up to the maximum
+	// RECOVERY_TIMEOUT). All of those are capped by configuration;
+	// TestWriteTimeoutExceedsLongestConfigurableResponse pins the relation.
+	WriteTimeout = 15 * time.Minute
 	// IdleTimeout is longer than the 90s idle timeout of Go HTTP clients, so
 	// the client is the side that retires an idle keep-alive connection and
 	// a request never races with the server closing it.

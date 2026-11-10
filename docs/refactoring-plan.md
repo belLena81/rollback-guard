@@ -70,7 +70,7 @@ Merged. `ApproveAndExecuteService` owns approve, execute, verify, compensation, 
 
 Follow-ups from the R3 reviews, assigned to later work:
 
-- `ErrRollbackOutcomeUnknown` still surfaces as a plain 500, and `api/openapi.yaml` documents no error responses. Handled with the E2E task, because `make verify` must tell an operator to retry the same approval: add an `Error` schema and a distinct `rollback_outcome_unknown` code.
+- (done with the E2E task) `ErrRollbackOutcomeUnknown` surfaced as a plain 500, and `api/openapi.yaml` documented no error responses. It is now `503 rollback_outcome_unknown` with `Retry-After`; `api/openapi.yaml` has an `Error` schema and error responses on every `/v1` operation, and a test pins the handler's code set to the schema's enum. `make approve-latest-action` prints the retry instruction.
 - Both repository adapters report a duplicate insert as `ValidationError` (R4).
 - `pg_advisory_unlock` returning `false` is ignored; `Complete` can return a value together with an error when the unlock fails after commit; `tx.Rollback` runs on the request context (R8).
 

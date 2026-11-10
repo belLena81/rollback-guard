@@ -11,6 +11,22 @@ import (
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
+// Error codes of the error body (api/openapi.yaml, components.schemas.Error).
+// Every code a response can carry is listed in errorCodes, which a test pins
+// against the OpenAPI enum.
+const (
+	codeValidation             = "validation_failed"
+	codeInvalidJSON            = "invalid_json"
+	codeUnauthenticated        = "unauthenticated"
+	codeForbidden              = "forbidden"
+	codeNotFound               = "not_found"
+	codeConflict               = "conflict"
+	codeRollbackOutcomeUnknown = "rollback_outcome_unknown"
+	codeInternal               = "internal_error"
+)
+
+var errorCodes = []string{codeValidation, codeInvalidJSON, codeUnauthenticated, codeForbidden, codeNotFound, codeConflict, codeRollbackOutcomeUnknown, codeInternal}
+
 type errorDTO struct {
 	Error     string `json:"error"`
 	Message   string `json:"message"`
@@ -81,7 +97,14 @@ const (
 	messageApprovalMismatch  = "the approval does not match the current proposal or deployment"
 	messageExpired           = "the proposal or approval has expired"
 	messagePolicyDenied      = "the rollback policy denied this action"
+	// messageRollbackOutcomeUnknown tells the caller what to do: the attempt
+	// is still pending and only a retry of the same approval resolves it.
+	messageRollbackOutcomeUnknown = "the rollback outcome is unknown; retry the same approval to reconcile it"
 )
+
+// rollbackOutcomeRetryAfter is the Retry-After value (seconds) sent with
+// rollback_outcome_unknown.
+const rollbackOutcomeRetryAfter = "5"
 
 // errorResponse maps err to a status, an error code, and a client message.
 // Validation and not-found messages come from the typed domain error alone
@@ -91,30 +114,40 @@ func errorResponse(err error) (int, string, string) {
 	var validation *domain.ValidationError
 	var notFound *domain.NotFoundError
 	switch {
+	// First: an unknown rollback outcome must reach the client as "retry",
+	// whatever else is joined into the chain. 503 because the condition is
+	// temporary and the server asks for the identical request again; that
+	// retry is safe because it reuses the approval's idempotency key, so the
+	// rollback MCP's ledger allows at most one mutation. A 500 would read as
+	// a server defect that a client should not blindly retry, a 409 as a
+	// request the client must change, and a 202 would promise a completion
+	// that nothing performs without the retry.
+	case errors.Is(err, ports.ErrRollbackOutcomeUnknown):
+		return http.StatusServiceUnavailable, codeRollbackOutcomeUnknown, messageRollbackOutcomeUnknown
 	case errors.As(err, &validation):
-		return http.StatusBadRequest, "validation_failed", validation.Error()
+		return http.StatusBadRequest, codeValidation, validation.Error()
 	case errors.Is(err, domain.ErrValidation):
-		return http.StatusBadRequest, "validation_failed", messageValidation
+		return http.StatusBadRequest, codeValidation, messageValidation
 	case errors.As(err, &notFound):
-		return http.StatusNotFound, "not_found", notFound.Error()
+		return http.StatusNotFound, codeNotFound, notFound.Error()
 	case errors.Is(err, domain.ErrNotFound):
-		return http.StatusNotFound, "not_found", messageNotFound
+		return http.StatusNotFound, codeNotFound, messageNotFound
 	case errors.Is(err, domain.ErrNonHumanApproval):
-		return http.StatusForbidden, "forbidden", messageForbidden
+		return http.StatusForbidden, codeForbidden, messageForbidden
 	case errors.Is(err, domain.ErrIllegalTransition):
-		return http.StatusConflict, "conflict", messageIllegalTransition
+		return http.StatusConflict, codeConflict, messageIllegalTransition
 	case errors.Is(err, domain.ErrVersionConflict):
-		return http.StatusConflict, "conflict", messageVersionConflict
+		return http.StatusConflict, codeConflict, messageVersionConflict
 	case errors.Is(err, domain.ErrIdempotencyConflict):
-		return http.StatusConflict, "conflict", messageIdempotency
+		return http.StatusConflict, codeConflict, messageIdempotency
 	case errors.Is(err, domain.ErrApprovalMismatch):
-		return http.StatusConflict, "conflict", messageApprovalMismatch
+		return http.StatusConflict, codeConflict, messageApprovalMismatch
 	case errors.Is(err, domain.ErrExpired):
-		return http.StatusConflict, "conflict", messageExpired
+		return http.StatusConflict, codeConflict, messageExpired
 	case errors.Is(err, domain.ErrPolicyDenied):
-		return http.StatusConflict, "conflict", messagePolicyDenied
+		return http.StatusConflict, codeConflict, messagePolicyDenied
 	default:
-		return http.StatusInternalServerError, "internal_error", messageInternal
+		return http.StatusInternalServerError, codeInternal, messageInternal
 	}
 }
 
@@ -123,14 +156,13 @@ func errorResponse(err error) (int, string, string) {
 // error text, which may hold infrastructure details.
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message := errorResponse(err)
-	if status == http.StatusInternalServerError {
-		cause := "internal"
-		if errors.Is(err, ports.ErrRollbackOutcomeUnknown) {
-			// The attempt stays pending; retrying the same approval
-			// reconciles it.
-			cause = "rollback_outcome_unknown"
-		}
-		s.logger.ErrorContext(r.Context(), "request failed", "status", status, "cause", cause, "request_id", requestID(r))
+	switch code {
+	case codeRollbackOutcomeUnknown:
+		// The attempt stays pending; retrying the same approval reconciles it.
+		w.Header().Set("Retry-After", rollbackOutcomeRetryAfter)
+		s.logger.ErrorContext(r.Context(), "request failed", "status", status, "cause", codeRollbackOutcomeUnknown, "request_id", requestID(r))
+	case codeInternal:
+		s.logger.ErrorContext(r.Context(), "request failed", "status", status, "cause", "internal", "request_id", requestID(r))
 	}
 	s.writeJSON(w, r, status, errorDTO{Error: code, Message: message, RequestID: requestID(r)})
 }
@@ -164,7 +196,7 @@ func writeJSONWith(w http.ResponseWriter, status int, value any, requestID strin
 		onEncodeFailure(err)
 		status = http.StatusInternalServerError
 		body.Reset()
-		if encodeErr := json.NewEncoder(&body).Encode(errorDTO{Error: "internal_error", Message: messageInternal, RequestID: requestID}); encodeErr != nil {
+		if encodeErr := json.NewEncoder(&body).Encode(errorDTO{Error: codeInternal, Message: messageInternal, RequestID: requestID}); encodeErr != nil {
 			body.Reset()
 			body.WriteString(encodeFailureBody)
 		}

@@ -35,6 +35,8 @@ type Config struct {
 	MCPCallTimeout        time.Duration
 	MCPWatchTimeout       time.Duration
 	MetricsWindow         time.Duration
+	RecoveryTimeout       time.Duration
+	RecoveryPollInterval  time.Duration
 	InvestigatorURL       string
 	A2AConnectTimeout     time.Duration
 	A2ATaskTimeout        time.Duration
@@ -124,6 +126,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	recovery, err := loadRecoveryWait(metricsWindow)
+	if err != nil {
+		return Config{}, err
+	}
 	a2a, err := loadA2AClient(mcp.connectTimeout)
 	if err != nil {
 		return Config{}, err
@@ -156,6 +162,8 @@ func Load() (Config, error) {
 		MCPCallTimeout:        mcp.callTimeout,
 		MCPWatchTimeout:       mcpWatchTimeout,
 		MetricsWindow:         metricsWindow,
+		RecoveryTimeout:       recovery.timeout,
+		RecoveryPollInterval:  recovery.pollInterval,
 		InvestigatorURL:       stringEnv("INVESTIGATOR_URL", defaultInvestigatorURL),
 		A2AConnectTimeout:     a2a.connectTimeout,
 		A2ATaskTimeout:        a2a.taskTimeout,
@@ -393,6 +401,26 @@ func loadMetricsWindow() (time.Duration, error) {
 
 func loadA2ATaskTimeout() (time.Duration, error) {
 	return boundedDurationEnv("A2A_TASK_TIMEOUT", defaultA2ATaskTimeout, 0, MaxA2ATaskTimeout)
+}
+
+type recoveryWaitSettings struct {
+	timeout      time.Duration
+	pollInterval time.Duration
+}
+
+// loadRecoveryWait reads how long recovery verification may keep checking.
+// The default is one metrics window plus a margin, capped at
+// MaxRecoveryTimeout. Both values must be positive.
+func loadRecoveryWait(metricsWindow time.Duration) (recoveryWaitSettings, error) {
+	timeout, err := boundedDurationEnv("RECOVERY_TIMEOUT", min(metricsWindow+defaultRecoveryMargin, MaxRecoveryTimeout), 0, MaxRecoveryTimeout)
+	if err != nil {
+		return recoveryWaitSettings{}, err
+	}
+	interval, err := boundedDurationEnv("RECOVERY_POLL_INTERVAL", defaultRecoveryPollInterval, minRecoveryPollInterval, maxRecoveryPollInterval)
+	if err != nil {
+		return recoveryWaitSettings{}, err
+	}
+	return recoveryWaitSettings{timeout: timeout, pollInterval: interval}, nil
 }
 
 type workflowSettings struct {

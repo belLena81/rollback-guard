@@ -279,7 +279,7 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 func requestActor(w http.ResponseWriter, r *http.Request) (domain.Actor, bool) {
 	actor, ok := httpserver.ActorFromContext(r.Context())
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, errorDTO{Error: "unauthenticated", Message: "request actor is missing", RequestID: requestID(r)})
+		writeJSON(w, http.StatusUnauthorized, errorDTO{Error: codeUnauthenticated, Message: "request actor is missing", RequestID: requestID(r)})
 		return domain.Actor{}, false
 	}
 	return actor, true
@@ -290,12 +290,12 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorDTO{Error: "invalid_json", Message: "request body must be valid JSON", RequestID: requestID(r)})
+		writeJSON(w, http.StatusBadRequest, errorDTO{Error: codeInvalidJSON, Message: "request body must be valid JSON", RequestID: requestID(r)})
 		return false
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeJSON(w, http.StatusBadRequest, errorDTO{Error: "invalid_json", Message: "request body must contain exactly one JSON value", RequestID: requestID(r)})
+		writeJSON(w, http.StatusBadRequest, errorDTO{Error: codeInvalidJSON, Message: "request body must contain exactly one JSON value", RequestID: requestID(r)})
 		return false
 	}
 	return true

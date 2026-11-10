@@ -27,6 +27,14 @@ type WorkflowConfig struct {
 	ApprovalTTL    time.Duration
 	CleanupTimeout time.Duration
 	SystemActor    domain.Actor
+	// RecoveryTimeout bounds how long recovery verification keeps checking
+	// after a rollback: right after the rollout completes, the metrics window
+	// still holds the errors from before it. Verify checks once, then every
+	// RecoveryPollInterval while the check fails, at most
+	// 1 + RecoveryTimeout/RecoveryPollInterval times, and records the first
+	// passing result or the last failing one. Zero checks exactly once.
+	RecoveryTimeout      time.Duration
+	RecoveryPollInterval time.Duration
 }
 
 type workflow struct {
@@ -47,6 +55,9 @@ type workflow struct {
 func (c WorkflowConfig) validate() error {
 	if c.ProposalTTL <= 0 || c.ApprovalTTL <= 0 || c.CleanupTimeout <= 0 {
 		return &domain.ValidationError{Field: "workflow_config", Reason: "durations must be positive"}
+	}
+	if c.RecoveryTimeout < 0 || c.RecoveryPollInterval < 0 || (c.RecoveryTimeout > 0 && c.RecoveryPollInterval == 0) {
+		return &domain.ValidationError{Field: "workflow_config.recovery", Reason: "recovery timeout must not be negative and needs a positive poll interval"}
 	}
 	if !c.SystemActor.Valid() || c.SystemActor.Kind() != domain.ActorSystem {
 		return &domain.ValidationError{Field: "workflow_config.system_actor", Reason: "must be a system actor"}

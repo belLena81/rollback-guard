@@ -27,9 +27,12 @@ make generate-load    # GET /work traffic for LOAD_DURATION seconds
 make demo-v2-broken   # roll to demo-api:v2-bad-$(DEMO_BROKEN), default error-storm
 make rbac-check       # kubectl auth can-i proof for both service accounts
 make kubeconfigs      # .demo/kubeconfig-{readonly,rollback} from TokenRequest tokens
+make demo-reset       # demo-v1, then prune scaled-down ReplicaSets of earlier rollouts
 make phase6-kind-check  # live-cluster test through the real adapter and SA credentials
 make kind-delete
 ```
+
+The services, the scripted REST steps, and the end-to-end runs (`make services-up`, `create-incident`, `approve-latest-action`, `verify`, `e2e`, `e2e-decline`) are in [local-demo-env.md](./local-demo-env.md).
 
 | Variable | Default | Notes |
 | --- | --- | --- |
@@ -73,7 +76,7 @@ The orchestrator, investigator, both Kubernetes MCP processes, and the observabi
 - The Kubernetes boundary that matters is still real. Each Kubernetes MCP process authenticates as its own ServiceAccount through a TokenRequest kubeconfig from `make kubeconfigs`, and the API server enforces `deploy/rbac/mcp.yaml`. The operator's admin kubeconfig is only used by the `make` targets, never by a service.
 - demo-api is the only workload that has to be in-cluster, because rollouts and rollbacks must be real.
 
-Run order (after `make deploy demo-v1 kubeconfigs` and `migrate -path migrations -database "$DATABASE_URL" up`):
+`make services-up` starts all five in this order with these identities (see [local-demo-env.md](./local-demo-env.md), "Running the services"). The equivalent manual run order (after `make deploy demo-v1 kubeconfigs` and `migrate -path migrations -database "$DATABASE_URL" up`):
 
 ```bash
 KUBECONFIG=.demo/kubeconfig-readonly KUBERNETES_MCP_MODE=readonly CLUSTER_ID=local go run ./cmd/kubernetes-mcp   # 127.0.0.1:8091
@@ -117,8 +120,8 @@ The error-rate query that the observability MCP issues for a 5m window is:
 
 ```promql
 (sum(rate(rollback_guardian_http_requests_total{cluster="local",namespace="rollback-demo",deployment="demo-api",service="demo-api",code=~"5.."}[5m0s]))
-  / (sum(rate(rollback_guardian_http_requests_total{cluster="local",namespace="rollback-demo",deployment="demo-api",service="demo-api"}[5m0s])) > 0))
-or (sum(rate(rollback_guardian_http_requests_total{cluster="local",namespace="rollback-demo",deployment="demo-api",service="demo-api"}[5m0s])) * 0)
+   or (sum(rate(rollback_guardian_http_requests_total{cluster="local",namespace="rollback-demo",deployment="demo-api",service="demo-api"}[5m0s])) * 0))
+/ (sum(rate(rollback_guardian_http_requests_total{cluster="local",namespace="rollback-demo",deployment="demo-api",service="demo-api"}[5m0s])) > 0)
 ```
 
-It returns `0` after v1 load and rises toward the configured `DEMO_ERROR_RATE` (default `0.8`) after `make demo-v2-broken`.
+It returns `0` after v1 load (no 5xx series: the numerator falls back to 0) and rises toward the configured `DEMO_ERROR_RATE` (default `0.8`) after `make demo-v2-broken`. Without any traffic in the window it returns no sample, which the adapter reports as an invalid result, never as a `0` error rate: an error ratio without requests says nothing, and a `0` would let recovery verification pass on a service that serves nothing.

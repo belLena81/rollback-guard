@@ -1,6 +1,6 @@
 # Rollback Guardian
 
-Rollback Guardian is a Go-based agentic DevOps demo for one deliberately narrow workflow: detect an unhealthy Kubernetes rollout, investigate evidence, propose a rollback, require human approval, execute the rollback through scoped MCP tools, and verify recovery.
+Rollback Guardian is a Go-based agentic DevOps demo for one deliberately narrow workflow: detect a bad Kubernetes rollout, investigate evidence, propose a rollback, require human approval, execute the rollback through scoped MCP tools, and verify recovery.
 
 The project exists to demonstrate production-oriented Go architecture, Agent2Agent (A2A) delegation, Model Context Protocol (MCP) tool boundaries, Kubernetes automation, deterministic policy gates, and an inspectable audit timeline.
 
@@ -63,7 +63,7 @@ test/
 docs/
 ```
 
-Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is in progress: the `demo-api` workload, container images, kind manifests, the local demo flow, and telemetry (metrics, correlated logs, tracing) exist; retry/circuit-breaker decorators exist too (`docs/phase6-resilience.md`); the unattended end-to-end run and CI do not yet. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
+Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is in progress: the `demo-api` workload, container images, kind manifests, the local demo flow, telemetry (metrics, correlated logs, tracing), retry/circuit-breaker decorators (`docs/phase6-resilience.md`), and the unattended end-to-end run (`make e2e`, `docs/local-demo-env.md`) exist; CI does not yet. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
 
 ## Canonical Choices
 
@@ -79,7 +79,7 @@ Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface.
 ```bash
 make test                # unit, contract, and in-process lifecycle tests
 make test-race
-make lint                # gofmt check, go vet, golangci-lint (also integration- and kind-tagged files)
+make lint                # gofmt check, go vet, golangci-lint (also integration-, kind-, and e2e-tagged files)
 make contract-test
 make phase3-integration  # integration suites need Docker (testcontainers)
 make phase4-integration
@@ -97,6 +97,20 @@ make rbac-check
 make kubeconfigs
 make phase6-kind-check
 make kind-delete
+
+# Local demo stack (docs/local-demo-env.md)
+make compose-up          # PostgreSQL + Prometheus outside the sandbox (COMPOSE_PROFILES="--profile tracing" adds Jaeger)
+make compose-down
+make services-up         # build, migrate, SA kubeconfigs, start the five services, wait for /health/ready
+make services-status
+make services-down
+make demo-reset          # v1-healthy, stable mark, prune old broken ReplicaSets
+make create-incident
+make approve-latest-action
+make verify              # VERIFY_EXPECT=declined for the decline scenario
+make e2e                 # unattended exit gate: healthy -> broken -> incident -> approve -> verify
+make e2e-decline         # policy declines a crashloop rollout; nothing is mutated
+make e2e-test            # the same flows as a Go test (build tag e2e) against a running stack
 ```
 
-The kind targets are described in [docs/phase6-kind.md](./docs/phase6-kind.md). Still planned for Phase 6 and not implemented: `compose-up`, `compose-down`, `create-incident`, `approve-latest-action`, and `verify`.
+The kind targets are described in [docs/phase6-kind.md](./docs/phase6-kind.md), the stack, the scripted REST steps, and the end-to-end runs in [docs/local-demo-env.md](./docs/local-demo-env.md).

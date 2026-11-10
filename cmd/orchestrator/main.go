@@ -233,10 +233,12 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 		IDGenerator:    ids,
 		Tracer:         tel,
 	}, application.WorkflowConfig{
-		ProposalTTL:    cfg.ProposalTTL,
-		ApprovalTTL:    cfg.ApprovalTTL,
-		CleanupTimeout: cfg.CleanupTimeout,
-		SystemActor:    systemActor,
+		ProposalTTL:          cfg.ProposalTTL,
+		ApprovalTTL:          cfg.ApprovalTTL,
+		CleanupTimeout:       cfg.CleanupTimeout,
+		SystemActor:          systemActor,
+		RecoveryTimeout:      cfg.RecoveryTimeout,
+		RecoveryPollInterval: cfg.RecoveryPollInterval,
 	})
 }
 
