@@ -1,6 +1,6 @@
 # Continuous Integration
 
-`.github/workflows/ci.yml` runs on pull requests to `master`, on pushes to `master` and to `phase*/**` branches, and on manual dispatch. A newer push to the same ref cancels the older run (never on `master`); a branch push and its pull request share one concurrency group. Every job has `contents: read` only.
+`.github/workflows/ci.yml` runs on pull requests to `master`, on pushes to `master` and to `phase*` and `phase*/**` branches, and on manual dispatch. A newer push to the same ref cancels the older run (never on `master`); a branch push and its pull request share one concurrency group. Every job has `contents: read` only.
 
 Jobs fail fast, cheapest first:
 

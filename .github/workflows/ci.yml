@@ -13,7 +13,7 @@ on:
   pull_request:
     branches: [master]
   push:
-    branches: [master, "phase*/**"]
+    branches: [master, "phase*", "phase*/**"]
   workflow_dispatch:
 
 # Least privilege: no job writes to the repository, issues, or packages.
