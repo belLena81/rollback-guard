@@ -1,5 +1,9 @@
-.PHONY: fmt-check test test-race vet lint contract-test phase3-integration phase4-integration phase5-integration phase6-telemetry images images-services images-demo-api \
+.PHONY: fmt-check test test-race vet lint contract-test phase3-integration phase4-integration phase5-integration postgres-integration integration phase6-telemetry images images-services images-demo-api \
 	kind-create kind-delete kind-load deploy demo-v1 demo-v2-broken generate-load rbac-check kubeconfigs phase6-kind-check
+
+# Build tags of every tagged test file, so vet and lint also cover the
+# integration and kind suites that plain `go test ./...` skips.
+LINT_TAGS ?= integration,kind
 
 DOCKER ?= docker
 IMAGE_PREFIX ?= rollback-guardian
@@ -44,10 +48,10 @@ test-race:
 	go test -race ./...
 
 vet:
-	go vet ./...
+	go vet -tags=$(LINT_TAGS) ./...
 
 lint: fmt-check vet
-	golangci-lint run ./...
+	golangci-lint run --build-tags=$(LINT_TAGS) ./...
 
 contract-test:
 	go test ./test/contract/...
@@ -60,6 +64,16 @@ phase4-integration:
 
 phase5-integration:
 	go test -tags=integration -timeout=3m ./test/integration/phase5/...
+
+# PostgreSQL adapter integration tests (repositories, rollback mutation guard).
+# They need ROLLBACK_GUARD_POSTGRES_TEST_DSN, which the sandbox sets, and skip
+# without it. A skipped test proves nothing, so any skip fails this target.
+postgres-integration:
+	bash scripts/ci/test-no-skips.sh -tags=integration ./internal/adapters/postgres/...
+
+# Every integration-tagged suite. The kind-tagged suite needs a cluster and
+# runs separately as phase6-kind-check.
+integration: phase3-integration phase4-integration phase5-integration postgres-integration
 
 # In-process telemetry exit check (docs/phase6-telemetry.md); also part of `make test`.
 phase6-telemetry:

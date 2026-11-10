@@ -267,7 +267,12 @@ func seedTrustedRollbackWithExpiry(t *testing.T, pool *pgxpool.Pool, incidentID 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() {
+		// A no-op after the commit below; otherwise it undoes the fixture.
+		if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("roll back fixture transaction: %v", err)
+		}
+	}()
 	if _, err := tx.Exec(context.Background(), `
 		INSERT INTO incidents (
 			id, cluster, namespace, deployment, service, symptom_kind, symptom_observed,
