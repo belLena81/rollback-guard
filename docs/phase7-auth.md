@@ -19,6 +19,22 @@ Contract: `DEVELOPMENT_PLAN.md` "Phase 7", `.agents/07-auth-identity-agent.md`. 
 - Scope: orchestrator REST only. Investigator and MCP servers remain network-trusted, as documented.
 - Never logged or persisted: client secret, session tokens, GitHub tokens, auth headers.
 
+## Sessions (7.3)
+
+Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMiddleware`. `cmd/orchestrator` wiring (`AUTH_MODE`) arrives in 7.4.
+
+- **Token.** 32 bytes from `ports.RandomSource` (crypto/rand), unpadded base64url (43 characters). Only `SHA-256(token bytes)` is stored. `Issue` returns the raw token once; nothing stores, logs or formats it. A disabled user gets no session.
+- **Carriers.** `Authorization: Bearer <token>` wins whenever an `Authorization` header is present; a bad header is not replaced by the cookie. Otherwise the `rollback_guard_session` cookie is used (two such cookies are rejected). The cookie is `HttpOnly`, `SameSite=Strict`, `Path=/`, expires with the session, and is `Secure` unless `SESSION_COOKIE_SECURE=false`. `ClearSessionCookie` clears it on logout. The middleware removes the `Authorization` header and the session cookie before calling the handler.
+- **Per request.** Token, session and user are resolved on every request in one lookup, so revocation, disable and role change apply to the next request. On success the `Actor` (`github:<id>`) is injected under the existing key (`ActorFromContext`) and the `Principal` (live user incl. role, session ID) under `PrincipalFromContext`. No last-seen write happens on the request path.
+- **Failures.** Missing, malformed, unknown, expired or revoked token and disabled user all return the same `domain.UnauthenticatedError` and the same response: `401`, `WWW-Authenticate: Bearer`, `{"error":"unauthenticated","message":"authentication required"}` (plus `requestId`). A resolver infrastructure error (database down) returns `500 internal_error`, not 401, and only a fixed classification is logged.
+- **CSRF.** A cookie-authenticated `POST`, `PUT`, `PATCH` or `DELETE` must carry an `Origin` (or, without `Origin`, a `Referer`) whose host equals the request `Host`, or neither header; otherwise `403 forbidden`. Bearer requests are exempt.
+- **Public paths.** Exact match only: `/health/live`, `/health/ready`, `/metrics`, `/v1/auth/github/login`, `/v1/auth/github/callback`. Everything else, including `/metrics/x` or `/health/live/`, needs a session.
+
+| Variable | Default | Bounds |
+|---|---|---|
+| `SESSION_TTL` | `8h` | `5m` to `720h` (30 days) |
+| `SESSION_COOKIE_SECURE` | `true` | `true` or `false` (plain-HTTP local development only) |
+
 ## Tasks
 
 Each task: one branch `phase7/7.N-name`, TDD, one commit per task, full gate at the end, one reviewer.

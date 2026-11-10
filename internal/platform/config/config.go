@@ -48,6 +48,7 @@ type Config struct {
 	A2AMaxAttempts        int
 	Telemetry             TelemetryConfig
 	Resilience            ResilienceConfig
+	Session               SessionConfig
 }
 
 type InvestigatorConfig struct {
@@ -142,6 +143,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	session, err := sessionEnv()
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		HTTPAddr:              stringEnv("HTTP_ADDR", DefaultOrchestratorAddr),
 		DatabaseURL:           db.url,
@@ -174,6 +179,7 @@ func Load() (Config, error) {
 		A2AMaxAttempts:        a2a.maxAttempts,
 		Telemetry:             telemetry,
 		Resilience:            resilience,
+		Session:               session,
 	}, nil
 }
 

@@ -22,6 +22,7 @@ var everyVariable = []string{
 	"A2A_POLL_INTERVAL", "A2A_LEASE_TTL", "A2A_WORKER_ID", "A2A_MAX_ATTEMPTS",
 	"DIAGNOSIS_STRATEGY", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "LLM_TIMEOUT", "LLM_MAX_OUTPUT_TOKENS",
 	"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME", "OTEL_TRACES_SAMPLE_RATIO", "TELEMETRY_SHUTDOWN_TIMEOUT", "LOG_LEVEL",
+	"SESSION_TTL", "SESSION_COOKIE_SECURE",
 }
 
 const testDatabaseURL = "postgres://rollback@database/rollback_guard"
@@ -98,6 +99,7 @@ func TestOrchestratorDefaults(t *testing.T) {
 		A2AMaxAttempts:        3,
 		Telemetry:             defaultTelemetry("orchestrator"),
 		Resilience:            defaultResilience(),
+		Session:               SessionConfig{TTL: 8 * time.Hour, CookieSecure: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Load() defaults:\n got %+v\nwant %+v", got, want)
