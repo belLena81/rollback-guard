@@ -24,6 +24,9 @@ services:
       PGUSER: rollback_guard
       PGPASSWORD: rollback_guard
       PGDATABASE: rollback_guard
+      # Enables the rollback mutation guard integration tests (they skip without it
+      # and refuse any database whose name lacks "test").
+      ROLLBACK_GUARD_POSTGRES_TEST_DSN: postgres://rollback_guard:rollback_guard@postgres:5432/rollback_guard_test?sslmode=disable
       # Testcontainers and kind run against the isolated dind daemon.
       DOCKER_HOST: tcp://dind:2375
       TESTCONTAINERS_HOST_OVERRIDE: dind
