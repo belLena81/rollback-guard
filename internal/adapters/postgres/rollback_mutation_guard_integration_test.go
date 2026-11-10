@@ -422,6 +422,84 @@ func TestRollbackMutationLockReleaseClosesConnectionWhenUnlockFails(t *testing.T
 	}
 }
 
+// dropAdvisoryLockOutOfBand unlocks the attempt's advisory lock on its own
+// session, so the guard's later pg_advisory_unlock finds nothing held.
+func dropAdvisoryLockOutOfBand(t *testing.T, guard *RollbackMutationGuard, key domain.IdempotencyKey) {
+	t.Helper()
+	guard.mu.Lock()
+	lock := guard.locks[key]
+	guard.mu.Unlock()
+	if lock == nil {
+		t.Fatalf("no retained lock for %q", key)
+	}
+	var unlocked bool
+	if err := lock.conn.QueryRow(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, key).Scan(&unlocked); err != nil {
+		t.Fatal(err)
+	}
+	if !unlocked {
+		t.Fatalf("advisory lock for %q was not held by the attempt's session", key)
+	}
+}
+
+func TestRollbackMutationGuardReleaseReportsUnlockOfALockNotHeld(t *testing.T) {
+	pool := isolatedRollbackGuardPool(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	key := uniqueRollbackKey("key-unlock-not-held")
+	proposal := seedTrustedRollback(t, pool, "incident-unlock-not-held", key, now)
+	guard, err := NewRollbackMutationGuard(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := guard.Begin(context.Background(), key, proposal.Hash(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseOnCleanup(t, guard, attempt)
+	dropAdvisoryLockOutOfBand(t, guard, key)
+
+	if err := guard.Release(context.Background(), attempt); !errors.Is(err, errRollbackMutationLockNotHeld) {
+		t.Fatalf("Release() error = %v, want lock not held", err)
+	}
+	requireAdvisoryLockFree(t, pool, key)
+	requireMutationState(t, pool, key, "pending")
+}
+
+// When the completion commits but the unlock then fails, Complete reports the
+// failure and no mutation value; a replay then sees the committed completion.
+func TestRollbackMutationGuardCompleteReturnsNoValueWhenUnlockFails(t *testing.T) {
+	pool := isolatedRollbackGuardPool(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	key := uniqueRollbackKey("key-complete-unlock")
+	proposal := seedTrustedRollback(t, pool, "incident-complete-unlock", key, now)
+	guard, err := NewRollbackMutationGuard(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := guard.Begin(context.Background(), key, proposal.Hash(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseOnCleanup(t, guard, attempt)
+	dropAdvisoryLockOutOfBand(t, guard, key)
+
+	completed, err := guard.Complete(context.Background(), attempt, false, now.Add(time.Second))
+	if !errors.Is(err, errRollbackMutationLockNotHeld) {
+		t.Fatalf("Complete() error = %v, want lock not held", err)
+	}
+	if completed.Snapshot() != (domain.RollbackMutation{}).Snapshot() {
+		t.Fatalf("Complete() returned %#v together with an error", completed.Snapshot())
+	}
+	requireMutationState(t, pool, key, "completed")
+	requireAdvisoryLockFree(t, pool, key)
+	replay, err := guard.Begin(context.Background(), key, proposal.Hash(), now.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.Mutation.State() != domain.RollbackMutationCompleted || replay.Lease != "" {
+		t.Fatalf("replay = state %s lease %q, want the completed mutation and no lease", replay.Mutation.State(), replay.Lease)
+	}
+}
+
 func isolatedRollbackGuardPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	return isolatedSchemaPool(t, "000001_initial_schema.up.sql", "000002_rollback_mutation_ledger.up.sql")

@@ -8,6 +8,7 @@ import (
 
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestTakeRollbackMutationLockRequiresTheOwningLease(t *testing.T) {
@@ -101,5 +102,52 @@ func TestRetainRollbackMutationLockIgnoresReplacedLockReleaseFailure(t *testing.
 
 	if got := guard.locks[key]; got != replacement {
 		t.Fatalf("retained lock = %p, want replacement %p", got, replacement)
+	}
+}
+
+// recordingTx records the context its Rollback receives. Only Rollback is
+// implemented; any other call panics on the nil embedded Tx.
+type recordingTx struct {
+	pgx.Tx
+	rollbackCtxErr      error
+	rollbackHasDeadline bool
+	err                 error
+}
+
+func (tx *recordingTx) Rollback(ctx context.Context) error {
+	tx.rollbackCtxErr = ctx.Err()
+	_, tx.rollbackHasDeadline = ctx.Deadline()
+	return tx.err
+}
+
+func TestRollbackTransactionRunsOnADetachedBoundedContext(t *testing.T) {
+	failure := errors.New("rollback failed")
+	tests := []struct {
+		name    string
+		txErr   error
+		wantErr error
+	}{
+		{name: "rolled back", txErr: nil},
+		{name: "already committed", txErr: pgx.ErrTxClosed},
+		{name: "rollback failure is reported", txErr: failure, wantErr: failure},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			tx := &recordingTx{err: test.txErr}
+
+			err := rollbackTransaction(ctx, tx, "rollback mutation transaction")
+
+			if tx.rollbackCtxErr != nil || !tx.rollbackHasDeadline {
+				t.Fatalf("Rollback ctx err = %v, deadline = %v; want a live context with a timeout", tx.rollbackCtxErr, tx.rollbackHasDeadline)
+			}
+			if test.wantErr == nil && err != nil {
+				t.Fatalf("rollbackTransaction() = %v, want nil", err)
+			}
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("rollbackTransaction() = %v, want %v", err, test.wantErr)
+			}
+		})
 	}
 }

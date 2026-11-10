@@ -141,7 +141,8 @@ type RollbackMutationGuard interface {
 	Begin(context.Context, domain.IdempotencyKey, domain.ProposalHash, time.Time) (RollbackMutationAttempt, error)
 	// Complete records the attempt's pending mutation as completed and
 	// releases the attempt's lock. It returns ErrRollbackMutationLeaseNotHeld,
-	// without writing, when the attempt's lease does not hold the lock.
+	// without writing, when the attempt's lease does not hold the lock. It
+	// returns either the completed mutation or an error, never both.
 	Complete(context.Context, RollbackMutationAttempt, bool, time.Time) (domain.RollbackMutation, error)
 	// Release gives up the lock held by a pending attempt returned by Begin
 	// that will not be completed, so a later Begin for the same key can
