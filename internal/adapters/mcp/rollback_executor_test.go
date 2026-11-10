@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	rgruntime "github.com/belLena81/rollback-guard/internal/platform/runtime"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -79,7 +80,7 @@ func TestRollbackExecutorReconcilesCanceledMutationWithDetachedBoundedContext(t 
 			return nil, nil
 		}
 	})
-	executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	executor, err := NewRollbackExecutor(rollback, readonly, time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func TestRollbackExecutorReturnsUnknownWhenCanceledMutationCannotBeReconciled(t 
 		cancel()
 		return nil, context.Canceled
 	})
-	executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	executor, err := NewRollbackExecutor(rollback, readonly, time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestRollbackExecutorDoesNotReconcileCancellationBeforeMutation(t *testing.T
 		}
 		return nil, callCtx.Err()
 	})
-	executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	executor, err := NewRollbackExecutor(rollback, readonly, time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +203,7 @@ func TestRollbackExecutorReturnsUnknownWhenMutationReplayDoesNotCompleteLedger(t
 			return nil, nil
 		}
 	})
-	executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	executor, err := NewRollbackExecutor(rollback, readonly, time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +255,7 @@ func TestRollbackExecutorRoutesAlreadyAppliedThroughGuardedMutation(t *testing.T
 		}
 		return nil, nil
 	})
-	executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	executor, err := NewRollbackExecutor(rollback, readonly, time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +305,7 @@ func TestRollbackExecutorClampsSuccessfulCompletionAfterMutationStart(t *testing
 			return nil, nil
 		}
 	})
-	executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	executor, err := NewRollbackExecutor(rollback, readonly, time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,9 +327,9 @@ func TestNewRollbackExecutorRejectsSubSecondWatchTimeout(t *testing.T) {
 		t.Fatal("constructor should reject before any tool call")
 		return nil, nil
 	})
-	_, err := NewRollbackExecutor(caller, caller, 500*time.Millisecond)
+	_, err := NewRollbackExecutor(caller, caller, 500*time.Millisecond, rgruntime.Clock{})
 	if err == nil {
-		t.Fatal("NewRollbackExecutor() error = nil, want invalid configuration")
+		t.Fatal("NewRollbackExecutor() error = nil, want invalid configuration", rgruntime.Clock{})
 	}
 }
 

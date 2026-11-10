@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	rgruntime "github.com/belLena81/rollback-guard/internal/platform/runtime"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -53,17 +54,23 @@ func TestNewIdempotentInvestigatorValidatesDependencies(t *testing.T) {
 		pool        *pgxpool.Pool
 		next        ports.Investigator
 		taskTimeout time.Duration
+		noClock     bool
 		wantErr     bool
 	}{
 		{name: "valid", pool: pool, next: next, taskTimeout: 45 * time.Second},
 		{name: "missing pool", next: next, taskTimeout: 45 * time.Second, wantErr: true},
 		{name: "missing investigator", pool: pool, taskTimeout: 45 * time.Second, wantErr: true},
+		{name: "missing clock", pool: pool, next: next, taskTimeout: 45 * time.Second, noClock: true, wantErr: true},
 		{name: "zero task timeout", pool: pool, next: next, wantErr: true},
 		{name: "negative task timeout", pool: pool, next: next, taskTimeout: -time.Second, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			investigator, err := NewIdempotentInvestigator(test.pool, test.next, test.taskTimeout)
+			var clock ports.Clock = rgruntime.Clock{}
+			if test.noClock {
+				clock = nil
+			}
+			investigator, err := NewIdempotentInvestigator(test.pool, test.next, test.taskTimeout, clock)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("NewIdempotentInvestigator() error = %v, wantErr %t", err, test.wantErr)
 			}

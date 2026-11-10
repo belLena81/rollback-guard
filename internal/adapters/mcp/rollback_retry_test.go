@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/platform/resilience"
+	rgruntime "github.com/belLena81/rollback-guard/internal/platform/runtime"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -47,7 +48,7 @@ func TestRollbackExecutorRetriesPrepareOnlyWhenTheDialFailed(t *testing.T) {
 		}
 		return nil, dialFailure()
 	})
-	adapter, err := NewRollbackExecutor(rollback, readonly, time.Second)
+	adapter, err := NewRollbackExecutor(rollback, readonly, time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestRollbackExecutorExecuteFailuresAfterTheRequestWasSentAreNotRetried(t *t
 				executes++
 				return nil, executeErr
 			})
-			adapter, err := NewRollbackExecutor(rollback, readonly, time.Second)
+			adapter, err := NewRollbackExecutor(rollback, readonly, time.Second, rgruntime.Clock{})
 			if err != nil {
 				t.Fatal(err)
 			}

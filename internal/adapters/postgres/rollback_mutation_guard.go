@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -156,7 +155,7 @@ func authorizeOrResume(proposal domain.RollbackProposal, decision domain.PolicyD
 }
 
 func insertPendingRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.IdempotencyKey, hash domain.ProposalHash, trusted trustedExecution) (domain.RollbackMutation, error) {
-	pending, err := domain.NewPendingRollbackMutation(key, hash, rollbackMutationExecutionID(key, hash), trusted.proposal.CurrentRevision(), trusted.proposal.TargetRevision(), trusted.record.StartedAt())
+	pending, err := domain.NewPendingRollbackMutation(key, hash, domain.DeterministicExecutionID(key, hash), trusted.proposal.CurrentRevision(), trusted.proposal.TargetRevision(), trusted.record.StartedAt())
 	if err != nil {
 		return domain.RollbackMutation{}, err
 	}
@@ -358,11 +357,6 @@ func loadRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.Idempotency
 	}
 	record, err := domain.RehydrateRollbackMutation(snapshot)
 	return record, true, err
-}
-
-func rollbackMutationExecutionID(key domain.IdempotencyKey, hash domain.ProposalHash) domain.ExecutionID {
-	sum := sha256.Sum256([]byte(string(key) + "\n" + string(hash)))
-	return domain.ExecutionID("mcp-mutation-" + hex.EncodeToString(sum[:])[:32])
 }
 
 func rollbackMutationStateText(state domain.RollbackMutationState) string {

@@ -2,8 +2,6 @@ package mcp
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -199,9 +197,4 @@ func errorFromTool(toolError ToolError) error {
 func ambiguousToolError(err error) bool {
 	var toolErr *toolCallError
 	return errors.As(err, &toolErr) && (toolErr.retryable || toolErr.code == CodeInternal || toolErr.code == CodeDependencyUnavailable)
-}
-
-func sha256Hex(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
 }

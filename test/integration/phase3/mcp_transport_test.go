@@ -16,6 +16,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/mcp/observabilityserver"
 	metricsprom "github.com/belLena81/rollback-guard/internal/adapters/prometheus"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	rgruntime "github.com/belLena81/rollback-guard/internal/platform/runtime"
 )
 
 func TestPortsOperateAcrossStreamableHTTPMCP(t *testing.T) {
@@ -59,7 +60,7 @@ func TestPortsOperateAcrossStreamableHTTPMCP(t *testing.T) {
 
 	approved := approvedRollback(t, now, target)
 	kube.approvedHash = approved.Proposal().Hash()
-	executor, err := protocol.NewRollbackExecutor(writeClient, readClient, 5*time.Second)
+	executor, err := protocol.NewRollbackExecutor(writeClient, readClient, 5*time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}

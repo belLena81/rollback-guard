@@ -17,6 +17,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/kubernetes"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/resilience"
+	rgruntime "github.com/belLena81/rollback-guard/internal/platform/runtime"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -259,7 +260,7 @@ func TestRollbackExecutorMapsEveryPostSendTransportFailureToReconcileOrUnknown(t
 				// The watch/reconcile budget has wide headroom over the
 				// injected call deadline, so a slow parallel run cannot turn
 				// a reconciled case into an unknown one.
-				adapter, err := NewRollbackExecutor(rollback, state.readonly(), 10*time.Second)
+				adapter, err := NewRollbackExecutor(rollback, state.readonly(), 10*time.Second, rgruntime.Clock{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -326,7 +327,7 @@ func TestRollbackExecutorLeavesPreSendDialFailureRetryable(t *testing.T) {
 		}
 		return rollback.CallTool(ctx, params)
 	})
-	adapter, err := NewRollbackExecutor(closing, state.readonly(), time.Second)
+	adapter, err := NewRollbackExecutor(closing, state.readonly(), time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +389,7 @@ func TestRollbackExecutorPrepareRejectionAfterFailedInspectionIsUnknown(t *testi
 				result.StructuredContent = Response[PrepareRollbackOutput]{OK: false, Error: &ToolError{Code: CodeRevisionDrift, Message: "deployment revision changed"}}
 				return result, nil
 			})
-			executor, err := NewRollbackExecutor(rollback, readonly, time.Second)
+			executor, err := NewRollbackExecutor(rollback, readonly, time.Second, rgruntime.Clock{})
 			if err != nil {
 				t.Fatal(err)
 			}

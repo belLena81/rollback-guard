@@ -172,7 +172,7 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 	if err != nil {
 		return application.Services{}, err
 	}
-	executor, err := mcpadapter.NewRollbackExecutor(write, read, cfg.MCPWatchTimeout)
+	executor, err := mcpadapter.NewRollbackExecutor(write, read, cfg.MCPWatchTimeout, runtime.Clock{})
 	if err != nil {
 		return application.Services{}, err
 	}

@@ -175,12 +175,12 @@ func buildServices(cfg config.InvestigatorConfig, pool *pgxpool.Pool, clients mc
 	if err != nil {
 		return nil, err
 	}
-	return a2aadapter.NewIdempotentInvestigator(pool, runner, cfg.TaskTimeout)
+	return a2aadapter.NewIdempotentInvestigator(pool, runner, cfg.TaskTimeout, runtime.Clock{})
 }
 
 // buildHTTP assembles the A2A server with durable task storage.
 func buildHTTP(cfg config.InvestigatorConfig, investigator ports.Investigator, pool *pgxpool.Pool, ready httpserver.ReadyCheck, tel *telemetry.Provider, logger *slog.Logger) (http.Handler, error) {
-	store, err := a2aadapter.NewPostgresTaskStore(pool)
+	store, err := a2aadapter.NewPostgresTaskStore(pool, runtime.Clock{})
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,26 @@
 package domain
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"time"
+)
+
+// executionIDPrefix and executionIDHexLength shape every deterministic
+// execution ID: a readable prefix and the first 128 bits of a SHA-256.
+const (
+	executionIDPrefix    = "execution-"
+	executionIDHexLength = 32
+)
+
+// DeterministicExecutionID is the one ID of the execution an idempotency key
+// and proposal hash stand for. The rollback ledger and the executor both use
+// it, so a replay of the same approval always names the same execution. The
+// newline keeps a (key, hash) pair from being re-split into another pair.
+func DeterministicExecutionID(key IdempotencyKey, hash ProposalHash) ExecutionID {
+	sum := sha256.Sum256([]byte(string(key) + "\n" + string(hash)))
+	return ExecutionID(executionIDPrefix + hex.EncodeToString(sum[:])[:executionIDHexLength])
+}
 
 type RollbackMutationState uint8
 

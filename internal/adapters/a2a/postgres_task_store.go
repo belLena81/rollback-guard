@@ -5,22 +5,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
-type PostgresTaskStore struct{ pool *pgxpool.Pool }
+type PostgresTaskStore struct {
+	pool  *pgxpool.Pool
+	clock ports.Clock
+}
 
-func NewPostgresTaskStore(pool *pgxpool.Pool) (*PostgresTaskStore, error) {
-	if pool == nil {
-		return nil, fmt.Errorf("PostgreSQL pool is required")
+func NewPostgresTaskStore(pool *pgxpool.Pool, clock ports.Clock) (*PostgresTaskStore, error) {
+	if pool == nil || clock == nil {
+		return nil, fmt.Errorf("PostgreSQL pool and clock are required")
 	}
-	return &PostgresTaskStore{pool: pool}, nil
+	return &PostgresTaskStore{pool: pool, clock: clock}, nil
 }
 
 func (s *PostgresTaskStore) Create(ctx context.Context, task *a2a.Task) (taskstore.TaskVersion, error) {
@@ -31,7 +35,7 @@ func (s *PostgresTaskStore) Create(ctx context.Context, task *a2a.Task) (tasksto
 	if err != nil {
 		return 0, err
 	}
-	now := time.Now().UTC()
+	now := s.clock.Now().UTC()
 	const version taskstore.TaskVersion = 1
 	_, err = s.pool.Exec(ctx, `INSERT INTO a2a_tasks(task_id,context_id,state,version,snapshot,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6)`, task.ID, task.ContextID, task.Status.State.String(), version, snapshot, now)
 	var pgErr *pgconn.PgError
@@ -61,7 +65,7 @@ func (s *PostgresTaskStore) Update(ctx context.Context, request *taskstore.Updat
 		expected = stored.Version
 	}
 	next := expected + 1
-	command, err := s.pool.Exec(ctx, `UPDATE a2a_tasks SET context_id=$1,state=$2,version=$3,snapshot=$4,updated_at=$5 WHERE task_id=$6 AND version=$7`, request.Task.ContextID, request.Task.Status.State.String(), next, snapshot, time.Now().UTC(), request.Task.ID, expected)
+	command, err := s.pool.Exec(ctx, `UPDATE a2a_tasks SET context_id=$1,state=$2,version=$3,snapshot=$4,updated_at=$5 WHERE task_id=$6 AND version=$7`, request.Task.ContextID, request.Task.Status.State.String(), next, snapshot, s.clock.Now().UTC(), request.Task.ID, expected)
 	if err != nil {
 		return 0, fmt.Errorf("update A2A task: %w", err)
 	}

@@ -28,20 +28,21 @@ type IdempotentInvestigator struct {
 	next         ports.Investigator
 	pollInterval time.Duration
 	staleAfter   time.Duration
+	clock        ports.Clock
 }
 
 // NewIdempotentInvestigator deduplicates investigations by idempotency key.
 // taskTimeout is the deadline the caller puts on every Investigate call
 // (A2A_TASK_TIMEOUT); the reclaim and polling intervals follow from it.
-func NewIdempotentInvestigator(pool *pgxpool.Pool, next ports.Investigator, taskTimeout time.Duration) (*IdempotentInvestigator, error) {
-	if pool == nil || next == nil {
-		return nil, fmt.Errorf("PostgreSQL pool and investigator are required")
+func NewIdempotentInvestigator(pool *pgxpool.Pool, next ports.Investigator, taskTimeout time.Duration, clock ports.Clock) (*IdempotentInvestigator, error) {
+	if pool == nil || next == nil || clock == nil {
+		return nil, fmt.Errorf("PostgreSQL pool, investigator, and clock are required")
 	}
 	if taskTimeout <= 0 {
 		return nil, fmt.Errorf("investigation task timeout must be positive")
 	}
 	pollInterval, staleAfter := idempotencyTimings(taskTimeout)
-	return &IdempotentInvestigator{pool: pool, next: next, pollInterval: pollInterval, staleAfter: staleAfter}, nil
+	return &IdempotentInvestigator{pool: pool, next: next, pollInterval: pollInterval, staleAfter: staleAfter, clock: clock}, nil
 }
 
 // idempotencyTimings derives both intervals from the task timeout.
@@ -64,12 +65,12 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 	if request.IdempotencyKey == "" || request.RequestHash == "" {
 		return ports.InvestigationResult{}, fmt.Errorf("idempotency key and request hash are required")
 	}
-	command, err := i.pool.Exec(ctx, `INSERT INTO a2a_investigation_requests(idempotency_key,request_hash,task_id,state,created_at,updated_at) VALUES($1,$2,$3,'working',$4,$4) ON CONFLICT DO NOTHING`, request.IdempotencyKey, request.RequestHash, request.TaskID, time.Now().UTC())
+	command, err := i.pool.Exec(ctx, `INSERT INTO a2a_investigation_requests(idempotency_key,request_hash,task_id,state,created_at,updated_at) VALUES($1,$2,$3,'working',$4,$4) ON CONFLICT DO NOTHING`, request.IdempotencyKey, request.RequestHash, request.TaskID, i.clock.Now().UTC())
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("claim investigation request: %w", err)
 	}
 	if command.RowsAffected() == 0 {
-		reclaimed, reclaimErr := i.pool.Exec(ctx, `UPDATE a2a_investigation_requests SET task_id=$5,updated_at=$3 WHERE idempotency_key=$1 AND request_hash=$2 AND state='working' AND updated_at<$4`, request.IdempotencyKey, request.RequestHash, time.Now().UTC(), time.Now().UTC().Add(-i.staleAfter), request.TaskID)
+		reclaimed, reclaimErr := i.pool.Exec(ctx, `UPDATE a2a_investigation_requests SET task_id=$5,updated_at=$3 WHERE idempotency_key=$1 AND request_hash=$2 AND state='working' AND updated_at<$4`, request.IdempotencyKey, request.RequestHash, i.clock.Now().UTC(), i.clock.Now().UTC().Add(-i.staleAfter), request.TaskID)
 		if reclaimErr != nil {
 			return ports.InvestigationResult{}, reclaimErr
 		}
@@ -85,7 +86,7 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 		}
 		recordCtx, cancel := terminalPersistenceContext(ctx)
 		defer cancel()
-		completed, recordErr := i.pool.Exec(recordCtx, `UPDATE a2a_investigation_requests SET state=$2,failure_code=$3,updated_at=$4 WHERE idempotency_key=$1 AND request_hash=$5 AND task_id=$6 AND state='working'`, request.IdempotencyKey, state, failure, time.Now().UTC(), request.RequestHash, request.TaskID)
+		completed, recordErr := i.pool.Exec(recordCtx, `UPDATE a2a_investigation_requests SET state=$2,failure_code=$3,updated_at=$4 WHERE idempotency_key=$1 AND request_hash=$5 AND task_id=$6 AND state='working'`, request.IdempotencyKey, state, failure, i.clock.Now().UTC(), request.RequestHash, request.TaskID)
 		if recordErr == nil && completed.RowsAffected() != 1 {
 			recordErr = fmt.Errorf("investigation request ownership was lost before recording %s", state)
 		}
@@ -97,7 +98,7 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 	}
 	recordCtx, cancel := terminalPersistenceContext(ctx)
 	defer cancel()
-	completed, err := i.pool.Exec(recordCtx, `UPDATE a2a_investigation_requests SET state='completed',result=$2,updated_at=$3 WHERE idempotency_key=$1 AND request_hash=$4 AND task_id=$5 AND state='working'`, request.IdempotencyKey, snapshot, time.Now().UTC(), request.RequestHash, request.TaskID)
+	completed, err := i.pool.Exec(recordCtx, `UPDATE a2a_investigation_requests SET state='completed',result=$2,updated_at=$3 WHERE idempotency_key=$1 AND request_hash=$4 AND task_id=$5 AND state='working'`, request.IdempotencyKey, snapshot, i.clock.Now().UTC(), request.RequestHash, request.TaskID)
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("complete investigation request: %w", err)
 	}

@@ -15,13 +15,14 @@ type RollbackExecutor struct {
 	rollback Caller
 	readonly Caller
 	timeout  time.Duration
+	clock    ports.Clock
 }
 
-func NewRollbackExecutor(rollback, readonly Caller, timeout time.Duration) (*RollbackExecutor, error) {
-	if rollback == nil || readonly == nil || !domain.ValidRolloutWatch(timeout) {
+func NewRollbackExecutor(rollback, readonly Caller, timeout time.Duration, clock ports.Clock) (*RollbackExecutor, error) {
+	if rollback == nil || readonly == nil || clock == nil || !domain.ValidRolloutWatch(timeout) {
 		return nil, fmt.Errorf("invalid rollback MCP adapter configuration")
 	}
-	return &RollbackExecutor{rollback: rollback, readonly: readonly, timeout: timeout}, nil
+	return &RollbackExecutor{rollback: rollback, readonly: readonly, timeout: timeout, clock: clock}, nil
 }
 
 func (a *RollbackExecutor) ExecuteApprovedRollback(ctx context.Context, approved domain.ApprovedRollback, key domain.IdempotencyKey) (domain.RollbackExecution, error) {
@@ -147,9 +148,9 @@ func (a *RollbackExecutor) waitAndBuild(ctx context.Context, approved domain.App
 	if err != nil || !output.Complete {
 		return domain.RollbackExecution{}, fmt.Errorf("watch approved rollback: %w", ports.ErrRollbackOutcomeUnknown)
 	}
-	sum := deterministicExecutionID(key, proposal.Hash())
-	completedAt := rollbackExecutionCompletedAt(startedAt, mutationCompletedAt, time.Now().UTC())
-	return domain.NewRollbackExecution(sum, proposal.IncidentID(), key, proposal.CurrentRevision(), proposal.TargetRevision(), domain.ExecutionSucceeded, startedAt, completedAt, "")
+	executionID := domain.DeterministicExecutionID(key, proposal.Hash())
+	completedAt := rollbackExecutionCompletedAt(startedAt, mutationCompletedAt, a.clock.Now())
+	return domain.NewRollbackExecution(executionID, proposal.IncidentID(), key, proposal.CurrentRevision(), proposal.TargetRevision(), domain.ExecutionSucceeded, startedAt, completedAt, "")
 }
 
 func (a *RollbackExecutor) inspect(ctx context.Context, target domain.DeploymentTarget) (domain.DeploymentEvidence, error) {
@@ -158,10 +159,6 @@ func (a *RollbackExecutor) inspect(ctx context.Context, target domain.Deployment
 		return domain.DeploymentEvidence{}, err
 	}
 	return inspector.InspectDeployment(ctx, target)
-}
-
-func deterministicExecutionID(key domain.IdempotencyKey, hash domain.ProposalHash) domain.ExecutionID {
-	return domain.ExecutionID("execution-" + sha256Hex(string(key) + "\n" + string(hash))[:32])
 }
 
 func rollbackExecutionCompletedAt(startedAt, mutationCompletedAt, observedAt time.Time) time.Time {
