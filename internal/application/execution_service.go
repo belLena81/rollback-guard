@@ -13,6 +13,8 @@ import (
 
 const investigationFailureAuditReason = "investigation failed"
 const executionFailureAuditReason = "rollback execution failed"
+const authorizationFailureAuditReason = "rollback authorization failed"
+const authorizationExpiredAuditReason = "rollback authorization expired"
 
 func (s *ExecutionService) Execute(ctx context.Context, incidentID domain.IncidentID, key domain.IdempotencyKey) (domain.RollbackExecution, error) {
 	if key == "" {
@@ -135,9 +137,9 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 		defer cancel()
 		var cleanupErr error
 		if errors.Is(err, domain.ErrExpired) {
-			cleanupErr = c.expire(cleanupCtx, loaded.incident.ID(), err.Error())
+			cleanupErr = c.expire(cleanupCtx, loaded.incident.ID(), authorizationExpiredAuditReason)
 		} else {
-			cleanupErr = c.failIncident(cleanupCtx, loaded.incident.ID(), err.Error())
+			cleanupErr = c.failIncident(cleanupCtx, loaded.incident.ID(), authorizationFailureAuditReason)
 		}
 		return executionPreparation{}, errors.Join(err, cleanupErr)
 	}
