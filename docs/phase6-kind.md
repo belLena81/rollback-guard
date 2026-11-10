@@ -28,7 +28,7 @@ make demo-v2-broken   # roll to demo-api:v2-bad-$(DEMO_BROKEN), default error-st
 make rbac-check       # kubectl auth can-i proof for both service accounts
 make kubeconfigs      # .demo/kubeconfig-{readonly,rollback} from TokenRequest tokens
 make demo-reset       # demo-v1, then prune scaled-down ReplicaSets of earlier rollouts
-make phase6-kind-check  # live-cluster test through the real adapter and SA credentials
+make phase6-kind-check  # live-cluster test through the real adapter and SA credentials (needs demo-v1 first)
 make kind-delete
 ```
 

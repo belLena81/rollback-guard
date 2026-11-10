@@ -264,8 +264,10 @@ jobs:
       # are needed in the cluster (the images job builds the service images).
       - name: Build and load the demo-api images
         run: make images-demo-api kind-load
-      - name: Deploy the demo workload and RBAC
-        run: make deploy
+      # demo-v1 marks the v1 ReplicaSet stable; the kind adapter check needs
+      # exactly one stable ReplicaSet, which a fresh cluster does not have.
+      - name: Deploy the demo workload and RBAC, mark v1 stable
+        run: make deploy demo-v1
       - name: RBAC and live-cluster adapter checks
         run: make rbac-check phase6-kind-check
       - name: Start PostgreSQL, Prometheus and Jaeger

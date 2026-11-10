@@ -18,7 +18,7 @@ lint -> unit, contract, vuln, manifests -> integration, images -> e2e
 | `manifests` | `kubectl kustomize` of `deploy/kubernetes` and `deploy/rbac` piped to `kubeconform -strict` (Kubernetes 1.37.0 schemas); `docker compose config` | The deployed manifests are schema-valid |
 | `integration` | `make integration` with a PostgreSQL 16 service container (database `rollback_guard_test`) exposed as `ROLLBACK_GUARD_POSTGRES_TEST_DSN` | Phase 3-5 suites on testcontainers and the Postgres adapter suite. `postgres-integration` fails on any skipped test and requires named tests, so an unset DSN or a dropped build tag cannot pass |
 | `images` | `docker buildx` of the four service images and four demo-api tags (matrix, no push, GitHub Actions cache) | Every Dockerfile builds. The matrix mirrors `images-services` and `DEMO_VARIANTS` in the Makefile |
-| `e2e` | kind v0.33.0 with the pinned node image, `make images-demo-api kind-load deploy rbac-check phase6-kind-check`, `make compose-up` with Jaeger, `make e2e`, `make e2e-decline` | The Phase 6 exit gate on a fresh cluster (below). 45-minute timeout. A run whose `verify` reports the trace check as skipped fails (the job requires the "including the trace check" line). On failure or cancellation it uploads the run logs, `.demo/logs`, `.demo/last-incident` and a diagnostics bundle (service status, compose logs, cluster state) as `e2e-logs` |
+| `e2e` | kind v0.33.0 with the pinned node image, `make images-demo-api kind-load deploy demo-v1 rbac-check phase6-kind-check`, `make compose-up` with Jaeger, `make e2e`, `make e2e-decline` | The Phase 6 exit gate on a fresh cluster (below). 45-minute timeout. A run whose `verify` reports the trace check as skipped fails (the job requires the "including the trace check" line). On failure or cancellation it uploads the run logs, `.demo/logs`, `.demo/last-incident` and a diagnostics bundle (service status, compose logs, cluster state) as `e2e-logs` |
 
 The e2e artifact never includes `.demo/kubeconfig-*`, which hold service-account bearer tokens.
 
@@ -56,7 +56,7 @@ make integration
 make images
 
 # e2e (needs kind, kubectl, migrate, psql, jq; see local-demo-env.md)
-make kind-create images-demo-api kind-load deploy rbac-check phase6-kind-check
+make kind-create images-demo-api kind-load deploy demo-v1 rbac-check phase6-kind-check
 make compose-up COMPOSE_PROFILES="--profile tracing"
 export DATABASE_URL='postgres://rollback_guard:rollback_guard@127.0.0.1:5432/rollback_guard?sslmode=disable'
 export PROMETHEUS_URL=http://127.0.0.1:9090 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 TRACE_QUERY_URL=http://127.0.0.1:16686
