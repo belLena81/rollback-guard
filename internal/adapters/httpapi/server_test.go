@@ -355,6 +355,11 @@ func newUnauthenticatedTestHandler(t *testing.T) http.Handler {
 
 func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *testServer {
 	t.Helper()
+	return newTestServerWithAccess(t, configure, applicationtest.AllowAll{})
+}
+
+func newTestServerWithAccess(t *testing.T, configure func(*fake.Infrastructure), access application.AccessPolicy) *testServer {
+	t.Helper()
 	now := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
 	clock := testkit.NewClock(now)
 	ids := &testkit.IDGenerator{}
@@ -407,7 +412,7 @@ func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *testServ
 		Metrics:        infrastructure,
 		Executor:       infrastructure,
 		RollbackPolicy: policy,
-		ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{},
+		ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: access,
 		Clock:       clock,
 		IDGenerator: ids,
 	}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: systemActor})

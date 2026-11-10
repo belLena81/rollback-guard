@@ -435,7 +435,15 @@ func buildGitHubAuth(cfg config.Config, authStore ports.AuthUnitOfWork, logger *
 	if err != nil {
 		return nil, nil, fmt.Errorf("create session auth middleware: %w", err)
 	}
-	return auth, []httpapi.Option{httpapi.WithGitHubLogin(login, cfg.Session.CookieSecure)}, nil
+	access, err := application.NewRoleAccessPolicy(authStore)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create access policy: %w", err)
+	}
+	admin, err := application.NewAdminService(application.AdminDependencies{UnitOfWork: authStore, Access: access, Clock: runtime.Clock{}, IDGenerator: ids})
+	if err != nil {
+		return nil, nil, fmt.Errorf("create admin service: %w", err)
+	}
+	return auth, []httpapi.Option{httpapi.WithGitHubLogin(login, cfg.Session.CookieSecure), httpapi.WithUserAdmin(admin)}, nil
 }
 
 // coordinatorRunner is the background worker served next to the API.

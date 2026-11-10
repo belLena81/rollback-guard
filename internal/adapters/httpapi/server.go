@@ -24,7 +24,10 @@ type Server struct {
 	instrument RouteMiddleware
 	metrics    http.Handler
 	// login serves the GitHub OAuth routes when set (WithGitHubLogin).
-	login        GitHubLogin
+	login GitHubLogin
+	// admin serves logout, /v1/me and user administration when set
+	// (WithUserAdmin).
+	admin        UserAdmin
 	cookieSecure bool
 }
 
@@ -77,6 +80,12 @@ func (s *Server) Routes(ready func(context.Context) error, readyTimeout time.Dur
 	if s.login != nil {
 		s.handle(apiMux, http.MethodGet+" "+httpserver.GitHubLoginPath, s.githubLogin)
 		s.handle(apiMux, http.MethodGet+" "+httpserver.GitHubCallbackPath, s.githubCallback)
+	}
+	if s.admin != nil {
+		s.handle(apiMux, LogoutPattern, s.logout)
+		s.handle(apiMux, MePattern, s.me)
+		s.handle(apiMux, SetUserRolePattern, s.setUserRole)
+		s.handle(apiMux, RevokeSessionsPattern, s.revokeUserSessions)
 	}
 	var apiHandler http.Handler = apiMux
 	if auth != nil {
@@ -309,7 +318,13 @@ func requestActor(w http.ResponseWriter, r *http.Request) (domain.Actor, bool) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	return decodeJSONLimited(w, r, dst, maxJSONBodyBytes)
+}
+
+// decodeJSONLimited decodes exactly one JSON value with no unknown fields
+// from a body of at most limit bytes.
+func decodeJSONLimited(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {

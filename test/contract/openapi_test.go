@@ -1,10 +1,20 @@
 package contract_test
 
 import (
+	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/belLena81/rollback-guard/internal/adapters/httpapi"
+	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 
 	"sigs.k8s.io/yaml"
 )
@@ -94,18 +104,6 @@ func TestOpenAPIDocumentsTheErrorBody(t *testing.T) {
 	}
 }
 
-// authRoutes are the Phase 7 operations the spec documents. The httpapi router
-// does not serve them yet: implemented in 7.3-7.5. No test compares the spec
-// to the router today; any such comparison must exempt exactly this list.
-var authRoutes = map[string][]string{
-	"/v1/auth/github/login":              {"get"},
-	"/v1/auth/github/callback":           {"get"},
-	"/v1/auth/logout":                    {"post"},
-	"/v1/me":                             {"get"},
-	"/v1/users/{userId}/role":            {"patch"},
-	"/v1/users/{userId}/sessions:revoke": {"post"},
-}
-
 // publicOperations are the only operations that may omit a session: the OAuth
 // entry points. /health/* and /metrics are unauthenticated by design.
 var publicOperations = map[string]bool{
@@ -113,12 +111,128 @@ var publicOperations = map[string]bool{
 	"/v1/auth/github/callback": true,
 }
 
-func TestOpenAPIDocumentsAuthRoutes(t *testing.T) {
-	paths := requireObject(t, loadOpenAPI(t), "paths")
-	for path, methods := range authRoutes {
-		item := requireObject(t, paths, path)
-		for _, method := range methods {
-			requireObject(t, item, method)
+// sessionRoutes exist only in AUTH_MODE=github: they need a session principal.
+var sessionRoutes = map[string]bool{
+	"/v1/auth/github/login":              true,
+	"/v1/auth/github/callback":           true,
+	"/v1/auth/logout":                    true,
+	"/v1/me":                             true,
+	"/v1/users/{userId}/role":            true,
+	"/v1/users/{userId}/sessions:revoke": true,
+}
+
+type documentedOperation struct{ method, path string }
+
+func documentedOperations(t *testing.T) []documentedOperation {
+	t.Helper()
+	var operations []documentedOperation
+	for path, item := range requireObject(t, loadOpenAPI(t), "paths") {
+		methods, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("path %s = %#v", path, item)
+		}
+		for method := range methods {
+			if method == "parameters" {
+				continue
+			}
+			operations = append(operations, documentedOperation{method: strings.ToUpper(method), path: path})
+		}
+	}
+	if len(operations) == 0 {
+		t.Fatal("OpenAPI documents no operations")
+	}
+	return operations
+}
+
+func (o documentedOperation) request() *http.Request {
+	path := strings.NewReplacer("{incidentId}", "incident-1", "{userId}", "github:1").Replace(o.path)
+	return httptest.NewRequest(o.method, path, strings.NewReader("{}"))
+}
+
+// unrouted reports whether the router's mux answered on its own (no
+// pattern matched): its 404/405 are plain text, every handler answers JSON
+// or a redirect.
+func unrouted(recorder *httptest.ResponseRecorder) bool {
+	notRouted := recorder.Code == http.StatusNotFound || recorder.Code == http.StatusMethodNotAllowed
+	return notRouted && strings.HasPrefix(recorder.Header().Get("Content-Type"), "text/plain")
+}
+
+type stubLogin struct{}
+
+func (stubLogin) Begin(context.Context) (application.LoginStart, error) {
+	return application.LoginStart{AuthorizationURL: "https://github.example/login", SealedState: "s", ExpiresAt: time.Now().Add(time.Minute)}, nil
+}
+
+func (stubLogin) Complete(context.Context, string, string, string) (application.LoginResult, error) {
+	return application.LoginResult{}, application.ErrInvalidLoginRequest
+}
+
+type stubAdmin struct{}
+
+func (stubAdmin) ChangeRole(context.Context, domain.Actor, domain.ActorID, domain.Role) (domain.User, error) {
+	return domain.User{}, &domain.NotFoundError{Resource: "user"}
+}
+
+func (stubAdmin) RevokeUserSessions(context.Context, domain.Actor, domain.ActorID) (int, error) {
+	return 0, &domain.NotFoundError{Resource: "user"}
+}
+
+func (stubAdmin) Logout(context.Context, domain.Principal) error { return nil }
+
+type noSessions struct{}
+
+func (noSessions) Resolve(context.Context, string) (domain.Principal, error) {
+	return domain.Principal{}, &domain.UnauthenticatedError{}
+}
+
+func contractRouter(t *testing.T, github bool, auth httpserver.AuthMiddleware) http.Handler {
+	t.Helper()
+	var options []httpapi.Option
+	if github {
+		options = append(options, httpapi.WithGitHubLogin(stubLogin{}, true), httpapi.WithUserAdmin(stubAdmin{}))
+	}
+	server, err := httpapi.NewServer(contractServices(t), slog.New(slog.DiscardHandler), options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server.Routes(func(context.Context) error { return nil }, time.Second, auth)
+}
+
+// TestRouterServesEveryOpenAPIOperation: in AUTH_MODE=github the router
+// registers every documented path and method; in local mode exactly the
+// session routes are absent.
+func TestRouterServesEveryOpenAPIOperation(t *testing.T) {
+	github := contractRouter(t, true, nil)
+	local := contractRouter(t, false, nil)
+	for _, operation := range documentedOperations(t) {
+		recorder := httptest.NewRecorder()
+		github.ServeHTTP(recorder, operation.request())
+		if unrouted(recorder) {
+			t.Errorf("github mode: %s %s is documented but not routed (%d)", operation.method, operation.path, recorder.Code)
+		}
+		recorder = httptest.NewRecorder()
+		local.ServeHTTP(recorder, operation.request())
+		if sessionRoutes[operation.path] != unrouted(recorder) {
+			t.Errorf("local mode: %s %s routed = %v, want %v", operation.method, operation.path, !unrouted(recorder), !sessionRoutes[operation.path])
+		}
+	}
+}
+
+// TestSessionAuthCoversEveryNonPublicOperation: with the real session
+// middleware and no session, every /v1 operation but the OAuth entry points
+// answers 401, and the public ones never do.
+func TestSessionAuthCoversEveryNonPublicOperation(t *testing.T) {
+	auth, err := httpserver.NewSessionAuthMiddleware(noSessions{}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := contractRouter(t, true, auth)
+	for _, operation := range documentedOperations(t) {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, operation.request())
+		public := publicOperations[operation.path] || !strings.HasPrefix(operation.path, "/v1/")
+		if public == (recorder.Code == http.StatusUnauthorized) {
+			t.Errorf("%s %s without a session = %d, public = %v", operation.method, operation.path, recorder.Code, public)
 		}
 	}
 }

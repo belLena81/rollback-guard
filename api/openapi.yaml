@@ -273,7 +273,11 @@ paths:
   /v1/users/{userId}/role:
     patch:
       operationId: setUserRole
-      description: Requires the administrator role. Applies from the target user's next request.
+      description: >-
+        Requires the administrator role. Applies from the target user's next
+        request. Setting the current role is a no-op. Returns 409 when the
+        change would leave no enabled administrator, including an
+        administrator demoting themselves as the last one.
       security:
         - sessionCookie: []
         - bearerAuth: []
@@ -287,7 +291,7 @@ paths:
               $ref: '#/components/schemas/SetRoleRequest'
       responses:
         '200':
-          description: Role updated.
+          description: Role updated; the target user's identity and new role.
           content:
             application/json:
               schema:
@@ -296,6 +300,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '500': { $ref: '#/components/responses/InternalError' }
   /v1/users/{userId}/sessions:revoke:
     post:
@@ -307,8 +312,12 @@ paths:
       parameters:
         - $ref: '#/components/parameters/UserId'
       responses:
-        '204':
-          description: All sessions of the user revoked.
+        '200':
+          description: All open sessions of the user revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokedSessions'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -386,7 +395,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     NotFound:
-      description: The incident or a resource it needs does not exist (error not_found).
+      description: The incident, the user, or a resource it needs does not exist (error not_found).
       content:
         application/json:
           schema:
@@ -396,7 +405,8 @@ components:
         The request conflicts with the incident's state (error conflict):
         illegal transition, concurrent change, idempotency conflict, approval
         that does not match the current proposal or deployment, expired
-        proposal or approval, or a policy denial. The fixed message says which.
+        proposal or approval, a policy denial, or a role change that would
+        leave no enabled administrator. The fixed message says which.
       content:
         application/json:
           schema:
@@ -452,6 +462,12 @@ components:
         login: { type: string }
         role:
           $ref: '#/components/schemas/Role'
+    RevokedSessions:
+      type: object
+      required: [revoked]
+      additionalProperties: false
+      properties:
+        revoked: { type: integer, minimum: 0, description: Number of open sessions revoked. }
     SetRoleRequest:
       type: object
       required: [role]
