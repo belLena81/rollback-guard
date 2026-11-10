@@ -9,12 +9,13 @@ Rollback Guardian is a Go demo of a safe agentic DevOps workflow: detect a bad K
 ```bash
 make test              # go test ./...  (default unit gate)
 make test-race
-make lint              # gofmt check + go vet + golangci-lint (config: .golangci.yml)
+make lint              # gofmt check + go vet + golangci-lint, including integration- and kind-tagged files (config: .golangci.yml)
 make contract-test     # test/contract: MCP tool catalogs, OpenAPI, RBAC manifest
 make phase3-integration  # -tags=integration; needs Docker (testcontainers Postgres)
 make phase4-integration
 make phase5-integration
-go test -tags=integration ./internal/adapters/postgres/...   # rollback mutation guard integration test
+make postgres-integration  # Postgres adapter integration tests; fails on any skipped test (needs ROLLBACK_GUARD_POSTGRES_TEST_DSN)
+make integration       # phase3-5 + postgres-integration (every integration-tagged suite)
 
 # Single test
 go test ./internal/domain -run TestName -v
@@ -31,12 +32,12 @@ Ports-and-adapters with a pure domain:
 - `internal/ports/ports.go`: every interface the application depends on. Persistence goes through `UnitOfWork.WithinTransaction(ctx, func(Repositories) error)`, so a state change and its `OperationEvent` audit record commit atomically. Repositories use optimistic locking (`Update(entity, expectedVersion)`).
 - `internal/application`: use-case services built by `NewServices` around one shared `workflow` (incidents, investigations, approvals, executions, verifications, queries). `InvestigationCoordinator` is a lease-based background worker. It claims durable `InvestigationDispatch` rows and submits and watches them through `ports.InvestigationGateway` (A2A). `ai_diagnosis.go` holds LLM/hybrid diagnosers that validate untrusted model output and fall back to the rule diagnoser.
 - `internal/adapters/*`: `postgres` (pgx directly; `sqlc.yaml` exists but nothing is generated), `memory` and `fake` (Phase 1 in-process fakes), `httpapi` (thin REST handlers, DTOs, JSON errors; contract in `api/openapi.yaml`), `mcp` (client adapters implementing the inspector, metrics, and executor ports, plus `kubernetesserver`/`observabilityserver` tool servers), `a2a` (gateway client, Investigator server, Postgres task store), `kubernetes` (client-go, deterministic revision hashing), `prometheus`, `diagnosis` (rule diagnoser), `llm` (OpenAI-compatible reasoner). SDK types (MCP, A2A, OpenAI, client-go) must not leave their adapter package.
-- `internal/platform`: env config (`config.Load`), local auth middleware that injects a typed `Actor`, clock/ID generator, and `telemetry` (per-process Prometheus registry, OTel tracer provider, W3C propagation, correlated slog handler, metric decorators around ports). Application code sees telemetry only through `ports.Tracer` and `ports.Correlation`.
-- `cmd/*/main.go`: composition roots only. Construct adapters, validate deps, wire services.
+- `internal/platform`: env config (`config.Load`; every default and bound is a named constant in `config/defaults.go`), `httpserver` (the one `Serve` with named timeouts, the one health handler, and the local auth middleware that injects a typed `Actor`), `bootstrap` (`NewPool`, `ConnectMCP`, `StartTelemetry` for the composition roots), `buildinfo` (the version string), clock/ID generator, and `telemetry` (per-process Prometheus registry, OTel tracer provider, W3C propagation, correlated slog handler, metric decorators around ports). Application code sees telemetry only through `ports.Tracer` and `ports.Correlation`.
+- `cmd/*/main.go`: composition roots only. Construct adapters, validate deps, wire services. Each `run()` is split into `buildMCP`, `buildServices`, and `buildHTTP`.
 
 ### Runtime topology
 
-Four processes communicate over HTTP:
+Four processes communicate over HTTP. Each binds `127.0.0.1` on the port below unless `HTTP_ADDR` is set (no authentication until Phase 7; the service image sets `HTTP_ADDR=:8080`):
 
 1. **orchestrator** (`:8080`): REST API plus Postgres. It connects to three MCP servers at startup and calls `RequireTools` to check each server's exact tool catalog, failing closed on any mismatch. For each incident it writes a dispatch record, returns `202`, and the coordinator delegates the investigation over A2A.
 2. **investigator** (`:8094`): A2A agent (Agent Card at `/.well-known/agent-card.json`, REST at `/a2a`). It collects evidence through the read-only k8s MCP and the observability MCP, then diagnoses using `DIAGNOSIS_STRATEGY` = `rule_based` | `llm_based` | `hybrid`. It never approves or executes.
