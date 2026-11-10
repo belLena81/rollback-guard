@@ -15,16 +15,16 @@ Source: a code-quality audit of the `phase6` branch (production code under `cmd/
 | Order | Work | Why here |
 |---|---|---|
 | 1 | Phase 6 telemetry (in progress) | Touches the same `main.go` files and adapters; merge it first. |
-| 2 | R1 Correctness defects | Real bugs in persistence; cheap; must not ship into the E2E run. |
+| 2 | R1 Correctness defects (done) | Real bugs in persistence; cheap; must not ship into the E2E run. |
 | 3 | R2 Process bootstrap and config | Removes four-way duplication before the resilience decorators add more wiring. |
 | 4 | Phase 6 resilience decorators | |
 | 5 | R3 Approve-and-execute use case | The E2E flow drives exactly this path; fix its shape first. |
 | 6 | Phase 6 E2E flow and CI | CI enforces the ratcheted lint config from here on. |
 | 7 | R4-R8 | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
 
-## R1. Correctness defects
+## R1. Correctness defects (done)
 
-Small, isolated, test-first.
+Merged. Eight of nine items were confirmed and fixed test-first. Item 8 was not a defect: the domain constructors already reject an unknown recommendation, and a test now pins that. `exhaustive`, `nilerr`, and `bodyclose` are enabled, and `golang.org/x/net` is at v0.62.0. Findings the R1 reviews raised outside its scope are carried into R2 and R3 below.
 
 | # | Location | Defect | Fix |
 |---|---|---|---|
@@ -52,11 +52,23 @@ Changes:
    - Orchestrator and MCP servers bind all interfaces while `docs/phase4-a2a.md` says loopback. Decide one (loopback until Phase 7 is the safer choice) and make code and docs agree.
    - A2A connect reuses `MCP_CONNECT_TIMEOUT`; give it its own setting or rename the shared one.
    - `staleAfter` (2m) and the 100ms poll in `a2a/idempotent_investigator.go:28` are fixed; derive them from `A2A_TASK_TIMEOUT`.
+6. Gate coverage found during R1:
+   - `make lint` does not pass `--build-tags`, so integration- and kind-tagged tests are never linted (11 `errcheck` findings today). Lint with `integration,kind` tags and fix them.
+   - No make target runs the Postgres adapter integration tests. Add `postgres-integration` (failing on any skip) and a single `integration` target that runs every tagged suite.
+
+Item 5 continued:
+
    - The investigator identifies to MCP servers as `rollback-guardian-orchestrator` (`mcp/client.go:56`, **verified**); pass the client name in. Declare the version string once (it appears three times).
 
 ## R3. Approve-and-execute use case
 
 Finding (**verified**): `internal/adapters/httpapi/server.go:169-240` orchestrates approve, execute, verify, and failure compensation, and mints the idempotency key `"approval:"+id`. That is application logic in a handler, against the "thin handlers" rule.
+
+Also in this path, found by the R1 reviews:
+
+- **Lock release ownership.** `Release` is keyed by idempotency key only, so a late deferred release from one request can unlock the lock held by a replay of the same key. The `resourceVersion` precondition and the ledger state check bound the impact, but ownership should be explicit: release only the attempt that acquired the lock.
+- **Raw error text in 409 responses.** `writeError` returns `err.Error()` for conflict-class errors, so a failed cleanup can put database error text in a response body. Return fixed messages.
+- **Encode-failure 500.** `writeJSON` has no request ID or logger, so the failure is neither correlated nor logged.
 
 Change: an application use case `ApproveAndExecute` that owns the sequence, the compensation, and the key derivation. The handler decodes, calls, encodes. Existing HTTP tests keep passing unchanged; the flow gets application-level tests for each failure branch.
 
