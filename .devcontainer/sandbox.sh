@@ -41,8 +41,18 @@ case "${1:-help}" in
     #   sandbox.sh ask "<prompt>" [extra claude args, e.g. --resume <session-id>]
     # Edits are auto-accepted and only the allow-listed commands below may run;
     # anything else is refused, since nobody is there to approve it.
+    #   sandbox.sh ask [--tier light|standard|heavy] "<prompt>" [extra claude args]
+    # The tier picks model and effort (see .devcontainer/README.md, "Model routing").
     shift
-    prompt="${1:?usage: sandbox.sh ask \"<prompt>\" [--resume <session-id>]}"
+    tier="${SANDBOX_TIER:-standard}"
+    if [ "${1:-}" = "--tier" ]; then tier="${2:?--tier needs a value}"; shift 2; fi
+    case "$tier" in
+      light)    tier_args=(--model haiku  --effort low) ;;
+      standard) tier_args=(--model sonnet --effort medium) ;;
+      heavy)    tier_args=(--model opus   --effort high) ;;
+      *) echo "unknown tier: $tier (light|standard|heavy)" >&2; exit 2 ;;
+    esac
+    prompt="${1:?usage: sandbox.sh ask [--tier light|standard|heavy] \"<prompt>\" [--resume <session-id>]}"
     shift
     allowed="Read,Edit,Write,Glob,Grep,Skill,Agent,TodoWrite"
     for c in go gofmt make git golangci-lint govulncheck gopls migrate psql \
@@ -51,7 +61,8 @@ case "${1:-help}" in
              sleep timeout which date basename dirname xargs tee; do
       allowed+=",Bash($c:*)"
     done
-    "${compose[@]}" exec -T dev claude -p "$prompt" \
+    echo "tier: $tier (${tier_args[*]})" >&2
+    "${compose[@]}" exec -T dev claude -p "$prompt" "${tier_args[@]}" \
       --permission-mode acceptEdits --allowedTools "$allowed" \
       --output-format json "$@" </dev/null |
       jq -r '"session: \(.session_id)\nerror: \(.is_error)\n\n\(.result)"'
@@ -93,7 +104,7 @@ usage: sandbox.sh <command>
   up [llm]     build and start the sandbox (llm: also start Ollama and pull a model)
   shell        open a shell in the dev container
   claude ...   run Claude Code inside the sandbox
-  ask PROMPT   delegate a task to the sandbox Claude non-interactively (allow-listed commands)
+  ask [--tier T] PROMPT  delegate a task to the sandbox Claude (allow-listed commands); T = light|standard|heavy
   exec CMD...  run a command inside the sandbox
   migrate      apply migrations to the sandbox PostgreSQL
   kind-up      create the kind cluster inside the sandbox Docker daemon

@@ -34,11 +34,39 @@ First run of Claude Code inside the sandbox: log in with `/login` (the login is 
 
 Because the container is the security boundary, running `sandbox.sh claude --dangerously-skip-permissions` there is a reasonable trade-off for unattended work. Do not use that flag on the host.
 
+## Delegating tasks
+
+```bash
+./.devcontainer/sandbox.sh ask --tier heavy "<task>"            # new conversation
+./.devcontainer/sandbox.sh ask "<follow-up>" --resume <session>  # continue one (tier defaults to standard)
+```
+
+Delegated runs auto-accept file edits inside `/workspace` and may run only the allow-listed commands in `sandbox.sh` (Go toolchain, make, git, docker, kind, kubectl, psql, curl, and basic file utilities). Anything else is refused and reported.
+
+## Model routing
+
+Pick the cheapest tier that can do the task safely. When in doubt between two tiers, take the higher one for anything on the approval, execution, or rollback path.
+
+| Tier | Model, effort | Use for |
+| --- | --- | --- |
+| `heavy` | Opus, high | Safety-critical design and code: approval/execution/rollback path, policy, MCP tool surface and RBAC, auth (Phase 7), concurrency and locking, the end-to-end exit gate, anything the refactoring plan marks as touching the safety chain (R3) |
+| `standard` | Sonnet, medium | Ordinary implementation and refactoring: R2, R4-R6, R8, resilience decorators, CI, manifests, telemetry follow-ups, test additions |
+| `light` | Haiku, low | Mechanical, verifiable work: R7 standard-library rewrites, lint auto-fixes, doc consistency passes, running gates and summarising output |
+
+The same split applies inside a session:
+
+- Subagents in `.claude/agents/` pin their own model: `security-policy-reviewer` Opus/high, `sql-reviewer` Sonnet/high, `qa-test-reviewer` Sonnet/medium.
+- The `invariant-review` skill runs forked on Opus/high; `verify-gates` runs forked on Haiku/low, because it only executes the gates and reports their output.
+- Other skills inherit the session model, because a skill's `model` without `context: fork` would switch the rest of the turn.
+
+Escalate rather than retry: if a `light` or `standard` run fails review twice, rerun it one tier up instead of iterating on the same tier.
+
 ## Getting work in and out
 
 ```bash
 ./.devcontainer/sandbox.sh sync            # copy the real working tree (not .git) into the sandbox
 ./.devcontainer/sandbox.sh pull my-branch  # fetch a sandbox branch into the real repo as sandbox/my-branch
+./.devcontainer/sandbox.sh push phase6     # mirror a real-repo branch into the sandbox as host/phase6
 git diff HEAD...sandbox/my-branch          # review before merging
 ```
 
