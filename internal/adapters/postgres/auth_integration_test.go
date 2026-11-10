@@ -225,7 +225,7 @@ func TestAuthUserRepositoryUpdate(t *testing.T) {
 
 	t.Run("missing user", func(t *testing.T) {
 		ghost := authUser(t, "ghost", 303, "ghost")
-		err := f.tx(t, func(r ports.AuthRepositories) error { return r.Users().Update(ghost, 1) })
+		err := f.tx(t, func(r ports.AuthRepositories) error { return r.Users().Update(ghost, 0) })
 		var notFound *domain.NotFoundError
 		if !errors.As(err, &notFound) {
 			t.Fatalf("Update(missing) error = %v, want NotFoundError", err)
@@ -283,6 +283,115 @@ func TestAuthSessionCreateRejectsDuplicatesAndUnknownUser(t *testing.T) {
 	assertNoHashLeak(t, unknownUser, 0xef)
 }
 
+func TestAuthUserUpdateRejectsUnbumpedVersionAndIdentityChange(t *testing.T) {
+	f := newAuthFixture(t)
+	user := authUser(t, "user-1", 101, "octo")
+	f.mustTx(t, func(r ports.AuthRepositories) error { return r.Users().Create(user) })
+
+	unbumped := f.tx(t, func(r ports.AuthRepositories) error { return r.Users().Update(user, 1) })
+	if !errors.Is(unbumped, domain.ErrValidation) {
+		t.Fatalf("Update(unchanged version) error = %v, want ErrValidation", unbumped)
+	}
+	snapshot := user.Snapshot()
+	snapshot.GitHubID, snapshot.Version, snapshot.UpdatedAt = 999, 2, authNow.Add(time.Minute)
+	moved, err := domain.RehydrateUser(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := f.tx(t, func(r ports.AuthRepositories) error { return r.Users().Update(moved, 1) })
+	if !errors.Is(identity, domain.ErrValidation) {
+		t.Fatalf("Update(changed github id) error = %v, want ErrValidation", identity)
+	}
+	f.mustTx(t, func(r ports.AuthRepositories) error {
+		stored, err := r.Users().GetByID("user-1")
+		if err != nil {
+			return err
+		}
+		if stored.GitHubID() != 101 || stored.Version() != 1 {
+			t.Fatalf("stored user changed: %+v", stored.Snapshot())
+		}
+		return nil
+	})
+}
+
+func TestAuthSessionCreateRejectsDisabledUser(t *testing.T) {
+	f := newAuthFixture(t)
+	disabled, err := authUser(t, "user-1", 101, "octo").Disable(authNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mustTx(t, func(r ports.AuthRepositories) error { return r.Users().Create(disabled) })
+	err = f.tx(t, func(r ports.AuthRepositories) error {
+		return r.Sessions().Create(authSession(t, "s1", "user-1", 0x01, time.Hour))
+	})
+	if !errors.Is(err, domain.ErrUserDisabled) {
+		t.Fatalf("Create(disabled user) error = %v, want ErrUserDisabled", err)
+	}
+}
+
+// TestAuthSessionCreateSerializesWithDisable holds an uncommitted disable and
+// revoke-all, starts a session insert for the same user, waits until it
+// blocks on the user row, then commits the disable. The insert must then see
+// the user disabled instead of leaving a session the revocation missed.
+func TestAuthSessionCreateSerializesWithDisable(t *testing.T) {
+	f := newAuthFixture(t)
+	user := authUser(t, "user-1", 101, "octo")
+	f.mustTx(t, func(r ports.AuthRepositories) error { return r.Users().Create(user) })
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	loginErr := make(chan error, 1)
+	err := f.uow.WithinAuthTransaction(ctx, func(admin ports.AuthRepositories) error {
+		disabled, err := user.Disable(authNow.Add(time.Minute))
+		if err != nil {
+			return err
+		}
+		if err := admin.Users().Update(disabled, 1); err != nil {
+			return err
+		}
+		if _, err := admin.Sessions().RevokeAllForUser(user.ID(), authNow.Add(time.Minute)); err != nil {
+			return err
+		}
+		go func() {
+			loginErr <- f.uow.WithinAuthTransaction(ctx, func(login ports.AuthRepositories) error {
+				return login.Sessions().Create(authSession(t, "late", user.ID(), 0x01, time.Hour))
+			})
+		}()
+		for {
+			var blocked int
+			if err := f.shared.QueryRow(ctx, `
+				SELECT count(*) FROM pg_stat_activity
+				WHERE datname = current_database() AND pid <> pg_backend_pid()
+					AND wait_event_type = 'Lock' AND query LIKE '%INSERT INTO sessions%'`).Scan(&blocked); err != nil {
+				return err
+			}
+			if blocked > 0 {
+				return nil
+			}
+			select {
+			case err := <-loginErr:
+				return fmt.Errorf("session insert did not block on the user row: %w", err)
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-loginErr; !errors.Is(err, domain.ErrUserDisabled) {
+		t.Fatalf("racing Create() error = %v, want ErrUserDisabled", err)
+	}
+	var sessions int
+	if err := f.shared.QueryRow(ctx, `SELECT count(*) FROM sessions`).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 {
+		t.Fatalf("%d sessions exist for the disabled user", sessions)
+	}
+}
+
 func TestAuthResolveActiveSession(t *testing.T) {
 	f := newAuthFixture(t)
 	revokedSession := authSession(t, "session-revoked", "user-1", 0x02, time.Hour)
@@ -290,11 +399,8 @@ func TestAuthResolveActiveSession(t *testing.T) {
 		if err := r.Users().Create(authUser(t, "user-1", 101, "octo")); err != nil {
 			return err
 		}
-		disabled, err := authUser(t, "user-2", 202, "gone").Disable(authNow)
-		if err != nil {
-			return err
-		}
-		if err := r.Users().Create(disabled); err != nil {
+		gone := authUser(t, "user-2", 202, "gone")
+		if err := r.Users().Create(gone); err != nil {
 			return err
 		}
 		for _, session := range []domain.Session{
@@ -305,6 +411,13 @@ func TestAuthResolveActiveSession(t *testing.T) {
 			if err := r.Sessions().Create(session); err != nil {
 				return err
 			}
+		}
+		disabled, err := gone.Disable(authNow)
+		if err != nil {
+			return err
+		}
+		if err := r.Users().Update(disabled, gone.Version()); err != nil {
+			return err
 		}
 		return r.Sessions().Revoke(revokedSession.ID(), authNow.Add(time.Minute))
 	})

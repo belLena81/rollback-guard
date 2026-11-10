@@ -96,7 +96,7 @@ func TestAuthUserRepository(t *testing.T) {
 	if !errors.As(err, &conflict) || conflict.Expected != 1 || conflict.Actual != 2 {
 		t.Fatalf("Update(stale) error = %v, want VersionConflictError expected 1 actual 2", err)
 	}
-	err = authTx(t, uow, func(r ports.AuthRepositories) error { return r.Users().Update(authUser(t, "ghost", 9, "ghost"), 1) })
+	err = authTx(t, uow, func(r ports.AuthRepositories) error { return r.Users().Update(authUser(t, "ghost", 9, "ghost"), 0) })
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("Update(missing) error = %v", err)
 	}
@@ -109,6 +109,36 @@ func TestAuthUserRepository(t *testing.T) {
 	err = authTx(t, uow, func(r ports.AuthRepositories) error { return r.Users().Update(renamed, 2) })
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("Update(login collision) error = %v", err)
+	}
+
+	err = authTx(t, uow, func(r ports.AuthRepositories) error { return r.Users().Update(promoted, 2) })
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("Update(unbumped version) error = %v, want ErrValidation", err)
+	}
+	moved := promoted.Snapshot()
+	moved.GitHubID, moved.Version = 999, 3
+	movedUser, err := domain.RehydrateUser(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = authTx(t, uow, func(r ports.AuthRepositories) error { return r.Users().Update(movedUser, 2) })
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("Update(changed github id) error = %v, want ErrValidation", err)
+	}
+}
+
+func TestAuthSessionCreateRejectsDisabledUser(t *testing.T) {
+	uow := NewAuthUnitOfWork()
+	disabled, err := authUser(t, "user-1", 101, "octo").Disable(authNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustAuthTx(t, uow, func(r ports.AuthRepositories) error { return r.Users().Create(disabled) })
+	err = authTx(t, uow, func(r ports.AuthRepositories) error {
+		return r.Sessions().Create(authSession(t, "s1", "user-1", 1, time.Hour))
+	})
+	if !errors.Is(err, domain.ErrUserDisabled) {
+		t.Fatalf("Create(disabled user) error = %v, want ErrUserDisabled", err)
 	}
 }
 
@@ -145,11 +175,8 @@ func TestAuthResolveActiveSession(t *testing.T) {
 		if err := r.Users().Create(authUser(t, "user-1", 101, "octo")); err != nil {
 			return err
 		}
-		disabled, err := authUser(t, "user-2", 202, "gone").Disable(authNow)
-		if err != nil {
-			return err
-		}
-		if err := r.Users().Create(disabled); err != nil {
+		gone := authUser(t, "user-2", 202, "gone")
+		if err := r.Users().Create(gone); err != nil {
 			return err
 		}
 		for _, session := range []domain.Session{
@@ -160,6 +187,13 @@ func TestAuthResolveActiveSession(t *testing.T) {
 			if err := r.Sessions().Create(session); err != nil {
 				return err
 			}
+		}
+		disabled, err := gone.Disable(authNow)
+		if err != nil {
+			return err
+		}
+		if err := r.Users().Update(disabled, gone.Version()); err != nil {
+			return err
 		}
 		return r.Sessions().Revoke("revoked", authNow.Add(time.Minute))
 	})

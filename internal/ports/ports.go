@@ -244,7 +244,9 @@ type UnitOfWork interface {
 // the ID, GitHub ID or login (case-insensitively) is taken; Update does too
 // when the new login collides. Get* return *domain.NotFoundError for a missing
 // user. Update writes only when the stored version equals expectedVersion and
-// returns *domain.VersionConflictError otherwise.
+// returns *domain.VersionConflictError otherwise; user must be one version
+// past expectedVersion, and its GitHub ID and creation time must match the
+// stored user, or it returns *domain.ValidationError.
 type UserRepository interface {
 	Create(domain.User) error
 	GetByID(domain.UserID) (domain.User, error)
@@ -255,7 +257,9 @@ type UserRepository interface {
 // SessionRepository stores sessions by token hash; it never sees a raw token.
 type SessionRepository interface {
 	// Create returns *domain.AlreadyExistsError when the ID or token hash is
-	// taken, and *domain.NotFoundError when the user does not exist.
+	// taken, *domain.NotFoundError when the user does not exist, and
+	// *domain.UserDisabledError when the user is disabled. It serializes
+	// with a concurrent disable of the same user.
 	Create(domain.Session) error
 	// ResolveActive returns the session holding tokenHash together with its
 	// user, in one lookup, only when the session is unrevoked, now is before

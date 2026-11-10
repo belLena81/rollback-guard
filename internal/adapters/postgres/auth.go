@@ -51,12 +51,20 @@ const (
 	selectUserByGitHubIDSQL = `SELECT ` + userColumns + ` FROM users u WHERE u.github_id = $1`
 	updateUserSQL           = `
 		UPDATE users SET login = $1, email = $2, organizations = $3, role = $4, disabled = $5, version = $6, updated_at = $7
-		WHERE id = $8 AND version = $9`
-	selectUserVersionSQL = `SELECT version FROM users WHERE id = $1`
+		WHERE id = $8 AND version = $9 AND github_id = $10 AND created_at = $11`
+	selectUserIdentitySQL = `SELECT version, github_id, created_at FROM users WHERE id = $1`
 
+	// insertSessionSQL inserts only for an enabled user and takes FOR SHARE
+	// on the user row, so it serializes with a concurrent disable: either
+	// the disable's RevokeAllForUser sees this session, or this insert sees
+	// the user disabled and writes nothing.
 	insertSessionSQL = `
 		INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, revoked_at, last_seen_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`
+		SELECT $1::text, u.id, $3::bytea, $4::timestamptz, $5::timestamptz, $6::timestamptz, $7::timestamptz
+		FROM users u
+		WHERE u.id = $2::text AND NOT u.disabled
+		FOR SHARE`
+	selectUserDisabledSQL = `SELECT disabled FROM users WHERE id = $1`
 	// resolveActiveSessionSQL is one lookup on the token_hash unique index.
 	// now is a bound argument, never now(), so the caller's clock decides.
 	resolveActiveSessionSQL = `
@@ -100,10 +108,16 @@ func (repo userRepo) GetByGitHubID(githubID int64) (domain.User, error) {
 	return scanUser(repo.r.tx.QueryRow(repo.r.ctx, selectUserByGitHubIDSQL, githubID), fmt.Sprintf("github:%d", githubID))
 }
 
+// Update requires user to be exactly one version past expected (a domain
+// change) and never rewrites the immutable GitHub ID or creation time.
 func (repo userRepo) Update(user domain.User, expected uint64) error {
 	s := user.Snapshot()
+	if s.Version != expected+1 {
+		return &domain.ValidationError{Field: "user.version", Reason: "must be one past the expected version"}
+	}
 	command, err := repo.r.tx.Exec(repo.r.ctx, updateUserSQL,
-		s.Login, s.Email, organizationsValue(s.Organizations), s.Role.String(), s.Disabled, s.Version, s.UpdatedAt, s.ID, expected)
+		s.Login, s.Email, organizationsValue(s.Organizations), s.Role.String(), s.Disabled, s.Version, s.UpdatedAt, s.ID, expected,
+		s.GitHubID, s.CreatedAt)
 	if err != nil {
 		return mapError(err, "user", string(s.ID))
 	}
@@ -111,14 +125,19 @@ func (repo userRepo) Update(user domain.User, expected uint64) error {
 		return nil
 	}
 	var actual uint64
-	err = repo.r.tx.QueryRow(repo.r.ctx, selectUserVersionSQL, s.ID).Scan(&actual)
+	var githubID int64
+	var createdAt time.Time
+	err = repo.r.tx.QueryRow(repo.r.ctx, selectUserIdentitySQL, s.ID).Scan(&actual, &githubID, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &domain.NotFoundError{Resource: "user", ID: string(s.ID)}
 	}
 	if err != nil {
 		return fmt.Errorf("read user version: %w", err)
 	}
-	return &domain.VersionConflictError{Expected: expected, Actual: actual}
+	if actual != expected {
+		return &domain.VersionConflictError{Expected: expected, Actual: actual}
+	}
+	return &domain.ValidationError{Field: "user", Reason: "github_id and created_at are immutable"}
 }
 
 // organizationsValue keeps a nil slice from becoming SQL NULL.
@@ -182,15 +201,30 @@ func (repo sessionRepo) Create(session domain.Session) error {
 	if !s.RevokedAt.IsZero() {
 		revokedAt = &s.RevokedAt
 	}
-	_, err := repo.r.tx.Exec(repo.r.ctx, insertSessionSQL,
+	command, err := repo.r.tx.Exec(repo.r.ctx, insertSessionSQL,
 		s.ID, s.UserID, s.TokenHash.Bytes(), s.CreatedAt, s.ExpiresAt, revokedAt, s.LastSeenAt)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == foreignKeyViolation {
 		return &domain.NotFoundError{Resource: "user", ID: string(s.UserID)}
 	}
-	// Errors name only the session ID; a duplicate token hash is reported
-	// as an existing session without the hash.
-	return mapError(err, "session", string(s.ID))
+	if err != nil {
+		// Errors name only the session ID; a duplicate token hash is
+		// reported as an existing session without the hash.
+		return mapError(err, "session", string(s.ID))
+	}
+	if command.RowsAffected() == 1 {
+		return nil
+	}
+	var disabled bool
+	err = repo.r.tx.QueryRow(repo.r.ctx, selectUserDisabledSQL, s.UserID).Scan(&disabled)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return &domain.NotFoundError{Resource: "user", ID: string(s.UserID)}
+	case err != nil:
+		return fmt.Errorf("read user state: %w", err)
+	default:
+		return &domain.UserDisabledError{UserID: s.UserID}
+	}
 }
 
 func (repo sessionRepo) ResolveActive(tokenHash domain.SessionTokenHash, now time.Time) (domain.Session, domain.User, error) {

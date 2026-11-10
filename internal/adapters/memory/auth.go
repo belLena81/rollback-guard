@@ -107,8 +107,14 @@ func (r userRepo) Update(user domain.User, expected uint64) error {
 	if !ok {
 		return &domain.NotFoundError{Resource: "user", ID: string(user.ID())}
 	}
+	if user.Version() != expected+1 {
+		return &domain.ValidationError{Field: "user.version", Reason: "must be one past the expected version"}
+	}
 	if current.Version() != expected {
 		return &domain.VersionConflictError{Expected: expected, Actual: current.Version()}
+	}
+	if current.GitHubID() != user.GitHubID() || !current.CreatedAt().Equal(user.CreatedAt()) {
+		return &domain.ValidationError{Field: "user", Reason: "github_id and created_at are immutable"}
 	}
 	if r.conflicts(user) {
 		return &domain.AlreadyExistsError{Resource: "user"}
@@ -126,8 +132,12 @@ func (r sessionRepo) Create(session domain.Session) error {
 	if _, ok := r.byHash(session.TokenHash()); ok {
 		return &domain.AlreadyExistsError{Resource: "session"}
 	}
-	if _, ok := r.data.users[session.UserID()]; !ok {
+	user, ok := r.data.users[session.UserID()]
+	if !ok {
 		return &domain.NotFoundError{Resource: "user", ID: string(session.UserID())}
+	}
+	if user.Disabled() {
+		return &domain.UserDisabledError{UserID: user.ID()}
 	}
 	r.data.sessions[session.ID()] = session
 	return nil
@@ -143,6 +153,9 @@ func (r sessionRepo) byHash(hash domain.SessionTokenHash) (domain.Session, bool)
 }
 
 func (r sessionRepo) ResolveActive(tokenHash domain.SessionTokenHash, now time.Time) (domain.Session, domain.User, error) {
+	if tokenHash.IsZero() {
+		return domain.Session{}, domain.User{}, &domain.NoActiveSessionError{}
+	}
 	if now.IsZero() {
 		return domain.Session{}, domain.User{}, &domain.ValidationError{Field: "now", Reason: "must be set"}
 	}
