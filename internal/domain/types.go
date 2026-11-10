@@ -50,6 +50,10 @@ func (k ActorKind) String() string {
 	}
 }
 
+func ParseActorKind(value string) (ActorKind, error) {
+	return parseEnum("actor kind", value, ActorHuman, ActorService)
+}
+
 type Actor struct {
 	id   ActorID
 	kind ActorKind

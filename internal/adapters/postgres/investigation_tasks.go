@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -107,11 +106,11 @@ func scanInvestigationDispatch(row investigationDispatchScanner) (domain.Investi
 	if err != nil {
 		return domain.InvestigationDispatch{}, mapError(err, "investigation", string(task.IncidentID))
 	}
-	state, err := parseInvestigationTaskState(stateValue)
+	state, err := domain.ParseInvestigationTaskState(stateValue)
 	if err != nil {
 		return domain.InvestigationDispatch{}, err
 	}
-	stage, err := parseInvestigationStage(stageValue)
+	stage, err := domain.ParseInvestigationStage(stageValue)
 	if err != nil {
 		return domain.InvestigationDispatch{}, err
 	}
@@ -139,26 +138,8 @@ func investigationTaskStateText(state domain.InvestigationTaskState) string {
 	return state.String()
 }
 
-func parseInvestigationTaskState(value string) (domain.InvestigationTaskState, error) {
-	for state := domain.InvestigationTaskQueued; state <= domain.InvestigationTaskCanceled; state++ {
-		if state.String() == value {
-			return state, nil
-		}
-	}
-	return 0, fmt.Errorf("unknown investigation task state %q", value)
-}
-
 func investigationStageText(stage domain.InvestigationStage) string {
 	return stage.String()
-}
-
-func parseInvestigationStage(value string) (domain.InvestigationStage, error) {
-	for stage := domain.InvestigationStageQueued; stage <= domain.InvestigationStageFinalizing; stage++ {
-		if stage.String() == value {
-			return stage, nil
-		}
-	}
-	return 0, fmt.Errorf("unknown investigation stage %q", value)
 }
 
 func nullableTime(value time.Time) any {

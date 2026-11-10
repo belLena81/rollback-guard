@@ -10,6 +10,8 @@ Phase 5 adds optional LLM and hybrid diagnosis to the Investigator. The Orchestr
 - `llm_based`: one model reasoning request followed by application validation; invalid or unavailable output falls back to rules.
 - `hybrid`: rules produce the initial candidate, the model reviews it, and invalid or unavailable output returns that exact rule candidate.
 
+**Spellings.** The environment values above are operator-facing. The domain's canonical spelling (`domain.DiagnosisStrategy.String()`, parsed by `domain.ParseDiagnosisStrategy`) is `rules`, `llm`, `hybrid`; that is what Postgres stores and what the A2A wire carries. So `DIAGNOSIS_STRATEGY=rule_based` is stored as `rules`, and `llm_based` as `llm`. The mapping lives in `internal/platform/config`; stored and wire values are unchanged.
+
 The provider-neutral `ports.Reasoner` contract contains normalized incident facts, evidence, an optional rule candidate, and untrusted diagnosis output. OpenAI SDK and HTTP types remain in `internal/adapters/llm`.
 
 The model receives no tools or infrastructure credentials. It cannot approve, execute, or verify a rollback. Its output must still pass domain construction, application evidence-reference validation, deterministic policy, exact proposal-hash approval, scoped MCP mutation, and recovery verification.

@@ -86,7 +86,7 @@ func scanIncident(row incidentScanner) (domain.Incident, error) {
 	if err != nil {
 		return domain.Incident{}, err
 	}
-	status, err := parseStatus(statusValue)
+	status, err := domain.ParseStatus(statusValue)
 	if err != nil {
 		return domain.Incident{}, err
 	}
@@ -136,7 +136,7 @@ func (repo evidenceRepo) List(id domain.IncidentID) ([]domain.Evidence, error) {
 		if err := rows.Scan(&evidenceID, &incidentID, &kindValue, &collectedAt, &payload); err != nil {
 			return nil, err
 		}
-		kind, err := parseEvidenceKind(kindValue)
+		kind, err := domain.ParseEvidenceKind(kindValue)
 		if err != nil {
 			return nil, err
 		}
@@ -216,21 +216,21 @@ func (repo conclusionRepo) Get(id domain.IncidentID) (domain.InvestigationConclu
 	if err := rows.Err(); err != nil {
 		return domain.InvestigationConclusion{}, err
 	}
-	strategy, err := parseStrategy(strategyValue)
+	strategy, err := domain.ParseDiagnosisStrategy(strategyValue)
 	if err != nil {
 		return domain.InvestigationConclusion{}, err
 	}
-	recommendation, err := parseRecommendation(recommendationValue)
+	recommendation, err := domain.ParseRecommendation(recommendationValue)
 	if err != nil {
 		return domain.InvestigationConclusion{}, err
 	}
-	requestedStrategy, err := parseStrategy(requestedStrategyValue)
+	requestedStrategy, err := domain.ParseDiagnosisStrategy(requestedStrategyValue)
 	if err != nil {
 		return domain.InvestigationConclusion{}, err
 	}
 	fallbackReason := domain.DiagnosisFallbackReason(0)
 	if fallbackReasonValue != nil {
-		fallbackReason, err = parseDiagnosisFallbackReason(*fallbackReasonValue)
+		fallbackReason, err = domain.ParseDiagnosisFallbackReason(*fallbackReasonValue)
 		if err != nil {
 			return domain.InvestigationConclusion{}, err
 		}
@@ -379,7 +379,7 @@ func (repo approvalRepo) GetByIncident(id domain.IncidentID) (domain.Approval, e
 	if err != nil {
 		return domain.Approval{}, mapError(err, "approval", string(id))
 	}
-	actorKind, err := parseActorKind(actorKindValue)
+	actorKind, err := domain.ParseActorKind(actorKindValue)
 	if err != nil {
 		return domain.Approval{}, err
 	}
@@ -387,7 +387,7 @@ func (repo approvalRepo) GetByIncident(id domain.IncidentID) (domain.Approval, e
 	if err != nil {
 		return domain.Approval{}, err
 	}
-	decision, err := parseApprovalDecision(decisionValue)
+	decision, err := domain.ParseApprovalDecision(decisionValue)
 	if err != nil {
 		return domain.Approval{}, err
 	}
@@ -451,7 +451,7 @@ func (repo executionRepo) getByQuery(query string, id string, resource string) (
 	if err != nil {
 		return domain.RollbackExecution{}, mapError(err, resource, id)
 	}
-	outcome, err := parseExecutionOutcome(outcomeValue)
+	outcome, err := domain.ParseExecutionOutcome(outcomeValue)
 	if err != nil {
 		return domain.RollbackExecution{}, err
 	}
@@ -527,11 +527,11 @@ func (repo idempotencyRepo) Get(key domain.IdempotencyKey) (domain.IdempotencyRe
 	if err != nil {
 		return domain.IdempotencyRecord{}, mapError(err, "idempotency key", string(key))
 	}
-	operation, err := parseIdempotencyOperation(operationValue)
+	operation, err := domain.ParseIdempotencyOperation(operationValue)
 	if err != nil {
 		return domain.IdempotencyRecord{}, err
 	}
-	state, err := parseIdempotencyState(stateValue)
+	state, err := domain.ParseIdempotencyState(stateValue)
 	if err != nil {
 		return domain.IdempotencyRecord{}, err
 	}
@@ -557,7 +557,7 @@ func (repo idempotencyRepo) Create(record domain.IdempotencyRecord) error {
 	_, err := repo.r.tx.Exec(repo.r.ctx, `
 		INSERT INTO idempotency_keys (key, operation, request_hash, resource_id, state, started_at)
 		VALUES ($1,$2,$3,$4,$5,$6)
-	`, s.Key, idempotencyOperationText(s.Operation), s.RequestHash, s.ResourceID, idempotencyStateText(s.State), s.StartedAt)
+	`, s.Key, s.Operation.String(), s.RequestHash, s.ResourceID, s.State.String(), s.StartedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return &domain.IdempotencyConflictError{Key: s.Key}
@@ -575,7 +575,7 @@ func (repo idempotencyRepo) Update(record domain.IdempotencyRecord, expected dom
 		UPDATE idempotency_keys
 		SET state = $1, result_id = $2, completed_at = $3
 		WHERE key = $4 AND operation = $5 AND request_hash = $6 AND resource_id = $7 AND state = $8
-	`, idempotencyStateText(s.State), s.ResultID, s.CompletedAt, s.Key, idempotencyOperationText(s.Operation), s.RequestHash, s.ResourceID, idempotencyStateText(expected))
+	`, s.State.String(), s.ResultID, s.CompletedAt, s.Key, s.Operation.String(), s.RequestHash, s.ResourceID, expected.String())
 	if err != nil {
 		return mapError(err, "idempotency key", string(s.Key))
 	}
@@ -647,11 +647,11 @@ func (repo eventRepo) List(id domain.IncidentID) ([]domain.OperationEvent, error
 		if err := rows.Scan(&eventID, &incidentID, &sequence, &kindValue, &occurredAt, &actorID, &actorKindValue, &payload); err != nil {
 			return nil, err
 		}
-		kind, err := parseEventKind(kindValue)
+		kind, err := domain.ParseEventKind(kindValue)
 		if err != nil {
 			return nil, err
 		}
-		actorKind, err := parseActorKind(actorKindValue)
+		actorKind, err := domain.ParseActorKind(actorKindValue)
 		if err != nil {
 			return nil, err
 		}

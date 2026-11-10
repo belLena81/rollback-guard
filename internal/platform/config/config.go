@@ -550,16 +550,19 @@ func loadLLM(strategy domain.DiagnosisStrategy, mcpCallTimeout, taskTimeout time
 }
 
 func diagnosisStrategyEnv() (domain.DiagnosisStrategy, error) {
-	switch stringEnv("DIAGNOSIS_STRATEGY", "rule_based") {
-	case "rule_based":
-		return domain.StrategyRules, nil
-	case "llm_based":
-		return domain.StrategyLLM, nil
-	case "hybrid":
-		return domain.StrategyHybrid, nil
-	default:
+	// The operator-facing spellings differ from the canonical domain names
+	// (which are what is stored and sent on the wire) on purpose; see
+	// docs/phase5-ai-diagnosis.md.
+	canonical := map[string]string{
+		"rule_based": domain.StrategyRules.String(),
+		"llm_based":  domain.StrategyLLM.String(),
+		"hybrid":     domain.StrategyHybrid.String(),
+	}
+	name, ok := canonical[stringEnv("DIAGNOSIS_STRATEGY", "rule_based")]
+	if !ok {
 		return 0, fmt.Errorf("DIAGNOSIS_STRATEGY must be rule_based, llm_based, or hybrid")
 	}
+	return domain.ParseDiagnosisStrategy(name)
 }
 
 func validateLLMBaseURL(value string) (bool, error) {

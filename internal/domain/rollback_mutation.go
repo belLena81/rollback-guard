@@ -40,6 +40,10 @@ func (s RollbackMutationState) String() string {
 	}
 }
 
+func ParseRollbackMutationState(value string) (RollbackMutationState, error) {
+	return parseEnum("rollback mutation state", value, RollbackMutationPending, RollbackMutationCompleted)
+}
+
 func (s RollbackMutationState) Valid() bool {
 	return s == RollbackMutationPending || s == RollbackMutationCompleted
 }

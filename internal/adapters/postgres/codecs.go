@@ -12,164 +12,28 @@ func statusText(status domain.Status) string {
 	return status.String()
 }
 
-func parseStatus(value string) (domain.Status, error) {
-	for status := domain.StatusCreated; status <= domain.StatusFailed; status++ {
-		if status.String() == value {
-			return status, nil
-		}
-	}
-	return 0, fmt.Errorf("unknown status %q", value)
-}
-
 func actorKindText(kind domain.ActorKind) string {
 	return kind.String()
-}
-
-func parseActorKind(value string) (domain.ActorKind, error) {
-	switch value {
-	case "human":
-		return domain.ActorHuman, nil
-	case "agent":
-		return domain.ActorAgent, nil
-	case "system":
-		return domain.ActorSystem, nil
-	case "service":
-		return domain.ActorService, nil
-	default:
-		return 0, fmt.Errorf("unknown actor kind %q", value)
-	}
 }
 
 func evidenceKindText(kind domain.EvidenceKind) string {
 	return kind.String()
 }
 
-func parseEvidenceKind(value string) (domain.EvidenceKind, error) {
-	switch value {
-	case "deployment":
-		return domain.EvidenceDeployment, nil
-	case "metric":
-		return domain.EvidenceMetric, nil
-	case "pod":
-		return domain.EvidencePod, nil
-	case "kubernetes_event":
-		return domain.EvidenceKubernetesEvent, nil
-	default:
-		return 0, fmt.Errorf("unknown evidence kind %q", value)
-	}
-}
-
 func recommendationText(value domain.Recommendation) string {
 	return value.String()
-}
-
-func parseRecommendation(value string) (domain.Recommendation, error) {
-	switch value {
-	case "rollback":
-		return domain.RecommendRollback, nil
-	case "no_action":
-		return domain.RecommendNoAction, nil
-	default:
-		return 0, fmt.Errorf("unknown recommendation %q", value)
-	}
 }
 
 func strategyText(value domain.DiagnosisStrategy) string {
 	return value.String()
 }
 
-func parseStrategy(value string) (domain.DiagnosisStrategy, error) {
-	switch value {
-	case "rules":
-		return domain.StrategyRules, nil
-	case "llm":
-		return domain.StrategyLLM, nil
-	case "hybrid":
-		return domain.StrategyHybrid, nil
-	default:
-		return 0, fmt.Errorf("unknown diagnosis strategy %q", value)
-	}
-}
-
-func parseDiagnosisFallbackReason(value string) (domain.DiagnosisFallbackReason, error) {
-	switch value {
-	case "provider_error":
-		return domain.FallbackProviderError, nil
-	case "provider_timeout":
-		return domain.FallbackProviderTimeout, nil
-	case "provider_refusal":
-		return domain.FallbackProviderRefusal, nil
-	case "invalid_output":
-		return domain.FallbackInvalidOutput, nil
-	default:
-		return 0, fmt.Errorf("unknown diagnosis fallback reason %q", value)
-	}
-}
-
 func approvalDecisionText(value domain.ApprovalDecision) string {
 	return value.String()
 }
 
-func parseApprovalDecision(value string) (domain.ApprovalDecision, error) {
-	switch value {
-	case "approved":
-		return domain.ApprovalApproved, nil
-	case "rejected":
-		return domain.ApprovalRejected, nil
-	default:
-		return 0, fmt.Errorf("unknown approval decision %q", value)
-	}
-}
-
 func executionOutcomeText(value domain.ExecutionOutcome) string {
 	return value.String()
-}
-
-func parseExecutionOutcome(value string) (domain.ExecutionOutcome, error) {
-	switch value {
-	case "succeeded":
-		return domain.ExecutionSucceeded, nil
-	case "failed":
-		return domain.ExecutionFailed, nil
-	default:
-		return 0, fmt.Errorf("unknown execution outcome %q", value)
-	}
-}
-
-func idempotencyOperationText(value domain.IdempotencyOperation) string {
-	if value == domain.IdempotencyOperationExecuteRollback {
-		return "execute_rollback"
-	}
-	return "unknown"
-}
-
-func parseIdempotencyOperation(value string) (domain.IdempotencyOperation, error) {
-	if value == "execute_rollback" {
-		return domain.IdempotencyOperationExecuteRollback, nil
-	}
-	return 0, fmt.Errorf("unknown idempotency operation %q", value)
-}
-
-func idempotencyStateText(value domain.IdempotencyState) string {
-	switch value {
-	case domain.IdempotencyPending:
-		return "pending"
-	case domain.IdempotencyCompleted:
-		return "completed"
-	default:
-		return "unknown"
-	}
-}
-
-func parseIdempotencyState(value string) (domain.IdempotencyState, error) {
-	switch value {
-	case "pending":
-		return domain.IdempotencyPending, nil
-	case "completed":
-		return domain.IdempotencyCompleted, nil
-	default:
-		return 0, fmt.Errorf("unknown idempotency state %q", value)
-	}
 }
 
 type deploymentTargetJSON struct {
@@ -355,13 +219,13 @@ func unmarshalEventDetail(kind domain.EventKind, data []byte) (domain.EventDetai
 	case domain.EventStatusChanged:
 		return statusChangedDetail(payload)
 	case domain.EventEvidenceCollected:
-		evidenceKind, err := parseEvidenceKind(payload.Kind)
+		evidenceKind, err := domain.ParseEvidenceKind(payload.Kind)
 		if err != nil {
 			return nil, err
 		}
 		return domain.EvidenceCollectedDetail{EvidenceID: domain.EvidenceID(payload.EvidenceID), Kind: evidenceKind}, nil
 	case domain.EventDiagnosisCompleted:
-		recommendation, err := parseRecommendation(payload.Recommendation)
+		recommendation, err := domain.ParseRecommendation(payload.Recommendation)
 		if err != nil {
 			return nil, err
 		}
@@ -375,7 +239,7 @@ func unmarshalEventDetail(kind domain.EventKind, data []byte) (domain.EventDetai
 	case domain.EventRejectionRecorded:
 		return domain.RejectionRecordedDetail{ApprovalID: domain.ApprovalID(payload.ApprovalID), Reason: payload.Reason}, nil
 	case domain.EventExecutionCompleted:
-		outcome, err := parseExecutionOutcome(payload.Outcome)
+		outcome, err := domain.ParseExecutionOutcome(payload.Outcome)
 		if err != nil {
 			return nil, err
 		}
@@ -390,11 +254,11 @@ func unmarshalEventDetail(kind domain.EventKind, data []byte) (domain.EventDetai
 }
 
 func statusChangedDetail(payload eventDetailPayload) (domain.EventDetail, error) {
-	from, err := parseStatus(payload.From)
+	from, err := domain.ParseStatus(payload.From)
 	if err != nil {
 		return nil, err
 	}
-	to, err := parseStatus(payload.To)
+	to, err := domain.ParseStatus(payload.To)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +266,7 @@ func statusChangedDetail(payload eventDetailPayload) (domain.EventDetail, error)
 }
 
 func approvalRecordedDetail(payload eventDetailPayload) (domain.EventDetail, error) {
-	actorKind, err := parseActorKind(payload.ActorKind)
+	actorKind, err := domain.ParseActorKind(payload.ActorKind)
 	if err != nil {
 		return nil, err
 	}
@@ -415,13 +279,4 @@ func approvalRecordedDetail(payload eventDetailPayload) (domain.EventDetail, err
 
 func eventKindText(kind domain.EventKind) string {
 	return kind.String()
-}
-
-func parseEventKind(value string) (domain.EventKind, error) {
-	for kind := domain.EventIncidentCreated; kind <= domain.EventIncidentCanceled; kind++ {
-		if kind.String() == value {
-			return kind, nil
-		}
-	}
-	return 0, fmt.Errorf("unknown event kind %q", value)
 }

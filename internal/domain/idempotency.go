@@ -8,12 +8,38 @@ const IdempotencyOperationExecuteRollback IdempotencyOperation = 1
 
 func (o IdempotencyOperation) Valid() bool { return o == IdempotencyOperationExecuteRollback }
 
+func (o IdempotencyOperation) String() string {
+	if o == IdempotencyOperationExecuteRollback {
+		return "execute_rollback"
+	}
+	return "unknown"
+}
+
+func ParseIdempotencyOperation(value string) (IdempotencyOperation, error) {
+	return parseEnum("idempotency operation", value, IdempotencyOperationExecuteRollback, IdempotencyOperationExecuteRollback)
+}
+
 type IdempotencyState uint8
 
 const (
 	IdempotencyPending IdempotencyState = iota + 1
 	IdempotencyCompleted
 )
+
+func (s IdempotencyState) String() string {
+	switch s {
+	case IdempotencyPending:
+		return "pending"
+	case IdempotencyCompleted:
+		return "completed"
+	default:
+		return "unknown"
+	}
+}
+
+func ParseIdempotencyState(value string) (IdempotencyState, error) {
+	return parseEnum("idempotency state", value, IdempotencyPending, IdempotencyCompleted)
+}
 
 type IdempotencyRecord struct {
 	key         IdempotencyKey

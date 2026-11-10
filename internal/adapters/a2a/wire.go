@@ -214,7 +214,7 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 		}
 		evidence = append(evidence, value)
 	}
-	strategy, err := decodeDiagnosisStrategy(wire.Conclusion.Strategy)
+	strategy, err := domain.ParseDiagnosisStrategy(wire.Conclusion.Strategy)
 	if err != nil {
 		return ports.InvestigationResult{}, err
 	}
@@ -235,7 +235,7 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 		}
 		conclusion, err = domain.NewInvestigationConclusion(domain.ConclusionID(wire.Conclusion.ID), domain.IncidentID(wire.Conclusion.IncidentID), strategy, wire.Conclusion.Hypothesis, wire.Conclusion.Confidence, ids, recommendation, wire.Conclusion.CreatedAt)
 	} else {
-		requestedStrategy, strategyErr := decodeDiagnosisStrategy(wire.Conclusion.Provenance.RequestedStrategy)
+		requestedStrategy, strategyErr := domain.ParseDiagnosisStrategy(wire.Conclusion.Provenance.RequestedStrategy)
 		if strategyErr != nil {
 			return ports.InvestigationResult{}, strategyErr
 		}
@@ -262,34 +262,13 @@ func decodeResult(value any) (ports.InvestigationResult, error) {
 	return ports.InvestigationResult{Deployment: deployment, Evidence: evidence, Conclusion: conclusion}, nil
 }
 
-func decodeDiagnosisStrategy(value string) (domain.DiagnosisStrategy, error) {
-	switch value {
-	case domain.StrategyRules.String():
-		return domain.StrategyRules, nil
-	case domain.StrategyLLM.String():
-		return domain.StrategyLLM, nil
-	case domain.StrategyHybrid.String():
-		return domain.StrategyHybrid, nil
-	default:
-		return 0, fmt.Errorf("unknown diagnosis strategy %q", value)
-	}
-}
-
+// decodeFallbackReason maps the absent wire value (no fallback happened) to the
+// zero reason; every other value must be a canonical domain spelling.
 func decodeFallbackReason(value string) (domain.DiagnosisFallbackReason, error) {
-	switch value {
-	case "":
+	if value == "" {
 		return 0, nil
-	case domain.FallbackProviderError.String():
-		return domain.FallbackProviderError, nil
-	case domain.FallbackProviderTimeout.String():
-		return domain.FallbackProviderTimeout, nil
-	case domain.FallbackProviderRefusal.String():
-		return domain.FallbackProviderRefusal, nil
-	case domain.FallbackInvalidOutput.String():
-		return domain.FallbackInvalidOutput, nil
-	default:
-		return 0, fmt.Errorf("unknown diagnosis fallback reason %q", value)
 	}
+	return domain.ParseDiagnosisFallbackReason(value)
 }
 
 func encodeTarget(v domain.DeploymentTarget) targetDTO {

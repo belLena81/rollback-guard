@@ -345,7 +345,7 @@ func loadRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.Idempotency
 	if err != nil {
 		return domain.RollbackMutation{}, false, fmt.Errorf("load rollback mutation: %w", err)
 	}
-	snapshot.State, err = parseRollbackMutationState(state)
+	snapshot.State, err = domain.ParseRollbackMutationState(state)
 	if err != nil {
 		return domain.RollbackMutation{}, false, err
 	}
@@ -361,17 +361,6 @@ func loadRollbackMutation(ctx context.Context, tx pgx.Tx, key domain.Idempotency
 
 func rollbackMutationStateText(state domain.RollbackMutationState) string {
 	return state.String()
-}
-
-func parseRollbackMutationState(value string) (domain.RollbackMutationState, error) {
-	switch value {
-	case "pending":
-		return domain.RollbackMutationPending, nil
-	case "completed":
-		return domain.RollbackMutationCompleted, nil
-	default:
-		return 0, fmt.Errorf("unknown rollback mutation state %q", value)
-	}
 }
 
 var _ ports.RollbackMutationGuard = (*RollbackMutationGuard)(nil)

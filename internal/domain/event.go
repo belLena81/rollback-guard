@@ -31,6 +31,10 @@ func (k EventKind) String() string {
 	return names[k]
 }
 
+func ParseEventKind(value string) (EventKind, error) {
+	return parseEnum("event kind", value, EventIncidentCreated, EventIncidentCanceled)
+}
+
 // EventDetail is the typed payload of an operation event. It is closed to this
 // package: each detail type decides whether it is valid for an event kind and
 // actor.

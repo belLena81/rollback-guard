@@ -232,12 +232,7 @@ func stageFromParts(parts a2a.ContentParts) (domain.InvestigationStage, error) {
 	if wire.SchemaVersion != SchemaVersion {
 		return 0, fmt.Errorf("unsupported progress schema")
 	}
-	for stage := domain.InvestigationStageQueued; stage <= domain.InvestigationStageFinalizing; stage++ {
-		if stage.String() == wire.Stage {
-			return stage, nil
-		}
-	}
-	return 0, fmt.Errorf("unknown investigation stage %q", wire.Stage)
+	return domain.ParseInvestigationStage(wire.Stage)
 }
 
 func resultFromTask(task *a2a.Task) (ports.InvestigationResult, error) {

@@ -27,6 +27,10 @@ func (s Status) String() string {
 	return names[s]
 }
 
+func ParseStatus(value string) (Status, error) {
+	return parseEnum("status", value, StatusCreated, StatusFailed)
+}
+
 func (s Status) Terminal() bool {
 	switch s {
 	case StatusResolved, StatusCanceled, StatusDeclined, StatusRejected, StatusExpired, StatusFailed:

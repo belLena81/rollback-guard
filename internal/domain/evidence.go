@@ -23,6 +23,10 @@ func (k EvidenceKind) String() string {
 	return names[k]
 }
 
+func ParseEvidenceKind(value string) (EvidenceKind, error) {
+	return parseEnum("evidence kind", value, EvidenceDeployment, EvidenceKubernetesEvent)
+}
+
 type DeploymentEvidence struct {
 	Target                                            DeploymentTarget
 	CurrentRevision                                   Revision
@@ -178,6 +182,10 @@ func (r Recommendation) String() string {
 	return "unknown"
 }
 
+func ParseRecommendation(value string) (Recommendation, error) {
+	return parseEnum("recommendation", value, RecommendRollback, RecommendNoAction)
+}
+
 type DiagnosisStrategy uint8
 
 const (
@@ -192,6 +200,12 @@ func (s DiagnosisStrategy) String() string {
 		return names[0]
 	}
 	return names[s]
+}
+
+// ParseDiagnosisStrategy accepts the canonical spelling ("rules", "llm",
+// "hybrid"), which is also what is stored and sent on the wire.
+func ParseDiagnosisStrategy(value string) (DiagnosisStrategy, error) {
+	return parseEnum("diagnosis strategy", value, StrategyRules, StrategyHybrid)
 }
 
 func (s DiagnosisStrategy) Valid() bool {
@@ -213,6 +227,10 @@ func (r DiagnosisFallbackReason) String() string {
 		return "unknown"
 	}
 	return names[r]
+}
+
+func ParseDiagnosisFallbackReason(value string) (DiagnosisFallbackReason, error) {
+	return parseEnum("diagnosis fallback reason", value, FallbackProviderError, FallbackInvalidOutput)
 }
 
 func (r DiagnosisFallbackReason) Valid() bool {

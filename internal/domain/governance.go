@@ -168,6 +168,10 @@ func (d ApprovalDecision) String() string {
 	return "unknown"
 }
 
+func ParseApprovalDecision(value string) (ApprovalDecision, error) {
+	return parseEnum("approval decision", value, ApprovalApproved, ApprovalRejected)
+}
+
 type Approval struct {
 	id                   ApprovalID
 	actor                Actor
@@ -314,6 +318,10 @@ func (o ExecutionOutcome) String() string {
 		return "failed"
 	}
 	return "unknown"
+}
+
+func ParseExecutionOutcome(value string) (ExecutionOutcome, error) {
+	return parseEnum("execution outcome", value, ExecutionSucceeded, ExecutionFailed)
 }
 
 type RollbackExecution struct {

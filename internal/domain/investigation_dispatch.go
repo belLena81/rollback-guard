@@ -31,6 +31,10 @@ func (s InvestigationTaskState) String() string {
 	return names[s]
 }
 
+func ParseInvestigationTaskState(value string) (InvestigationTaskState, error) {
+	return parseEnum("investigation task state", value, InvestigationTaskQueued, InvestigationTaskCanceled)
+}
+
 func (s InvestigationTaskState) Valid() bool {
 	return s >= InvestigationTaskQueued && s <= InvestigationTaskCanceled
 }
@@ -55,6 +59,10 @@ func (s InvestigationStage) String() string {
 		return names[0]
 	}
 	return names[s]
+}
+
+func ParseInvestigationStage(value string) (InvestigationStage, error) {
+	return parseEnum("investigation stage", value, InvestigationStageQueued, InvestigationStageFinalizing)
 }
 
 func (s InvestigationStage) Valid() bool {
