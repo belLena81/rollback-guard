@@ -5,7 +5,6 @@ import (
 
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
-	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
 type targetDTO struct {
@@ -171,7 +170,7 @@ func summaryResponse(summary application.IncidentSummary) incidentSummaryDTO {
 	return response
 }
 
-func investigationResponse(dispatch ports.InvestigationDispatch) investigationDTO {
+func investigationResponse(dispatch domain.InvestigationDispatch) investigationDTO {
 	response := investigationDTO{OperationID: dispatch.OperationID, TaskID: dispatch.Ref.TaskID, ContextID: dispatch.Ref.ContextID, State: dispatch.State.String(), Stage: dispatch.Stage.String(), Attempts: dispatch.Attempts, FailureCode: dispatch.FailureCode, CreatedAt: dispatch.CreatedAt, UpdatedAt: dispatch.UpdatedAt}
 	if !dispatch.CompletedAt.IsZero() {
 		value := dispatch.CompletedAt

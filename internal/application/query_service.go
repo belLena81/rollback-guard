@@ -12,7 +12,7 @@ import (
 
 type IncidentSummary struct {
 	Incident      domain.Incident
-	Investigation *ports.InvestigationDispatch
+	Investigation *domain.InvestigationDispatch
 	Conclusion    *domain.InvestigationConclusion
 	Proposal      *domain.RollbackProposal
 	Approval      *domain.Approval

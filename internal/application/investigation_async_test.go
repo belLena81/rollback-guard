@@ -31,7 +31,7 @@ func TestAsyncIncidentCreationAndCoordinatorCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Incident.Status() != domain.StatusAwaitingApproval || summary.Investigation == nil || summary.Investigation.State != ports.InvestigationTaskCompleted {
+	if summary.Incident.Status() != domain.StatusAwaitingApproval || summary.Investigation == nil || summary.Investigation.State != domain.InvestigationTaskCompleted {
 		t.Fatalf("summary = %#v", summary)
 	}
 }
@@ -53,7 +53,7 @@ func TestCancelQueuedInvestigationCommitsIncidentAndTaskTogether(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Investigation == nil || summary.Investigation.State != ports.InvestigationTaskCanceled || summary.Investigation.CompletedAt.IsZero() {
+	if summary.Investigation == nil || summary.Investigation.State != domain.InvestigationTaskCanceled || summary.Investigation.CompletedAt.IsZero() {
 		t.Fatalf("investigation = %#v", summary.Investigation)
 	}
 }
@@ -77,7 +77,7 @@ func TestCoordinatorRetriesAmbiguousSubmissionWithSameCorrelation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Investigation == nil || summary.Investigation.State != ports.InvestigationTaskQueued {
+	if summary.Investigation == nil || summary.Investigation.State != domain.InvestigationTaskQueued {
 		t.Fatalf("first attempt = %#v", summary.Investigation)
 	}
 	if err := coordinator.ProcessNext(context.Background()); err != nil {
@@ -87,7 +87,7 @@ func TestCoordinatorRetriesAmbiguousSubmissionWithSameCorrelation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Investigation.State != ports.InvestigationTaskCompleted || flaky.first.IdempotencyKey != flaky.second.IdempotencyKey || flaky.first.RequestHash != flaky.second.RequestHash {
+	if summary.Investigation.State != domain.InvestigationTaskCompleted || flaky.first.IdempotencyKey != flaky.second.IdempotencyKey || flaky.first.RequestHash != flaky.second.RequestHash {
 		t.Fatalf("retry result = %#v correlation = %#v/%#v", summary.Investigation, flaky.first, flaky.second)
 	}
 }
@@ -119,7 +119,7 @@ func TestCoordinatorCancelsInvestigationWhileWatchIsBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Investigation == nil || summary.Investigation.State != ports.InvestigationTaskCanceled {
+	if summary.Investigation == nil || summary.Investigation.State != domain.InvestigationTaskCanceled {
 		t.Fatalf("investigation = %#v", summary.Investigation)
 	}
 	if summary.Conclusion != nil || summary.Proposal != nil {
@@ -155,7 +155,7 @@ func TestCoordinatorPreservesCancellationDuringProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Investigation == nil || summary.Investigation.State != ports.InvestigationTaskCanceled {
+	if summary.Investigation == nil || summary.Investigation.State != domain.InvestigationTaskCanceled {
 		t.Fatalf("investigation = %#v", summary.Investigation)
 	}
 	if summary.Conclusion != nil || summary.Proposal != nil {
@@ -190,7 +190,7 @@ func TestCoordinatorCancelsSubmissionCompletedAfterRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Investigation == nil || summary.Investigation.State != ports.InvestigationTaskCanceled || summary.Investigation.Ref.TaskID != "task-1" {
+	if summary.Investigation == nil || summary.Investigation.State != domain.InvestigationTaskCanceled || summary.Investigation.Ref.TaskID != "task-1" {
 		t.Fatalf("investigation = %#v", summary.Investigation)
 	}
 }
@@ -221,7 +221,7 @@ func TestCoordinatorRejectsProgressAfterTimeoutFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Investigation == nil || summary.Investigation.State != ports.InvestigationTaskFailed {
+	if summary.Investigation == nil || summary.Investigation.State != domain.InvestigationTaskFailed {
 		t.Fatalf("investigation = %#v", summary.Investigation)
 	}
 }
@@ -259,7 +259,7 @@ func TestCoordinatorShutdownPreservesLeasedInvestigationOnFinalAttempt(t *testin
 	if summary.Investigation == nil {
 		t.Fatal("missing investigation dispatch")
 	}
-	if summary.Investigation.State.Terminal() || summary.Investigation.State != ports.InvestigationTaskSubmitted {
+	if summary.Investigation.State.Terminal() || summary.Investigation.State != domain.InvestigationTaskSubmitted {
 		t.Fatalf("investigation state = %s, want submitted non-terminal", summary.Investigation.State)
 	}
 	if summary.Investigation.Ref.TaskID != "task-1" || summary.Investigation.LeaseExpiresAt.IsZero() || !summary.Investigation.CompletedAt.IsZero() || summary.Investigation.FailureCode != "" {
@@ -364,21 +364,21 @@ type blockedWatchGateway struct {
 	cancelCalls atomic.Int32
 }
 
-func (g *blockedWatchGateway) Submit(context.Context, ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
-	return ports.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
+func (g *blockedWatchGateway) Submit(context.Context, ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
+	return domain.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
 }
 
-func (g *blockedWatchGateway) Watch(ctx context.Context, _ ports.InvestigationTaskRef, _ func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g *blockedWatchGateway) Watch(ctx context.Context, _ domain.InvestigationTaskRef, _ func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	close(g.started)
 	<-ctx.Done()
 	return ports.InvestigationResult{}, ctx.Err()
 }
 
-func (g *blockedWatchGateway) Get(context.Context, ports.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
+func (g *blockedWatchGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
 	return ports.InvestigationTaskSnapshot{}, nil
 }
 
-func (g *blockedWatchGateway) Cancel(context.Context, ports.InvestigationTaskRef) error {
+func (g *blockedWatchGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
 	g.cancelCalls.Add(1)
 	return nil
 }
@@ -390,23 +390,23 @@ type progressAfterCancelGateway struct {
 	cancelCalls      atomic.Int32
 }
 
-func (g *progressAfterCancelGateway) Submit(context.Context, ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
-	return ports.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
+func (g *progressAfterCancelGateway) Submit(context.Context, ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
+	return domain.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
 }
 
-func (g *progressAfterCancelGateway) Watch(_ context.Context, _ ports.InvestigationTaskRef, progress func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g *progressAfterCancelGateway) Watch(_ context.Context, _ domain.InvestigationTaskRef, progress func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	close(g.started)
 	<-g.progress
-	err := progress(ports.InvestigationStageMetrics)
+	err := progress(domain.InvestigationStageMetrics)
 	g.progressRejected.Store(err != nil)
 	return ports.InvestigationResult{}, err
 }
 
-func (g *progressAfterCancelGateway) Get(context.Context, ports.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
+func (g *progressAfterCancelGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
 	return ports.InvestigationTaskSnapshot{}, nil
 }
 
-func (g *progressAfterCancelGateway) Cancel(context.Context, ports.InvestigationTaskRef) error {
+func (g *progressAfterCancelGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
 	g.cancelCalls.Add(1)
 	return nil
 }
@@ -424,41 +424,41 @@ type lateProgressGateway struct {
 	progressResult chan error
 }
 
-func (g *lateProgressGateway) Submit(context.Context, ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
-	return ports.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
+func (g *lateProgressGateway) Submit(context.Context, ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
+	return domain.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
 }
 
-func (g *lateProgressGateway) Watch(ctx context.Context, _ ports.InvestigationTaskRef, progress func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g *lateProgressGateway) Watch(ctx context.Context, _ domain.InvestigationTaskRef, progress func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	close(g.started)
 	<-g.release
-	g.progressResult <- progress(ports.InvestigationStageMetrics)
+	g.progressResult <- progress(domain.InvestigationStageMetrics)
 	return ports.InvestigationResult{}, ctx.Err()
 }
 
-func (g *lateProgressGateway) Get(context.Context, ports.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
+func (g *lateProgressGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
 	return ports.InvestigationTaskSnapshot{}, nil
 }
 
-func (g *lateProgressGateway) Cancel(context.Context, ports.InvestigationTaskRef) error {
+func (g *lateProgressGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
 	return nil
 }
 
-func (g *blockedSubmitGateway) Submit(context.Context, ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
+func (g *blockedSubmitGateway) Submit(context.Context, ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
 	close(g.started)
 	<-g.release
-	return ports.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
+	return domain.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
 }
 
-func (g *blockedSubmitGateway) Watch(context.Context, ports.InvestigationTaskRef, func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g *blockedSubmitGateway) Watch(context.Context, domain.InvestigationTaskRef, func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	g.watchCalls.Add(1)
 	return ports.InvestigationResult{}, errors.New("watch must not be called")
 }
 
-func (g *blockedSubmitGateway) Get(context.Context, ports.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
+func (g *blockedSubmitGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
 	return ports.InvestigationTaskSnapshot{}, nil
 }
 
-func (g *blockedSubmitGateway) Cancel(context.Context, ports.InvestigationTaskRef) error {
+func (g *blockedSubmitGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
 	g.cancelCalls.Add(1)
 	return nil
 }
@@ -483,23 +483,23 @@ func waitForResult(t *testing.T, result <-chan error, operation string) error {
 	}
 }
 
-func (g *flakySubmissionGateway) Submit(ctx context.Context, request ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
+func (g *flakySubmissionGateway) Submit(ctx context.Context, request ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
 	g.calls++
 	if g.calls == 1 {
 		g.first = request
-		return ports.InvestigationTaskRef{}, errors.New("response lost")
+		return domain.InvestigationTaskRef{}, errors.New("response lost")
 	}
 	g.second = request
 	return g.localInvestigationGateway.Submit(ctx, request)
 }
 
-func (g *localInvestigationGateway) Submit(_ context.Context, request ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
+func (g *localInvestigationGateway) Submit(_ context.Context, request ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
 	g.request = request
-	return ports.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
+	return domain.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
 }
 
-func (g *localInvestigationGateway) Watch(ctx context.Context, ref ports.InvestigationTaskRef, progress func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
-	for _, stage := range []ports.InvestigationStage{ports.InvestigationStageDeployment, ports.InvestigationStageMetrics, ports.InvestigationStageDiagnosis, ports.InvestigationStageFinalizing} {
+func (g *localInvestigationGateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, progress func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
+	for _, stage := range []domain.InvestigationStage{domain.InvestigationStageDeployment, domain.InvestigationStageMetrics, domain.InvestigationStageDiagnosis, domain.InvestigationStageFinalizing} {
 		if err := progress(stage); err != nil {
 			return ports.InvestigationResult{}, err
 		}
@@ -509,10 +509,10 @@ func (g *localInvestigationGateway) Watch(ctx context.Context, ref ports.Investi
 	return result, err
 }
 
-func (g *localInvestigationGateway) Get(context.Context, ports.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	return ports.InvestigationTaskSnapshot{Ref: ports.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, State: ports.InvestigationTaskCompleted, Stage: ports.InvestigationStageFinalizing, Result: &g.result}, nil
+func (g *localInvestigationGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
+	return ports.InvestigationTaskSnapshot{Ref: domain.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, State: domain.InvestigationTaskCompleted, Stage: domain.InvestigationStageFinalizing, Result: &g.result}, nil
 }
 
-func (g *localInvestigationGateway) Cancel(context.Context, ports.InvestigationTaskRef) error {
+func (g *localInvestigationGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
 	return nil
 }

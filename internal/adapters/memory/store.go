@@ -24,7 +24,7 @@ type data struct {
 	executionIDs   map[domain.ExecutionID]domain.IncidentID
 	verifications  map[domain.IncidentID]domain.RecoveryVerification
 	idempotency    map[domain.IdempotencyKey]domain.IdempotencyRecord
-	investigations map[domain.IncidentID]ports.InvestigationDispatch
+	investigations map[domain.IncidentID]domain.InvestigationDispatch
 	events         map[domain.IncidentID][]domain.OperationEvent
 }
 
@@ -44,7 +44,7 @@ func newData() *data {
 		executionIDs:   map[domain.ExecutionID]domain.IncidentID{},
 		verifications:  map[domain.IncidentID]domain.RecoveryVerification{},
 		idempotency:    map[domain.IdempotencyKey]domain.IdempotencyRecord{},
-		investigations: map[domain.IncidentID]ports.InvestigationDispatch{},
+		investigations: map[domain.IncidentID]domain.InvestigationDispatch{},
 		events:         map[domain.IncidentID][]domain.OperationEvent{},
 	}
 }
@@ -429,7 +429,7 @@ type eventRepo struct{ d *data }
 
 type investigationTaskRepo struct{ d *data }
 
-func (r investigationTaskRepo) Create(v ports.InvestigationDispatch) error {
+func (r investigationTaskRepo) Create(v domain.InvestigationDispatch) error {
 	if _, ok := r.d.incidents[v.IncidentID]; !ok {
 		return &domain.NotFoundError{Resource: "incident", ID: string(v.IncidentID)}
 	}
@@ -440,7 +440,7 @@ func (r investigationTaskRepo) Create(v ports.InvestigationDispatch) error {
 	return nil
 }
 
-func (r investigationTaskRepo) GetByIncident(id domain.IncidentID) (ports.InvestigationDispatch, error) {
+func (r investigationTaskRepo) GetByIncident(id domain.IncidentID) (domain.InvestigationDispatch, error) {
 	v, ok := r.d.investigations[id]
 	if !ok {
 		return v, &domain.NotFoundError{Resource: "investigation", ID: string(id)}
@@ -448,15 +448,15 @@ func (r investigationTaskRepo) GetByIncident(id domain.IncidentID) (ports.Invest
 	return v, nil
 }
 
-func (r investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUntil time.Time) (ports.InvestigationDispatch, error) {
+func (r investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUntil time.Time) (domain.InvestigationDispatch, error) {
 	for id, task := range r.d.investigations {
-		staleActive := (task.State == ports.InvestigationTaskSubmitting || task.State == ports.InvestigationTaskSubmitted || task.State == ports.InvestigationTaskWorking) && !task.LeaseExpiresAt.After(now)
-		claimableCancellation := task.State == ports.InvestigationTaskCancelRequested && !task.LeaseExpiresAt.After(now)
-		if task.State != ports.InvestigationTaskQueued && !claimableCancellation && !staleActive {
+		staleActive := (task.State == domain.InvestigationTaskSubmitting || task.State == domain.InvestigationTaskSubmitted || task.State == domain.InvestigationTaskWorking) && !task.LeaseExpiresAt.After(now)
+		claimableCancellation := task.State == domain.InvestigationTaskCancelRequested && !task.LeaseExpiresAt.After(now)
+		if task.State != domain.InvestigationTaskQueued && !claimableCancellation && !staleActive {
 			continue
 		}
-		if task.State != ports.InvestigationTaskCancelRequested && task.Ref.TaskID == "" {
-			task.State = ports.InvestigationTaskSubmitting
+		if task.State != domain.InvestigationTaskCancelRequested && task.Ref.TaskID == "" {
+			task.State = domain.InvestigationTaskSubmitting
 		}
 		task.LeaseOwner = owner
 		task.LeaseExpiresAt = leaseUntil
@@ -466,10 +466,10 @@ func (r investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUntil
 		r.d.investigations[id] = task
 		return task, nil
 	}
-	return ports.InvestigationDispatch{}, &domain.NotFoundError{Resource: "investigation", ID: "ready"}
+	return domain.InvestigationDispatch{}, &domain.NotFoundError{Resource: "investigation", ID: "ready"}
 }
 
-func (r investigationTaskRepo) Update(v ports.InvestigationDispatch, expected uint64) error {
+func (r investigationTaskRepo) Update(v domain.InvestigationDispatch, expected uint64) error {
 	old, ok := r.d.investigations[v.IncidentID]
 	if !ok {
 		return &domain.NotFoundError{Resource: "investigation", ID: string(v.IncidentID)}

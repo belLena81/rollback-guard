@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
-	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -14,7 +13,7 @@ type investigationTaskRepo struct {
 	r *repositories
 }
 
-func (repo investigationTaskRepo) Create(task ports.InvestigationDispatch) error {
+func (repo investigationTaskRepo) Create(task domain.InvestigationDispatch) error {
 	_, err := repo.r.tx.Exec(repo.r.ctx, `
 		INSERT INTO investigation_dispatches (
 			incident_id, operation_id, idempotency_key, message_id, trace_id, request_hash,
@@ -27,11 +26,11 @@ func (repo investigationTaskRepo) Create(task ports.InvestigationDispatch) error
 	return mapError(err, "investigation", string(task.IncidentID))
 }
 
-func (repo investigationTaskRepo) GetByIncident(id domain.IncidentID) (ports.InvestigationDispatch, error) {
+func (repo investigationTaskRepo) GetByIncident(id domain.IncidentID) (domain.InvestigationDispatch, error) {
 	return scanInvestigationDispatch(repo.r.tx.QueryRow(repo.r.ctx, investigationDispatchSelect+` WHERE incident_id = $1`, id))
 }
 
-func (repo investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUntil time.Time) (ports.InvestigationDispatch, error) {
+func (repo investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUntil time.Time) (domain.InvestigationDispatch, error) {
 	row := repo.r.tx.QueryRow(repo.r.ctx, `
 		WITH candidate AS (
 			SELECT incident_id
@@ -60,7 +59,7 @@ func (repo investigationTaskRepo) ClaimNext(now time.Time, owner string, leaseUn
 	return scanInvestigationDispatch(row)
 }
 
-func (repo investigationTaskRepo) Update(task ports.InvestigationDispatch, expected uint64) error {
+func (repo investigationTaskRepo) Update(task domain.InvestigationDispatch, expected uint64) error {
 	command, err := repo.r.tx.Exec(repo.r.ctx, `
 		UPDATE investigation_dispatches SET
 			task_id = NULLIF($1, ''), context_id = NULLIF($2, ''), state = $3, stage = $4,
@@ -97,8 +96,8 @@ type investigationDispatchScanner interface {
 	Scan(...any) error
 }
 
-func scanInvestigationDispatch(row investigationDispatchScanner) (ports.InvestigationDispatch, error) {
-	var task ports.InvestigationDispatch
+func scanInvestigationDispatch(row investigationDispatchScanner) (domain.InvestigationDispatch, error) {
+	var task domain.InvestigationDispatch
 	var taskID, contextID, leaseOwner *string
 	var stateValue, stageValue string
 	var leaseExpiresAt, completedAt *time.Time
@@ -106,15 +105,15 @@ func scanInvestigationDispatch(row investigationDispatchScanner) (ports.Investig
 		&task.RequestHash, &taskID, &contextID, &stateValue, &stageValue, &task.Attempts, &leaseOwner,
 		&leaseExpiresAt, &task.FailureCode, &task.Version, &task.CreatedAt, &task.UpdatedAt, &completedAt)
 	if err != nil {
-		return ports.InvestigationDispatch{}, mapError(err, "investigation", string(task.IncidentID))
+		return domain.InvestigationDispatch{}, mapError(err, "investigation", string(task.IncidentID))
 	}
 	state, err := parseInvestigationTaskState(stateValue)
 	if err != nil {
-		return ports.InvestigationDispatch{}, err
+		return domain.InvestigationDispatch{}, err
 	}
 	stage, err := parseInvestigationStage(stageValue)
 	if err != nil {
-		return ports.InvestigationDispatch{}, err
+		return domain.InvestigationDispatch{}, err
 	}
 	task.State = state
 	task.Stage = stage
@@ -136,12 +135,12 @@ func scanInvestigationDispatch(row investigationDispatchScanner) (ports.Investig
 	return task, nil
 }
 
-func investigationTaskStateText(state ports.InvestigationTaskState) string {
+func investigationTaskStateText(state domain.InvestigationTaskState) string {
 	return state.String()
 }
 
-func parseInvestigationTaskState(value string) (ports.InvestigationTaskState, error) {
-	for state := ports.InvestigationTaskQueued; state <= ports.InvestigationTaskCanceled; state++ {
+func parseInvestigationTaskState(value string) (domain.InvestigationTaskState, error) {
+	for state := domain.InvestigationTaskQueued; state <= domain.InvestigationTaskCanceled; state++ {
 		if state.String() == value {
 			return state, nil
 		}
@@ -149,12 +148,12 @@ func parseInvestigationTaskState(value string) (ports.InvestigationTaskState, er
 	return 0, fmt.Errorf("unknown investigation task state %q", value)
 }
 
-func investigationStageText(stage ports.InvestigationStage) string {
+func investigationStageText(stage domain.InvestigationStage) string {
 	return stage.String()
 }
 
-func parseInvestigationStage(value string) (ports.InvestigationStage, error) {
-	for stage := ports.InvestigationStageQueued; stage <= ports.InvestigationStageFinalizing; stage++ {
+func parseInvestigationStage(value string) (domain.InvestigationStage, error) {
+	for stage := domain.InvestigationStageQueued; stage <= domain.InvestigationStageFinalizing; stage++ {
 		if stage.String() == value {
 			return stage, nil
 		}

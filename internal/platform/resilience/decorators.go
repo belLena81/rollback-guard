@@ -119,25 +119,25 @@ func NewGateway(next ports.InvestigationGateway, p *Protector) (ports.Investigat
 	return gateway{next: next, protector: p}, nil
 }
 
-func (g gateway) Submit(ctx context.Context, submission ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
-	return Call(ctx, g.protector, func(ctx context.Context) (ports.InvestigationTaskRef, error) {
+func (g gateway) Submit(ctx context.Context, submission ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
+	return Call(ctx, g.protector, func(ctx context.Context) (domain.InvestigationTaskRef, error) {
 		return g.next.Submit(ctx, submission)
 	})
 }
 
-func (g gateway) Watch(ctx context.Context, ref ports.InvestigationTaskRef, progress func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g gateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, progress func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	return CallOnce(ctx, g.protector, func(ctx context.Context) (ports.InvestigationResult, error) {
 		return g.next.Watch(ctx, ref, progress)
 	})
 }
 
-func (g gateway) Get(ctx context.Context, ref ports.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
+func (g gateway) Get(ctx context.Context, ref domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
 	return Call(ctx, g.protector, func(ctx context.Context) (ports.InvestigationTaskSnapshot, error) {
 		return g.next.Get(ctx, ref)
 	})
 }
 
-func (g gateway) Cancel(ctx context.Context, ref ports.InvestigationTaskRef) error {
+func (g gateway) Cancel(ctx context.Context, ref domain.InvestigationTaskRef) error {
 	_, err := Call(ctx, g.protector, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, g.next.Cancel(ctx, ref)
 	})

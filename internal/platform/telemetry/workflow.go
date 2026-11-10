@@ -32,7 +32,7 @@ func (u *observedUnitOfWork) WithinTransaction(ctx context.Context, fn func(port
 	err := u.next.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		// A unit of work may invoke fn more than once; only the last
 		// invocation can commit.
-		pending = &transactionObservations{terminalIncidents: map[domain.IncidentID]bool{}, dispatchStates: map[domain.IncidentID]ports.InvestigationTaskState{}}
+		pending = &transactionObservations{terminalIncidents: map[domain.IncidentID]bool{}, dispatchStates: map[domain.IncidentID]domain.InvestigationTaskState{}}
 		return fn(observedRepositories{Repositories: repositories, observations: pending})
 	})
 	if err == nil && pending != nil {
@@ -48,8 +48,8 @@ type transactionObservations struct {
 	decisions         []string
 	executions        []string
 	verifications     []string
-	dispatches        []ports.InvestigationDispatch
-	dispatchStates    map[domain.IncidentID]ports.InvestigationTaskState
+	dispatches        []domain.InvestigationDispatch
+	dispatchStates    map[domain.IncidentID]domain.InvestigationTaskState
 }
 
 func (o *transactionObservations) recordEvent(event domain.OperationEvent) {
@@ -123,7 +123,7 @@ func (o *transactionObservations) flush(m *metrics) {
 	for _, dispatch := range o.dispatches {
 		outcome := dispatch.State.String()
 		reason := "none"
-		if dispatch.State == ports.InvestigationTaskFailed {
+		if dispatch.State == domain.InvestigationTaskFailed {
 			reason = dispatchFailureReason(dispatch.FailureCode)
 		}
 		m.dispatches.WithLabelValues(outcome, reason).Inc()
@@ -179,7 +179,7 @@ type observedTasks struct {
 	observations *transactionObservations
 }
 
-func (t observedTasks) Create(task ports.InvestigationDispatch) error {
+func (t observedTasks) Create(task domain.InvestigationDispatch) error {
 	if err := t.InvestigationTaskRepository.Create(task); err != nil {
 		return err
 	}
@@ -187,7 +187,7 @@ func (t observedTasks) Create(task ports.InvestigationDispatch) error {
 	return nil
 }
 
-func (t observedTasks) GetByIncident(incidentID domain.IncidentID) (ports.InvestigationDispatch, error) {
+func (t observedTasks) GetByIncident(incidentID domain.IncidentID) (domain.InvestigationDispatch, error) {
 	task, err := t.InvestigationTaskRepository.GetByIncident(incidentID)
 	if err == nil {
 		t.remember(task)
@@ -195,7 +195,7 @@ func (t observedTasks) GetByIncident(incidentID domain.IncidentID) (ports.Invest
 	return task, err
 }
 
-func (t observedTasks) ClaimNext(now time.Time, owner string, leaseUntil time.Time) (ports.InvestigationDispatch, error) {
+func (t observedTasks) ClaimNext(now time.Time, owner string, leaseUntil time.Time) (domain.InvestigationDispatch, error) {
 	task, err := t.InvestigationTaskRepository.ClaimNext(now, owner, leaseUntil)
 	if err == nil {
 		t.remember(task)
@@ -203,7 +203,7 @@ func (t observedTasks) ClaimNext(now time.Time, owner string, leaseUntil time.Ti
 	return task, err
 }
 
-func (t observedTasks) remember(task ports.InvestigationDispatch) {
+func (t observedTasks) remember(task domain.InvestigationDispatch) {
 	if _, seen := t.observations.dispatchStates[task.IncidentID]; !seen {
 		t.observations.dispatchStates[task.IncidentID] = task.State
 	}
@@ -211,7 +211,7 @@ func (t observedTasks) remember(task ports.InvestigationDispatch) {
 
 // Update counts a dispatch only on its transition into a terminal state, so
 // repeated terminal writes (for example a second cancel) are not recounted.
-func (t observedTasks) Update(task ports.InvestigationDispatch, expectedVersion uint64) error {
+func (t observedTasks) Update(task domain.InvestigationDispatch, expectedVersion uint64) error {
 	previous, known := t.observations.dispatchStates[task.IncidentID]
 	if !known {
 		current, err := t.InvestigationTaskRepository.GetByIncident(task.IncidentID)

@@ -8,6 +8,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
@@ -60,7 +61,7 @@ func extensionContext(ctx context.Context) context.Context {
 	return a2aclient.AttachServiceParams(ctx, a2aclient.ServiceParams{a2a.SvcParamExtensions: []string{ExtensionURI}})
 }
 
-func (g *Gateway) Submit(ctx context.Context, submission ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
+func (g *Gateway) Submit(ctx context.Context, submission ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
 	part := a2a.NewDataPart(encodeRequest(submission.Incident))
 	part.MediaType = JSONMediaType
 	message := a2a.NewMessage(a2a.MessageRoleUser, part)
@@ -70,19 +71,19 @@ func (g *Gateway) Submit(ctx context.Context, submission ports.InvestigationSubm
 	request.SetMeta(ExtensionURI, correlationDTO{SchemaVersion: SchemaVersion, OperationID: submission.OperationID, IdempotencyKey: submission.IdempotencyKey, TraceID: submission.TraceID, RequestHash: submission.RequestHash})
 	response, err := g.client.SendMessage(extensionContext(ctx), request)
 	if err != nil {
-		return ports.InvestigationTaskRef{}, fmt.Errorf("submit investigation task: %w", err)
+		return domain.InvestigationTaskRef{}, fmt.Errorf("submit investigation task: %w", err)
 	}
 	task, ok := response.(*a2a.Task)
 	if !ok {
-		return ports.InvestigationTaskRef{}, fmt.Errorf("investigator returned a message instead of a task")
+		return domain.InvestigationTaskRef{}, fmt.Errorf("investigator returned a message instead of a task")
 	}
 	if task.ID == "" || task.ContextID == "" {
-		return ports.InvestigationTaskRef{}, fmt.Errorf("investigator returned an incomplete task reference")
+		return domain.InvestigationTaskRef{}, fmt.Errorf("investigator returned an incomplete task reference")
 	}
-	return ports.InvestigationTaskRef{TaskID: string(task.ID), ContextID: task.ContextID}, nil
+	return domain.InvestigationTaskRef{TaskID: string(task.ID), ContextID: task.ContextID}, nil
 }
 
-func (g *Gateway) Watch(ctx context.Context, ref ports.InvestigationTaskRef, progress func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g *Gateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, progress func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	task, err := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("get investigation task: %w", err)
@@ -161,7 +162,7 @@ func (g *Gateway) Watch(ctx context.Context, ref ports.InvestigationTaskRef, pro
 	return resultFromTask(latest)
 }
 
-func (g *Gateway) Get(ctx context.Context, ref ports.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
+func (g *Gateway) Get(ctx context.Context, ref domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
 	task, err := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
 	if err != nil {
 		return ports.InvestigationTaskSnapshot{}, err
@@ -177,7 +178,7 @@ func (g *Gateway) Get(ctx context.Context, ref ports.InvestigationTaskRef) (port
 	return snapshot, nil
 }
 
-func (g *Gateway) Cancel(ctx context.Context, ref ports.InvestigationTaskRef) error {
+func (g *Gateway) Cancel(ctx context.Context, ref domain.InvestigationTaskRef) error {
 	_, err := g.client.CancelTask(extensionContext(ctx), &a2a.CancelTaskRequest{ID: a2a.TaskID(ref.TaskID)})
 	if err != nil {
 		return fmt.Errorf("cancel investigation task: %w", err)
@@ -187,7 +188,7 @@ func (g *Gateway) Cancel(ctx context.Context, ref ports.InvestigationTaskRef) er
 
 func (g *Gateway) Close() error { return g.client.Destroy() }
 
-func stageFromParts(parts a2a.ContentParts) (ports.InvestigationStage, error) {
+func stageFromParts(parts a2a.ContentParts) (domain.InvestigationStage, error) {
 	if len(parts) != 1 || parts[0].Data() == nil || parts[0].MediaType != JSONMediaType {
 		return 0, fmt.Errorf("invalid investigation progress")
 	}
@@ -198,7 +199,7 @@ func stageFromParts(parts a2a.ContentParts) (ports.InvestigationStage, error) {
 	if wire.SchemaVersion != SchemaVersion {
 		return 0, fmt.Errorf("unsupported progress schema")
 	}
-	for stage := ports.InvestigationStageQueued; stage <= ports.InvestigationStageFinalizing; stage++ {
+	for stage := domain.InvestigationStageQueued; stage <= domain.InvestigationStageFinalizing; stage++ {
 		if stage.String() == wire.Stage {
 			return stage, nil
 		}
@@ -237,18 +238,18 @@ func resultFromParts(parts a2a.ContentParts) (ports.InvestigationResult, error) 
 
 // mapTaskState fails closed on states the Investigator never reports
 // (interactive or unspecified) instead of treating them as still submitted.
-func mapTaskState(state a2a.TaskState) (ports.InvestigationTaskState, error) {
+func mapTaskState(state a2a.TaskState) (domain.InvestigationTaskState, error) {
 	switch state {
 	case a2a.TaskStateSubmitted:
-		return ports.InvestigationTaskSubmitted, nil
+		return domain.InvestigationTaskSubmitted, nil
 	case a2a.TaskStateWorking:
-		return ports.InvestigationTaskWorking, nil
+		return domain.InvestigationTaskWorking, nil
 	case a2a.TaskStateCompleted:
-		return ports.InvestigationTaskCompleted, nil
+		return domain.InvestigationTaskCompleted, nil
 	case a2a.TaskStateCanceled:
-		return ports.InvestigationTaskCanceled, nil
+		return domain.InvestigationTaskCanceled, nil
 	case a2a.TaskStateFailed, a2a.TaskStateRejected:
-		return ports.InvestigationTaskFailed, nil
+		return domain.InvestigationTaskFailed, nil
 	case a2a.TaskStateUnspecified, a2a.TaskStateAuthRequired, a2a.TaskStateInputRequired:
 		return 0, fmt.Errorf("unsupported investigation task state")
 	default:

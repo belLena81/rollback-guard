@@ -118,10 +118,10 @@ func TestClaimNextRespectsActiveCancellationLease(t *testing.T) {
 	uow := memory.NewUnitOfWork()
 	incident := repositoryIncident(t)
 	now := time.Now().UTC()
-	dispatch := ports.InvestigationDispatch{
+	dispatch := domain.InvestigationDispatch{
 		IncidentID:     incident.ID(),
-		State:          ports.InvestigationTaskCancelRequested,
-		Stage:          ports.InvestigationStageQueued,
+		State:          domain.InvestigationTaskCancelRequested,
+		Stage:          domain.InvestigationStageQueued,
 		LeaseOwner:     "worker-1",
 		LeaseExpiresAt: now.Add(time.Minute),
 		Version:        1,
@@ -148,7 +148,7 @@ func TestClaimNextRespectsActiveCancellationLease(t *testing.T) {
 		if claimErr != nil {
 			return claimErr
 		}
-		if claimed.State != ports.InvestigationTaskCancelRequested || claimed.LeaseOwner != "worker-2" {
+		if claimed.State != domain.InvestigationTaskCancelRequested || claimed.LeaseOwner != "worker-2" {
 			t.Fatalf("claimed dispatch = %#v", claimed)
 		}
 		return nil

@@ -27,28 +27,28 @@ type observedGateway struct {
 	provider *Provider
 }
 
-func (g observedGateway) Submit(ctx context.Context, submission ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
+func (g observedGateway) Submit(ctx context.Context, submission ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
 	ctx, finish := g.provider.observeA2A(ctx, "submit")
 	ref, err := g.next.Submit(ctx, submission)
 	finish(ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID}), err)
 	return ref, err
 }
 
-func (g observedGateway) Watch(ctx context.Context, ref ports.InvestigationTaskRef, progress func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g observedGateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, progress func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	ctx, finish := g.provider.observeA2A(ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID}), "watch")
 	result, err := g.next.Watch(ctx, ref, progress)
 	finish(ctx, err)
 	return result, err
 }
 
-func (g observedGateway) Get(ctx context.Context, ref ports.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
+func (g observedGateway) Get(ctx context.Context, ref domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
 	ctx, finish := g.provider.observeA2A(ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID}), "get")
 	snapshot, err := g.next.Get(ctx, ref)
 	finish(ctx, err)
 	return snapshot, err
 }
 
-func (g observedGateway) Cancel(ctx context.Context, ref ports.InvestigationTaskRef) error {
+func (g observedGateway) Cancel(ctx context.Context, ref domain.InvestigationTaskRef) error {
 	ctx, finish := g.provider.observeA2A(ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID}), "cancel")
 	err := g.next.Cancel(ctx, ref)
 	finish(ctx, err)

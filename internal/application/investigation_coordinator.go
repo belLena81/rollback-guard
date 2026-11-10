@@ -33,8 +33,6 @@ type InvestigationCoordinator struct {
 	config         InvestigationCoordinatorConfig
 }
 
-var errInvestigationCancellationRequested = errors.New("investigation cancellation requested")
-
 type investigationWatchResult struct {
 	result ports.InvestigationResult
 	err    error
@@ -99,9 +97,9 @@ func (c *InvestigationCoordinator) processNext(ctx context.Context) (context.Con
 	return ctx, err
 }
 
-func (c *InvestigationCoordinator) claim(ctx context.Context) (ports.InvestigationDispatch, domain.Incident, error) {
+func (c *InvestigationCoordinator) claim(ctx context.Context) (domain.InvestigationDispatch, domain.Incident, error) {
 	now := c.clock.Now()
-	var dispatch ports.InvestigationDispatch
+	var dispatch domain.InvestigationDispatch
 	var incident domain.Incident
 	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		var err error
@@ -113,13 +111,13 @@ func (c *InvestigationCoordinator) claim(ctx context.Context) (ports.Investigati
 		return err
 	})
 	if err != nil {
-		return ports.InvestigationDispatch{}, domain.Incident{}, err
+		return domain.InvestigationDispatch{}, domain.Incident{}, err
 	}
 	return dispatch, incident, nil
 }
 
-func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch ports.InvestigationDispatch, incident domain.Incident) error {
-	if dispatch.State == ports.InvestigationTaskCancelRequested || incident.Status() == domain.StatusCanceled {
+func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch domain.InvestigationDispatch, incident domain.Incident) error {
+	if dispatch.State == domain.InvestigationTaskCancelRequested || incident.Status() == domain.StatusCanceled {
 		return c.cancelInvestigation(ctx, dispatch)
 	}
 
@@ -138,7 +136,7 @@ func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch ports.Inv
 		if err != nil {
 			if dispatch.Attempts < c.config.MaxAttempts {
 				if retryErr := c.retry(ctx, dispatch.IncidentID, false); retryErr != nil {
-					if errors.Is(retryErr, errInvestigationCancellationRequested) {
+					if errors.Is(retryErr, domain.ErrInvestigationCancellationRequested) {
 						return c.cancelLatestInvestigation(ctx, dispatch, ref)
 					}
 					return errors.Join(err, retryErr)
@@ -152,7 +150,7 @@ func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch ports.Inv
 		if err != nil {
 			return err
 		}
-		if dispatch.State == ports.InvestigationTaskCancelRequested || dispatch.State == ports.InvestigationTaskCanceled {
+		if dispatch.CancellationRequested() {
 			return c.cancelInvestigation(ctx, dispatch)
 		}
 	}
@@ -165,12 +163,12 @@ func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch ports.Inv
 			return ctx.Err()
 		}
 		latest, loadErr := c.loadDispatch(ctx, dispatch.IncidentID)
-		if loadErr == nil && (latest.State == ports.InvestigationTaskCancelRequested || latest.State == ports.InvestigationTaskCanceled) {
+		if loadErr == nil && latest.CancellationRequested() {
 			return c.cancelInvestigation(ctx, latest)
 		}
 		if !errors.Is(taskCtx.Err(), context.DeadlineExceeded) && dispatch.Attempts < c.config.MaxAttempts {
 			if retryErr := c.retry(ctx, dispatch.IncidentID, true); retryErr != nil {
-				if errors.Is(retryErr, errInvestigationCancellationRequested) {
+				if errors.Is(retryErr, domain.ErrInvestigationCancellationRequested) {
 					return c.cancelLatestInvestigation(ctx, dispatch, ref)
 				}
 				return errors.Join(err, retryErr)
@@ -188,7 +186,7 @@ func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch ports.Inv
 	}
 	if _, err := c.investigations.Complete(ctx, dispatch.IncidentID, result); err != nil {
 		latest, loadErr := c.loadDispatch(ctx, dispatch.IncidentID)
-		if loadErr == nil && (latest.State == ports.InvestigationTaskCancelRequested || latest.State == ports.InvestigationTaskCanceled) {
+		if loadErr == nil && latest.CancellationRequested() {
 			return c.cancelInvestigation(ctx, latest)
 		}
 		if loadErr != nil {
@@ -199,12 +197,12 @@ func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch ports.Inv
 	return nil
 }
 
-func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskCtx context.Context, dispatch ports.InvestigationDispatch, ref ports.InvestigationTaskRef) (ports.InvestigationResult, bool, error) {
+func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskCtx context.Context, dispatch domain.InvestigationDispatch, ref domain.InvestigationTaskRef) (ports.InvestigationResult, bool, error) {
 	watchCtx, cancelWatch := context.WithCancel(taskCtx)
 	defer cancelWatch()
 	completed := make(chan investigationWatchResult, 1)
 	go func() {
-		result, err := c.gateway.Watch(watchCtx, ref, func(stage ports.InvestigationStage) error {
+		result, err := c.gateway.Watch(watchCtx, ref, func(stage domain.InvestigationStage) error {
 			if err := taskCtx.Err(); err != nil {
 				return err
 			}
@@ -217,7 +215,7 @@ func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskC
 	for {
 		select {
 		case watchResult := <-completed:
-			if errors.Is(watchResult.err, errInvestigationCancellationRequested) {
+			if errors.Is(watchResult.err, domain.ErrInvestigationCancellationRequested) {
 				return ports.InvestigationResult{}, true, c.cancelLatestInvestigation(ctx, dispatch, ref)
 			}
 			if watchResult.err != nil {
@@ -227,7 +225,7 @@ func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskC
 			if err != nil {
 				return ports.InvestigationResult{}, false, err
 			}
-			if latest.State == ports.InvestigationTaskCancelRequested || latest.State == ports.InvestigationTaskCanceled {
+			if latest.CancellationRequested() {
 				return ports.InvestigationResult{}, true, c.cancelInvestigation(ctx, latest)
 			}
 			return watchResult.result, false, nil
@@ -237,7 +235,7 @@ func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskC
 				cancelWatch()
 				return ports.InvestigationResult{}, false, err
 			}
-			if latest.State == ports.InvestigationTaskCancelRequested || latest.State == ports.InvestigationTaskCanceled {
+			if latest.CancellationRequested() {
 				cancelWatch()
 				err := c.cancelInvestigation(ctx, latest)
 				return ports.InvestigationResult{}, true, err
@@ -249,46 +247,31 @@ func (c *InvestigationCoordinator) watchInvestigation(ctx context.Context, taskC
 	}
 }
 
-func (c *InvestigationCoordinator) attachTaskRef(ctx context.Context, incidentID domain.IncidentID, ref ports.InvestigationTaskRef) (ports.InvestigationDispatch, error) {
+func (c *InvestigationCoordinator) attachTaskRef(ctx context.Context, incidentID domain.IncidentID, ref domain.InvestigationTaskRef) (domain.InvestigationDispatch, error) {
 	for {
-		var updated ports.InvestigationDispatch
-		now := c.clock.Now()
-		err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-			task, err := repositories.InvestigationTasks().GetByIncident(incidentID)
-			if err != nil {
-				return err
-			}
-			expected := task.Version
-			task.Ref = ref
-			if task.State != ports.InvestigationTaskCancelRequested && task.State != ports.InvestigationTaskCanceled {
-				task.State = ports.InvestigationTaskSubmitted
-			}
-			task.Version++
-			task.UpdatedAt = now
-			if err := repositories.InvestigationTasks().Update(task, expected); err != nil {
-				return err
-			}
-			updated = task
+		var updated domain.InvestigationDispatch
+		err := c.update(ctx, incidentID, func(task *domain.InvestigationDispatch, now time.Time) error {
+			task.AttachRef(ref, now)
+			updated = *task
 			return nil
 		})
 		if err == nil || !errors.Is(err, domain.ErrVersionConflict) {
 			return updated, err
 		}
 		if err := ctx.Err(); err != nil {
-			return ports.InvestigationDispatch{}, err
+			return domain.InvestigationDispatch{}, err
 		}
 	}
 }
 
-func (c *InvestigationCoordinator) recordProgress(ctx context.Context, incidentID domain.IncidentID, stage ports.InvestigationStage) error {
-	return c.updateActive(ctx, incidentID, func(task *ports.InvestigationDispatch) {
-		task.State = ports.InvestigationTaskWorking
-		task.Stage = stage
-	}, ports.InvestigationTaskSubmitted, ports.InvestigationTaskWorking)
+func (c *InvestigationCoordinator) recordProgress(ctx context.Context, incidentID domain.IncidentID, stage domain.InvestigationStage) error {
+	return c.updateActive(ctx, incidentID, func(task *domain.InvestigationDispatch, now time.Time) error {
+		return task.RecordProgress(stage, now)
+	})
 }
 
-func (c *InvestigationCoordinator) loadDispatch(ctx context.Context, incidentID domain.IncidentID) (ports.InvestigationDispatch, error) {
-	var dispatch ports.InvestigationDispatch
+func (c *InvestigationCoordinator) loadDispatch(ctx context.Context, incidentID domain.IncidentID) (domain.InvestigationDispatch, error) {
+	var dispatch domain.InvestigationDispatch
 	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		var err error
 		dispatch, err = repositories.InvestigationTasks().GetByIncident(incidentID)
@@ -297,7 +280,7 @@ func (c *InvestigationCoordinator) loadDispatch(ctx context.Context, incidentID 
 	return dispatch, err
 }
 
-func (c *InvestigationCoordinator) cancelLatestInvestigation(ctx context.Context, fallback ports.InvestigationDispatch, ref ports.InvestigationTaskRef) error {
+func (c *InvestigationCoordinator) cancelLatestInvestigation(ctx context.Context, fallback domain.InvestigationDispatch, ref domain.InvestigationTaskRef) error {
 	latest, err := c.loadDispatch(ctx, fallback.IncidentID)
 	if err != nil {
 		fallback.Ref = ref
@@ -309,7 +292,7 @@ func (c *InvestigationCoordinator) cancelLatestInvestigation(ctx context.Context
 	return c.cancelInvestigation(ctx, latest)
 }
 
-func (c *InvestigationCoordinator) cancelInvestigation(ctx context.Context, dispatch ports.InvestigationDispatch) error {
+func (c *InvestigationCoordinator) cancelInvestigation(ctx context.Context, dispatch domain.InvestigationDispatch) error {
 	var cancelErr error
 	if dispatch.Ref.TaskID != "" {
 		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CancelTimeout)
@@ -325,69 +308,39 @@ func (c *InvestigationCoordinator) cancelInvestigation(ctx context.Context, disp
 }
 
 func (c *InvestigationCoordinator) markCanceled(ctx context.Context, incidentID domain.IncidentID) error {
-	return c.update(ctx, incidentID, func(task *ports.InvestigationDispatch) {
-		task.State = ports.InvestigationTaskCanceled
-		task.CompletedAt = c.clock.Now()
-		task.LeaseOwner = ""
-		task.LeaseExpiresAt = time.Time{}
+	return c.update(ctx, incidentID, func(task *domain.InvestigationDispatch, now time.Time) error {
+		task.Cancel(now)
+		return nil
 	})
 }
 
 func (c *InvestigationCoordinator) retry(ctx context.Context, incidentID domain.IncidentID, submitted bool) error {
-	allowed := []ports.InvestigationTaskState{ports.InvestigationTaskSubmitting}
-	if submitted {
-		allowed = []ports.InvestigationTaskState{ports.InvestigationTaskSubmitted, ports.InvestigationTaskWorking}
-	}
-	return c.updateActive(ctx, incidentID, func(task *ports.InvestigationDispatch) {
+	return c.updateActive(ctx, incidentID, func(task *domain.InvestigationDispatch, now time.Time) error {
 		if submitted {
-			task.State = ports.InvestigationTaskSubmitted
-			task.LeaseOwner = c.config.WorkerID
-			task.LeaseExpiresAt = c.clock.Now()
-		} else {
-			task.State = ports.InvestigationTaskQueued
-			task.LeaseOwner = ""
-			task.LeaseExpiresAt = time.Time{}
+			return task.RetryWatch(c.config.WorkerID, now)
 		}
-	}, allowed...)
+		return task.RetrySubmission(now)
+	})
 }
 
-func (c *InvestigationCoordinator) updateActive(ctx context.Context, incidentID domain.IncidentID, mutate func(*ports.InvestigationDispatch), allowed ...ports.InvestigationTaskState) error {
-	now := c.clock.Now()
-	err := c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		task, err := repositories.InvestigationTasks().GetByIncident(incidentID)
-		if err != nil {
-			return err
-		}
-		if task.State == ports.InvestigationTaskCancelRequested || task.State == ports.InvestigationTaskCanceled {
-			return errInvestigationCancellationRequested
-		}
-		stateAllowed := false
-		for _, state := range allowed {
-			if task.State == state {
-				stateAllowed = true
-				break
-			}
-		}
-		if !stateAllowed {
-			return fmt.Errorf("cannot update investigation task in %s state", task.State)
-		}
-		expected := task.Version
-		mutate(&task)
-		task.Version++
-		task.UpdatedAt = now
-		return repositories.InvestigationTasks().Update(task, expected)
-	})
+// updateActive applies a transition that the dispatch refuses once
+// cancellation was requested. A version conflict is resolved by looking at
+// the latest dispatch: if cancellation won the race, that is reported instead.
+func (c *InvestigationCoordinator) updateActive(ctx context.Context, incidentID domain.IncidentID, transition func(*domain.InvestigationDispatch, time.Time) error) error {
+	err := c.update(ctx, incidentID, transition)
 	if !errors.Is(err, domain.ErrVersionConflict) {
 		return err
 	}
 	latest, loadErr := c.loadDispatch(ctx, incidentID)
-	if loadErr == nil && (latest.State == ports.InvestigationTaskCancelRequested || latest.State == ports.InvestigationTaskCanceled) {
-		return errInvestigationCancellationRequested
+	if loadErr == nil && latest.CancellationRequested() {
+		return domain.ErrInvestigationCancellationRequested
 	}
 	return errors.Join(err, loadErr)
 }
 
-func (c *InvestigationCoordinator) update(ctx context.Context, incidentID domain.IncidentID, mutate func(*ports.InvestigationDispatch)) error {
+// update loads the dispatch, applies transition, and persists it with the
+// version it loaded.
+func (c *InvestigationCoordinator) update(ctx context.Context, incidentID domain.IncidentID, transition func(*domain.InvestigationDispatch, time.Time) error) error {
 	now := c.clock.Now()
 	return c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		task, err := repositories.InvestigationTasks().GetByIncident(incidentID)
@@ -395,9 +348,9 @@ func (c *InvestigationCoordinator) update(ctx context.Context, incidentID domain
 			return err
 		}
 		expected := task.Version
-		mutate(&task)
-		task.Version++
-		task.UpdatedAt = now
+		if err := transition(&task, now); err != nil {
+			return err
+		}
 		return repositories.InvestigationTasks().Update(task, expected)
 	})
 }

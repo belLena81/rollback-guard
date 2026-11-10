@@ -53,7 +53,7 @@ func TestMetricCatalogue(t *testing.T) {
 	if _, err := gateway.Submit(ctx, ports.InvestigationSubmission{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gateway.Watch(ctx, ports.InvestigationTaskRef{TaskID: "task-secret"}, nil); err == nil {
+	if _, err := gateway.Watch(ctx, domain.InvestigationTaskRef{TaskID: "task-secret"}, nil); err == nil {
 		t.Fatal("expected watch failure")
 	}
 
@@ -299,19 +299,19 @@ func runLifecycle(t *testing.T, provider *telemetry.Provider) {
 
 type stubGateway struct{}
 
-func (stubGateway) Submit(context.Context, ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
-	return ports.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
+func (stubGateway) Submit(context.Context, ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
+	return domain.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
 }
 
-func (stubGateway) Watch(context.Context, ports.InvestigationTaskRef, func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (stubGateway) Watch(context.Context, domain.InvestigationTaskRef, func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	return ports.InvestigationResult{}, context.DeadlineExceeded
 }
 
-func (stubGateway) Get(context.Context, ports.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
+func (stubGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
 	return ports.InvestigationTaskSnapshot{}, nil
 }
 
-func (stubGateway) Cancel(context.Context, ports.InvestigationTaskRef) error { return nil }
+func (stubGateway) Cancel(context.Context, domain.InvestigationTaskRef) error { return nil }
 
 type stubDiagnoser struct {
 	conclusion domain.InvestigationConclusion

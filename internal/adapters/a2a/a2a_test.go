@@ -94,8 +94,8 @@ func TestRESTGatewayRunsTypedInvestigationTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stages []ports.InvestigationStage
-	result, err := gateway.Watch(context.Background(), ref, func(stage ports.InvestigationStage) error { stages = append(stages, stage); return nil })
+	var stages []domain.InvestigationStage
+	result, err := gateway.Watch(context.Background(), ref, func(stage domain.InvestigationStage) error { stages = append(stages, stage); return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestRESTGatewayRunsTypedInvestigationTask(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("investigator calls = %d", calls.Load())
 	}
-	if len(stages) > 0 && stages[len(stages)-1] != ports.InvestigationStageFinalizing {
+	if len(stages) > 0 && stages[len(stages)-1] != domain.InvestigationStageFinalizing {
 		t.Fatalf("last progress stage = %v", stages)
 	}
 	changedSymptom, err := domain.NewSymptom("error_rate", 0.3, 0.05, "ratio", now.Add(-time.Minute))
@@ -251,15 +251,15 @@ func TestResultWireRejectsUnknownRecommendation(t *testing.T) {
 func TestMapTaskStateRejectsStatesTheInvestigatorNeverUses(t *testing.T) {
 	tests := []struct {
 		state   a2a.TaskState
-		want    ports.InvestigationTaskState
+		want    domain.InvestigationTaskState
 		wantErr bool
 	}{
-		{state: a2a.TaskStateSubmitted, want: ports.InvestigationTaskSubmitted},
-		{state: a2a.TaskStateWorking, want: ports.InvestigationTaskWorking},
-		{state: a2a.TaskStateCompleted, want: ports.InvestigationTaskCompleted},
-		{state: a2a.TaskStateCanceled, want: ports.InvestigationTaskCanceled},
-		{state: a2a.TaskStateFailed, want: ports.InvestigationTaskFailed},
-		{state: a2a.TaskStateRejected, want: ports.InvestigationTaskFailed},
+		{state: a2a.TaskStateSubmitted, want: domain.InvestigationTaskSubmitted},
+		{state: a2a.TaskStateWorking, want: domain.InvestigationTaskWorking},
+		{state: a2a.TaskStateCompleted, want: domain.InvestigationTaskCompleted},
+		{state: a2a.TaskStateCanceled, want: domain.InvestigationTaskCanceled},
+		{state: a2a.TaskStateFailed, want: domain.InvestigationTaskFailed},
+		{state: a2a.TaskStateRejected, want: domain.InvestigationTaskFailed},
 		{state: a2a.TaskStateUnspecified, wantErr: true},
 		{state: a2a.TaskStateAuthRequired, wantErr: true},
 		{state: a2a.TaskStateInputRequired, wantErr: true},

@@ -13,6 +13,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
@@ -133,7 +134,7 @@ func (e *investigationExecutor) Execute(ctx context.Context, execCtx *a2asrv.Exe
 		var executeErr error
 		defer func() { endSpan(executeErr) }()
 		e.logger.InfoContext(ctx, "investigation task started")
-		request.Progress = func(stage ports.InvestigationStage) error {
+		request.Progress = func(stage domain.InvestigationStage) error {
 			data, err := dataMap(progressDTO{SchemaVersion: SchemaVersion, Stage: stage.String()})
 			if err != nil {
 				return err

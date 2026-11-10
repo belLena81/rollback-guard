@@ -25,7 +25,7 @@ func NewInvestigationRunner(inspector ports.DeploymentInspector, metrics ports.M
 
 func (r *InvestigationRunner) Investigate(ctx context.Context, request ports.InvestigationRequest) (ports.InvestigationResult, error) {
 	incident := request.Incident
-	if err := reportInvestigationProgress(request.Progress, ports.InvestigationStageDeployment); err != nil {
+	if err := reportInvestigationProgress(request.Progress, domain.InvestigationStageDeployment); err != nil {
 		return ports.InvestigationResult{}, err
 	}
 	deployment, err := r.inspector.InspectDeployment(ctx, incident.Target())
@@ -35,7 +35,7 @@ func (r *InvestigationRunner) Investigate(ctx context.Context, request ports.Inv
 	if !deployment.Target.Equal(incident.Target()) {
 		return ports.InvestigationResult{}, fmt.Errorf("deployment inspection returned a different target")
 	}
-	if err := reportInvestigationProgress(request.Progress, ports.InvestigationStageMetrics); err != nil {
+	if err := reportInvestigationProgress(request.Progress, domain.InvestigationStageMetrics); err != nil {
 		return ports.InvestigationResult{}, err
 	}
 	metric, err := r.metrics.Observe(ctx, incident.Target(), incident.Symptom())
@@ -52,20 +52,20 @@ func (r *InvestigationRunner) Investigate(ctx context.Context, request ports.Inv
 		return ports.InvestigationResult{}, err
 	}
 	evidence := []domain.Evidence{deploymentEvidence, metricEvidence}
-	if err := reportInvestigationProgress(request.Progress, ports.InvestigationStageDiagnosis); err != nil {
+	if err := reportInvestigationProgress(request.Progress, domain.InvestigationStageDiagnosis); err != nil {
 		return ports.InvestigationResult{}, err
 	}
 	conclusion, err := r.diagnoser.Diagnose(ctx, ports.InvestigationInput{Incident: incident, Deployment: deployment, Metric: metric, Evidence: evidence, Now: now})
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("diagnose incident: %w", err)
 	}
-	if err := reportInvestigationProgress(request.Progress, ports.InvestigationStageFinalizing); err != nil {
+	if err := reportInvestigationProgress(request.Progress, domain.InvestigationStageFinalizing); err != nil {
 		return ports.InvestigationResult{}, err
 	}
 	return ports.InvestigationResult{Deployment: deployment, Evidence: evidence, Conclusion: conclusion}, nil
 }
 
-func reportInvestigationProgress(report func(ports.InvestigationStage) error, stage ports.InvestigationStage) error {
+func reportInvestigationProgress(report func(domain.InvestigationStage) error, stage domain.InvestigationStage) error {
 	if report == nil {
 		return nil
 	}

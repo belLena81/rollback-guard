@@ -55,10 +55,10 @@ func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command Creat
 	if traceID == "" {
 		traceID = c.ids.NewID("trace")
 	}
-	dispatch := ports.InvestigationDispatch{
+	dispatch := domain.InvestigationDispatch{
 		IncidentID: incident.ID(), OperationID: operationID, MessageID: messageID, TraceID: traceID,
 		IdempotencyKey: "investigation:" + string(incident.ID()), RequestHash: InvestigationRequestHash(incident),
-		State: ports.InvestigationTaskQueued, Stage: ports.InvestigationStageQueued, Version: 1, CreatedAt: now, UpdatedAt: now,
+		State: domain.InvestigationTaskQueued, Stage: domain.InvestigationStageQueued, Version: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	err = c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		if err := repositories.Incidents().Create(incident); err != nil {
@@ -232,13 +232,7 @@ func (c *workflow) completeInvestigationDispatch(repositories ports.Repositories
 		return err
 	}
 	expected := dispatch.Version
-	dispatch.State = ports.InvestigationTaskCompleted
-	dispatch.Stage = ports.InvestigationStageFinalizing
-	dispatch.CompletedAt = now
-	dispatch.LeaseOwner = ""
-	dispatch.LeaseExpiresAt = time.Time{}
-	dispatch.Version++
-	dispatch.UpdatedAt = now
+	dispatch.Complete(now)
 	return repositories.InvestigationTasks().Update(dispatch, expected)
 }
 
@@ -268,13 +262,7 @@ func (s *InvestigationService) Fail(ctx context.Context, incidentID domain.Incid
 			return err
 		}
 		expectedDispatchVersion := dispatch.Version
-		dispatch.State = ports.InvestigationTaskFailed
-		dispatch.FailureCode = code
-		dispatch.CompletedAt = now
-		dispatch.LeaseOwner = ""
-		dispatch.LeaseExpiresAt = time.Time{}
-		dispatch.Version++
-		dispatch.UpdatedAt = now
+		dispatch.Fail(code, now)
 		if err := repositories.InvestigationTasks().Update(dispatch, expectedDispatchVersion); err != nil {
 			return err
 		}

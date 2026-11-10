@@ -496,16 +496,7 @@ func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentComm
 		dispatch, dispatchErr := repositories.InvestigationTasks().GetByIncident(command.IncidentID)
 		if dispatchErr == nil && !dispatch.State.Terminal() {
 			expectedDispatchVersion := dispatch.Version
-			if dispatch.State == ports.InvestigationTaskQueued && dispatch.Ref.TaskID == "" {
-				dispatch.State = ports.InvestigationTaskCanceled
-				dispatch.CompletedAt = now
-				dispatch.LeaseOwner = ""
-				dispatch.LeaseExpiresAt = time.Time{}
-			} else {
-				dispatch.State = ports.InvestigationTaskCancelRequested
-			}
-			dispatch.Version++
-			dispatch.UpdatedAt = now
+			dispatch.CancelPending(now)
 			if err := repositories.InvestigationTasks().Update(dispatch, expectedDispatchVersion); err != nil {
 				return err
 			}

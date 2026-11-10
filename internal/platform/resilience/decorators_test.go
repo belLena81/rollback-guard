@@ -179,15 +179,15 @@ type countingGateway struct {
 	watchErr   error
 }
 
-func (g *countingGateway) Submit(context.Context, ports.InvestigationSubmission) (ports.InvestigationTaskRef, error) {
+func (g *countingGateway) Submit(context.Context, ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
 	g.submits++
 	if g.submits <= len(g.submitErrs) {
-		return ports.InvestigationTaskRef{}, g.submitErrs[g.submits-1]
+		return domain.InvestigationTaskRef{}, g.submitErrs[g.submits-1]
 	}
-	return ports.InvestigationTaskRef{TaskID: "t", ContextID: "c"}, nil
+	return domain.InvestigationTaskRef{TaskID: "t", ContextID: "c"}, nil
 }
 
-func (g *countingGateway) Watch(context.Context, ports.InvestigationTaskRef, func(ports.InvestigationStage) error) (ports.InvestigationResult, error) {
+func (g *countingGateway) Watch(context.Context, domain.InvestigationTaskRef, func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	g.watches++
 	return ports.InvestigationResult{}, g.watchErr
 }
@@ -200,7 +200,7 @@ func TestGatewayRetriesSubmitButNeverWatch(t *testing.T) {
 	if ref, err := decorated.Submit(context.Background(), ports.InvestigationSubmission{}); err != nil || ref.TaskID != "t" || next.submits != 2 {
 		t.Fatalf("ref=%v err=%v submits=%d, want success on the second submit", ref, err, next.submits)
 	}
-	if _, err := decorated.Watch(context.Background(), ports.InvestigationTaskRef{}, nil); !errors.Is(err, context.DeadlineExceeded) || next.watches != 1 {
+	if _, err := decorated.Watch(context.Background(), domain.InvestigationTaskRef{}, nil); !errors.Is(err, context.DeadlineExceeded) || next.watches != 1 {
 		t.Fatalf("err=%v watches=%d, want exactly one watch (the coordinator owns re-watching)", err, next.watches)
 	}
 }
