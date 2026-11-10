@@ -14,6 +14,8 @@ import (
 
 const (
 	terminalPersistenceTimeout = 5 * time.Second
+	// Slack before a silent owner is declared gone.
+	staleReclaimMargin = 5 * time.Second
 	// A duplicate request polls the owner's record about this many times
 	// per task timeout, within the bounds below.
 	resultPollsPerTask    = 100
@@ -45,16 +47,17 @@ func NewIdempotentInvestigator(pool *pgxpool.Pool, next ports.Investigator, task
 // idempotencyTimings derives both intervals from the task timeout.
 //
 // staleAfter: an owner works for at most taskTimeout and then records the
-// terminal state within terminalPersistenceTimeout, so a "working" record
-// older than their sum belongs to an owner that is gone and may be
-// reclaimed. Reclaiming is fenced by task_id, so a slow owner that loses
+// terminal state within terminalPersistenceTimeout. A "working" record older
+// than that, plus staleReclaimMargin for clock skew between replicas and a
+// late-committing terminal write, belongs to an owner that is gone and may
+// be reclaimed. Reclaiming is fenced by task_id, so a slow owner that loses
 // the record fails instead of overwriting the new owner's result.
 //
 // pollInterval: a fraction of the task timeout, clamped so short timeouts
 // still get several polls and long ones do not poll needlessly slowly.
 func idempotencyTimings(taskTimeout time.Duration) (pollInterval, staleAfter time.Duration) {
 	pollInterval = min(max(taskTimeout/resultPollsPerTask, minResultPollInterval), maxResultPollInterval)
-	return pollInterval, taskTimeout + terminalPersistenceTimeout
+	return pollInterval, taskTimeout + terminalPersistenceTimeout + staleReclaimMargin
 }
 
 func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.InvestigationRequest) (ports.InvestigationResult, error) {

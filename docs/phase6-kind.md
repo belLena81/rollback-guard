@@ -89,9 +89,9 @@ Default URLs and `ALLOWED_TARGETS=local/rollback-demo/demo-api/demo-api` already
 Every process binds loopback by default, which is all the demo needs when the five processes share one host: they reach each other on `127.0.0.1`, and Prometheus scrapes only demo-api (through the NodePort), not the services. A process that must be reachable from another network namespace needs an explicit `HTTP_ADDR`:
 
 - The `rollback-guardian/*` images set `HTTP_ADDR=:8080` themselves. Publish the port on the host's loopback and point the peers at it, for example `docker run -p 127.0.0.1:8091:8080 -e KUBERNETES_MCP_MODE=readonly ... rollback-guardian/kubernetes-mcp:dev`. Containers on a shared Docker network use the container names instead (`KUBERNETES_READ_MCP_URL=http://kubernetes-mcp-readonly:8080/mcp`, `INVESTIGATOR_PUBLIC_URL=http://investigator:8080`, and so on).
-- For a `go run` process that another container has to call (for example a Prometheus container scraping `/metrics`), start it with `HTTP_ADDR=0.0.0.0:<port>`.
+- For a `go run` process that a container has to call (for example a Prometheus container scraping `/metrics`), bind the one interface that container can reach, such as the Docker bridge address (`HTTP_ADDR=172.17.0.1:<port>`), not `0.0.0.0`. `/metrics` shares its listener with the service's other routes, so do not do this for the orchestrator (`/v1` approve) or the rollback Kubernetes MCP (`execute_approved_rollback`): scrape those from the host, or through a loopback-published port.
 
-Nothing is authenticated before Phase 7, so keep any non-loopback address on a trusted network.
+Nothing is authenticated before Phase 7, so any non-loopback address must stay on a trusted network. A service that listens beyond loopback logs a warning at start-up.
 
 Check a running process with `curl -s 127.0.0.1:8091/health/live`, `/health/ready` (`200 {"status":"ok"}` or `503 {"status":"not_ready"}`), and `/metrics`.
 

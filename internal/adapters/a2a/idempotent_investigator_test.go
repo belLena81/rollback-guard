@@ -16,12 +16,12 @@ func TestIdempotencyTimingsFollowTheTaskTimeout(t *testing.T) {
 		wantPoll    time.Duration
 		wantStale   time.Duration
 	}{
-		{name: "default A2A_TASK_TIMEOUT keeps the 100ms poll", taskTimeout: 45 * time.Second, wantPoll: 100 * time.Millisecond, wantStale: 50 * time.Second},
-		{name: "maximum A2A_TASK_TIMEOUT", taskTimeout: 2 * time.Minute, wantPoll: 100 * time.Millisecond, wantStale: 2*time.Minute + 5*time.Second},
-		{name: "poll cap boundary", taskTimeout: 10 * time.Second, wantPoll: 100 * time.Millisecond, wantStale: 15 * time.Second},
-		{name: "short timeout polls proportionally", taskTimeout: 5 * time.Second, wantPoll: 50 * time.Millisecond, wantStale: 10 * time.Second},
-		{name: "poll floor boundary", taskTimeout: time.Second, wantPoll: 10 * time.Millisecond, wantStale: 6 * time.Second},
-		{name: "very short timeout keeps the poll floor", taskTimeout: 200 * time.Millisecond, wantPoll: 10 * time.Millisecond, wantStale: 5200 * time.Millisecond},
+		{name: "default A2A_TASK_TIMEOUT keeps the 100ms poll", taskTimeout: 45 * time.Second, wantPoll: 100 * time.Millisecond, wantStale: 55 * time.Second},
+		{name: "maximum A2A_TASK_TIMEOUT", taskTimeout: 2 * time.Minute, wantPoll: 100 * time.Millisecond, wantStale: 2*time.Minute + 10*time.Second},
+		{name: "poll cap boundary", taskTimeout: 10 * time.Second, wantPoll: 100 * time.Millisecond, wantStale: 20 * time.Second},
+		{name: "short timeout polls proportionally", taskTimeout: 5 * time.Second, wantPoll: 50 * time.Millisecond, wantStale: 15 * time.Second},
+		{name: "poll floor boundary", taskTimeout: time.Second, wantPoll: 10 * time.Millisecond, wantStale: 11 * time.Second},
+		{name: "very short timeout keeps the poll floor", taskTimeout: 200 * time.Millisecond, wantPoll: 10 * time.Millisecond, wantStale: 10200 * time.Millisecond},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -31,8 +31,8 @@ func TestIdempotencyTimingsFollowTheTaskTimeout(t *testing.T) {
 			}
 			// A live owner is never reclaimed: it finishes within the task
 			// timeout plus the terminal write.
-			if stale < test.taskTimeout+terminalPersistenceTimeout {
-				t.Fatalf("staleAfter %s is shorter than a live owner's lifetime", stale)
+			if stale <= test.taskTimeout+terminalPersistenceTimeout {
+				t.Fatalf("staleAfter %s leaves no margin over a live owner's lifetime", stale)
 			}
 		})
 	}

@@ -94,6 +94,11 @@ func serve(ctx context.Context, listener net.Listener, name string, handler http
 	errCh := make(chan error, 1)
 	go func() {
 		logger.InfoContext(ctx, name+" listening", "addr", listener.Addr().String())
+		if !loopbackOnly(listener.Addr()) {
+			// Nothing is authenticated before Phase 7, so an operator who
+			// set HTTP_ADDR beyond loopback should see what that exposes.
+			logger.WarnContext(ctx, name+" is reachable beyond loopback and has no authentication; keep it on a trusted network", "addr", listener.Addr().String())
+		}
 		errCh <- server.Serve(listener)
 	}()
 	select {
@@ -112,4 +117,11 @@ func serve(ctx context.Context, listener net.Listener, name string, handler http
 		}
 		return nil
 	}
+}
+
+// loopbackOnly reports whether addr accepts connections from this host
+// only. Anything it cannot classify counts as exposed.
+func loopbackOnly(addr net.Addr) bool {
+	tcp, ok := addr.(*net.TCPAddr)
+	return ok && tcp.IP.IsLoopback()
 }

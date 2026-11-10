@@ -180,25 +180,25 @@ func TestObservabilityMCPDefaults(t *testing.T) {
 // Until Phase 7 adds authentication no service may listen beyond loopback
 // unless the deployment asks for it.
 func TestEveryServiceBindsLoopbackByDefault(t *testing.T) {
-	loaders := map[string]func() (string, error){
-		"orchestrator": func() (string, error) { cfg, err := Load(); return cfg.HTTPAddr, err },
-		"investigator": func() (string, error) { cfg, err := LoadInvestigator(); return cfg.HTTPAddr, err },
-		"kubernetes MCP readonly": func() (string, error) {
+	loaders := map[string]func(*testing.T) (string, error){
+		"orchestrator": func(t *testing.T) (string, error) { cfg, err := Load(); return cfg.HTTPAddr, err },
+		"investigator": func(t *testing.T) (string, error) { cfg, err := LoadInvestigator(); return cfg.HTTPAddr, err },
+		"kubernetes MCP readonly": func(t *testing.T) (string, error) {
 			cfg, err := LoadKubernetesMCP()
 			return cfg.HTTPAddr, err
 		},
-		"kubernetes MCP rollback": func() (string, error) {
+		"kubernetes MCP rollback": func(t *testing.T) (string, error) {
 			t.Setenv("KUBERNETES_MCP_MODE", "rollback")
 			cfg, err := LoadKubernetesMCP()
 			return cfg.HTTPAddr, err
 		},
-		"observability MCP": func() (string, error) { cfg, err := LoadObservabilityMCP(); return cfg.HTTPAddr, err },
+		"observability MCP": func(t *testing.T) (string, error) { cfg, err := LoadObservabilityMCP(); return cfg.HTTPAddr, err },
 	}
 	seen := map[string]string{}
 	for name, load := range loaders {
 		t.Run(name, func(t *testing.T) {
 			isolateEnvironment(t, map[string]string{"DATABASE_URL": testDatabaseURL})
-			addr, err := load()
+			addr, err := load(t)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -211,7 +211,7 @@ func TestEveryServiceBindsLoopbackByDefault(t *testing.T) {
 			seen[addr] = name
 
 			t.Setenv("HTTP_ADDR", "0.0.0.0:9999")
-			if addr, err = load(); err != nil || addr != "0.0.0.0:9999" {
+			if addr, err = load(t); err != nil || addr != "0.0.0.0:9999" {
 				t.Fatalf("explicit HTTP_ADDR = %q, %v; want it honoured", addr, err)
 			}
 		})

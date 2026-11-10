@@ -41,15 +41,27 @@ type output struct {
 	OK bool `json:"ok"`
 }
 
-// NewServer serves trivial tools with the given names over the same HTTP
-// handler the real servers use, until the test ends.
+// NewServer serves trivial, immediate tools with the given names. See
+// NewSlowServer.
 func NewServer(t *testing.T, tools ...string) *Server {
+	t.Helper()
+	return NewSlowServer(t, 0, tools...)
+}
+
+// NewSlowServer serves tools that each take delay to answer, over the same HTTP
+// handler the real servers use, until the test ends.
+func NewSlowServer(t *testing.T, delay time.Duration, tools ...string) *Server {
 	t.Helper()
 	recorded := &Server{}
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "mcptest", Version: "v0"}, nil)
 	for _, name := range tools {
-		mcpsdk.AddTool(server, &mcpsdk.Tool{Name: name, Description: "test tool"}, func(context.Context, *mcpsdk.CallToolRequest, input) (*mcpsdk.CallToolResult, output, error) {
-			return nil, output{OK: true}, nil
+		mcpsdk.AddTool(server, &mcpsdk.Tool{Name: name, Description: "test tool"}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, _ input) (*mcpsdk.CallToolResult, output, error) {
+			select {
+			case <-ctx.Done():
+				return nil, output{}, ctx.Err()
+			case <-time.After(delay):
+				return nil, output{OK: true}, nil
+			}
 		})
 	}
 	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
@@ -66,4 +78,11 @@ func NewServer(t *testing.T, tools ...string) *Server {
 	t.Cleanup(httpServer.Close)
 	recorded.Endpoint = httpServer.URL + "/mcp"
 	return recorded
+}
+
+// Call invokes tool with empty arguments on client and reports only whether
+// the call completed, so callers outside the adapter need no SDK types.
+func Call(ctx context.Context, client *protocol.Client, tool string) error {
+	_, err := client.CallTool(ctx, &mcpsdk.CallToolParams{Name: tool, Arguments: input{}})
+	return err
 }

@@ -4,10 +4,14 @@
 # nothing, so a gate must not report it as passed.
 #
 #   scripts/ci/test-no-skips.sh -tags=integration ./internal/adapters/postgres/...
+#
+# REQUIRED_TESTS (optional, space-separated top-level test names) must each
+# have passed. Use it when the package also holds tests that run without the
+# build tag, so a missing tag or deleted file cannot pass on those alone.
 set -uo pipefail
 
 if [ "$#" -eq 0 ]; then
-  echo "usage: $0 <go test arguments>" >&2
+  echo "usage: [REQUIRED_TESTS='TestA TestB'] $0 <go test arguments>" >&2
   exit 2
 fi
 
@@ -32,6 +36,16 @@ if [ "$skips" -ne 0 ]; then
 fi
 if [ "$passes" -eq 0 ]; then
   echo "test-no-skips: no test ran" >&2
+  exit 1
+fi
+missing=0
+for name in ${REQUIRED_TESTS:-}; do
+  if ! grep -Eq "^--- PASS: ${name} " "$log"; then
+    echo "test-no-skips: required test ${name} did not run and pass" >&2
+    missing=1
+  fi
+done
+if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 echo "test-no-skips: $passes passed, 0 skipped"

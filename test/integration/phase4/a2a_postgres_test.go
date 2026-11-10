@@ -180,6 +180,56 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 	if canceledCalls.Load() != 1 {
 		t.Fatalf("investigator calls after cached retry = %d, want 1", canceledCalls.Load())
 	}
+
+	// Reclaim follows the task timeout: with a 1s task timeout a working
+	// record is stale after 11s (task + 5s terminal write + 5s margin), not
+	// after the former fixed 2m.
+	var reclaimCalls atomic.Int32
+	reclaimRunner := investigatorFunc(func(context.Context, ports.InvestigationRequest) (ports.InvestigationResult, error) {
+		reclaimCalls.Add(1)
+		return ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}, nil
+	})
+	shortTask, err := a2aadapter.NewIdempotentInvestigator(pool, reclaimRunner, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedWorking := func(key string, age time.Duration) {
+		t.Helper()
+		claimedAt := time.Now().UTC().Add(-age)
+		if _, err := pool.Exec(ctx, `INSERT INTO a2a_investigation_requests(idempotency_key,request_hash,task_id,state,created_at,updated_at) VALUES($1,$2,$4,'working',$3,$3)`, key, requestHash, claimedAt, key+":first-owner"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner := func(key string) (taskID, state string) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `SELECT task_id,state::text FROM a2a_investigation_requests WHERE idempotency_key=$1`, key).Scan(&taskID, &state); err != nil {
+			t.Fatal(err)
+		}
+		return taskID, state
+	}
+
+	// A record inside the window belongs to a live owner: the duplicate
+	// waits for it and never runs the investigation itself.
+	seedWorking("investigation:live-owner", 8*time.Second)
+	waitCtx, cancelWait := context.WithTimeout(ctx, 300*time.Millisecond)
+	_, err = shortTask.Investigate(waitCtx, ports.InvestigationRequest{Incident: incident, IdempotencyKey: "investigation:live-owner", RequestHash: requestHash, TaskID: "task-duplicate"})
+	cancelWait()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("duplicate of a live owner returned %v, want it to wait until its deadline", err)
+	}
+	if taskID, state := owner("investigation:live-owner"); reclaimCalls.Load() != 0 || taskID != "investigation:live-owner:first-owner" || state != "working" {
+		t.Fatalf("live owner was reclaimed: calls=%d owner=%s state=%s", reclaimCalls.Load(), taskID, state)
+	}
+
+	// A record past the window belongs to an owner that is gone: the next
+	// request takes it over and completes it.
+	seedWorking("investigation:dead-owner", 12*time.Second)
+	if _, err := shortTask.Investigate(ctx, ports.InvestigationRequest{Incident: incident, IdempotencyKey: "investigation:dead-owner", RequestHash: requestHash, TaskID: "task-reclaimer"}); err != nil {
+		t.Fatalf("reclaim a stale record: %v", err)
+	}
+	if taskID, state := owner("investigation:dead-owner"); reclaimCalls.Load() != 1 || taskID != "task-reclaimer" || state != "completed" {
+		t.Fatalf("stale record was not reclaimed: calls=%d owner=%s state=%s", reclaimCalls.Load(), taskID, state)
+	}
 }
 
 type investigatorFunc func(context.Context, ports.InvestigationRequest) (ports.InvestigationResult, error)

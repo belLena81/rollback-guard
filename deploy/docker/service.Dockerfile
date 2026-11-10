@@ -7,8 +7,9 @@
 # Loopback inside a container is unreachable from outside its network
 # namespace, so the image sets HTTP_ADDR explicitly: every service listens on
 # all interfaces of its own container, port 8080. Publish or route that port
-# deliberately (for example `docker run -p 127.0.0.1:8091:8080`); it must stay
-# on a trusted network. Override with `-e HTTP_ADDR=...` or the HTTP_ADDR
+# deliberately (for example `docker run -p 127.0.0.1:8091:8080`, never a bare
+# `-p 8080:8080` or `--network host`); it must stay on a trusted network, and
+# the service logs a warning at start-up because it listens beyond loopback. Override with `-e HTTP_ADDR=...` or the HTTP_ADDR
 # build arg. Everything else (DATABASE_URL, peer URLs, ...) is supplied by the
 # deployment, never baked into the image.
 

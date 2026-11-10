@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	a2aadapter "github.com/belLena81/rollback-guard/internal/adapters/a2a"
 	"github.com/belLena81/rollback-guard/internal/adapters/diagnosis"
@@ -284,8 +285,10 @@ type coordinatorRunner interface {
 // drains first.
 func serve(ctx context.Context, cfg config.Config, handler http.Handler, coordinator coordinatorRunner, logger *slog.Logger) error {
 	coordinatorErr := make(chan error, 1)
+	coordinatorDone := make(chan struct{})
 	serverErr := make(chan error, 1)
 	go func() {
+		defer close(coordinatorDone)
 		forwardCoordinatorError(ctx, coordinatorErr, coordinator.Run(ctx))
 	}()
 	go func() {
@@ -293,12 +296,35 @@ func serve(ctx context.Context, cfg config.Config, handler http.Handler, coordin
 	}()
 	select {
 	case err := <-serverErr:
-		return err
+		if ctx.Err() == nil {
+			// The server failed while running (for example it could not
+			// listen); the process ends with that error.
+			return err
+		}
+		return errors.Join(awaitCoordinator(coordinatorDone, coordinatorErr), err)
 	case err := <-coordinatorErr:
 		if ctx.Err() == nil {
 			return err
 		}
 		return errors.Join(err, <-serverErr)
+	}
+}
+
+// awaitCoordinator waits, after shutdown began and the HTTP server drained,
+// for the coordinator to stop, so its failure is reported and it no longer
+// uses the dependencies the caller is about to close. The wait is bounded
+// like the server's own shutdown.
+func awaitCoordinator(done <-chan struct{}, coordinatorErr <-chan error) error {
+	select {
+	case <-done:
+	case <-time.After(httpserver.ShutdownTimeout):
+		return errors.New("investigation coordinator did not stop in time")
+	}
+	select {
+	case err := <-coordinatorErr:
+		return err
+	default:
+		return nil
 	}
 }
 

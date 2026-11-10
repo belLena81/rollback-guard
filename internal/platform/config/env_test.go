@@ -154,10 +154,10 @@ func TestFormatDuration(t *testing.T) {
 // Sub-loader errors name the variable, so a mis-set shared variable is
 // reported the same way by every service that reads it.
 func TestSharedVariablesFailTheSameWayInEveryLoader(t *testing.T) {
-	loaders := map[string]func() error{
-		"orchestrator": func() error { _, err := Load(); return err },
-		"investigator": func() error { _, err := LoadInvestigator(); return err },
-		"kubernetes MCP rollback": func() error {
+	loaders := map[string]func(*testing.T) error{
+		"orchestrator": func(t *testing.T) error { _, err := Load(); return err },
+		"investigator": func(t *testing.T) error { _, err := LoadInvestigator(); return err },
+		"kubernetes MCP rollback": func(t *testing.T) error {
 			t.Setenv("KUBERNETES_MCP_MODE", "rollback")
 			_, err := LoadKubernetesMCP()
 			return err
@@ -182,7 +182,7 @@ func TestSharedVariablesFailTheSameWayInEveryLoader(t *testing.T) {
 			}
 			t.Run(test.key+"="+test.value+"/"+name, func(t *testing.T) {
 				isolateEnvironment(t, map[string]string{"DATABASE_URL": testDatabaseURL, test.key: test.value})
-				if err := load(); err == nil || err.Error() != test.want {
+				if err := load(t); err == nil || err.Error() != test.want {
 					t.Fatalf("error = %v, want %q", err, test.want)
 				}
 			})

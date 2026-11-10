@@ -68,7 +68,10 @@ phase5-integration:
 # PostgreSQL adapter integration tests (repositories, rollback mutation guard).
 # They need ROLLBACK_GUARD_POSTGRES_TEST_DSN, which the sandbox sets, and skip
 # without it. A skipped test proves nothing, so any skip fails this target.
+# The package also has untagged tests, so one test from each tagged file is
+# required by name: a dropped tag or file cannot pass on the untagged ones.
 postgres-integration:
+	REQUIRED_TESTS="TestEventAppendReportsSequenceConflictToSecondWriter TestRollbackMutationGuardBlocksReplayUntilCompletion" \
 	bash scripts/ci/test-no-skips.sh -tags=integration ./internal/adapters/postgres/...
 
 # Every integration-tagged suite. The kind-tagged suite needs a cluster and
