@@ -24,15 +24,23 @@ func NewUnitOfWork(pool *pgxpool.Pool) (*UnitOfWork, error) {
 }
 
 func (u *UnitOfWork) WithinTransaction(ctx context.Context, fn func(ports.Repositories) error) error {
+	return withinTransaction(ctx, u.pool, func(tx pgx.Tx) error {
+		return fn(&repositories{ctx: ctx, tx: tx})
+	})
+}
+
+// withinTransaction runs fn in one transaction on pool. fn's error is
+// returned unwrapped so it keeps its domain identity.
+func withinTransaction(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context ended: %w", err)
 	}
 	// pgx.BeginFunc rolls back in a deferred call, so a panicking callback
 	// still ends the transaction and returns the connection to the pool.
 	var started, finished bool
-	err := pgx.BeginFunc(ctx, u.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		started = true
-		if err := fn(&repositories{ctx: ctx, tx: tx}); err != nil {
+		if err := fn(tx); err != nil {
 			return err
 		}
 		finished = true

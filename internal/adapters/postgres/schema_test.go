@@ -155,6 +155,38 @@ func TestAIDiagnosisMigrationPersistsValidatedProvenance(t *testing.T) {
 	}
 }
 
+func TestAuthMigrationStoresOnlyTokenHashes(t *testing.T) {
+	data, err := os.ReadFile("../../../migrations/000005_auth_users_sessions.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(data)
+	for _, required := range []string{
+		"github_id bigint NOT NULL UNIQUE",
+		"CREATE UNIQUE INDEX users_login_key ON users (lower(login))",
+		"role text NOT NULL CHECK (role IN ('viewer', 'operator', 'administrator'))",
+		"REFERENCES users(id) ON DELETE CASCADE",
+		"CHECK (octet_length(token_hash) = 32)",
+		"CONSTRAINT sessions_token_hash_key UNIQUE (token_hash)",
+		"CHECK (expires_at > created_at)",
+		"sessions_user_id_idx ON sessions (user_id)",
+		"sessions_expires_at_idx ON sessions (expires_at)",
+	} {
+		if !strings.Contains(schema, required) {
+			t.Fatalf("auth migration missing %q", required)
+		}
+	}
+	for line := range strings.SplitSeq(schema, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		if strings.Contains(trimmed, "token ") || strings.HasPrefix(trimmed, "token text") || strings.HasPrefix(trimmed, "access_token") {
+			t.Fatalf("auth migration declares a raw token column: %q", trimmed)
+		}
+	}
+}
+
 func readInitialSchema(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile("../../../migrations/000001_initial_schema.up.sql")
