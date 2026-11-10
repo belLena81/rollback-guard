@@ -20,6 +20,10 @@ Revisions are deterministic SHA-256 digests of normalized Pod templates, rather 
 
 The mutating tool accepts only a proposal hash and idempotency key. Before any Kubernetes access, the rollback MCP loads the matching pending execution, canonical proposal, allowed policy decision, and approved human approval from PostgreSQL. Its separate `rollback_mutations` ledger preserves the key-to-proposal binding and exact mutation result across restarts and replicas. The orchestrator remains responsible for completing its own execution/idempotency record and audit transition.
 
+Concurrent calls for one idempotency key are serialized by a PostgreSQL advisory lock taken in `RollbackMutationGuard.Begin`. Each pending attempt receives its own random lease (`ports.RollbackMutationLease`), and `Complete` and `Release` act only on the lock acquired under that lease. A late release from an earlier attempt therefore cannot unlock a replay of the same key that holds the lock now; a late `Complete` returns `ports.ErrRollbackMutationLeaseNotHeld` and writes nothing. A ledger failure after the Deployment reached the target revision is returned as `ErrMutationNotRecorded` and reported as `internal`, never as a rejection code, so the client reconciles it.
+
+On the orchestrator side, the MCP rollback adapter treats every failure of `execute_approved_rollback` after the request may have reached the server as an unknown outcome and reconciles it (see `docs/phase6-resilience.md`, "Mutation rule").
+
 ## Configuration
 
 The orchestrator requires `DATABASE_URL` and accepts:

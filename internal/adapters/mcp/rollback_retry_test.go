@@ -95,7 +95,7 @@ func TestRollbackExecutorExecuteFailuresAfterTheRequestWasSentAreNotRetried(t *t
 			if executes != 1 {
 				t.Fatalf("executes = %d, want exactly one: the decorator must not repeat a sent request", executes)
 			}
-			if errors.Is(executeErr, context.DeadlineExceeded) && !errors.Is(err, ports.ErrRollbackOutcomeUnknown) {
+			if !errors.Is(err, ports.ErrRollbackOutcomeUnknown) {
 				t.Fatalf("err = %v, want the adapter's unknown-outcome error preserved", err)
 			}
 		})

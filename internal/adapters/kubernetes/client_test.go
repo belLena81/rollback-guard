@@ -533,6 +533,86 @@ func TestRollbackRecoversPendingMutationWhenTargetIsAlreadyApplied(t *testing.T)
 	}
 }
 
+// After the patch is applied, a failure to record it in the ledger must not
+// surface as a domain rejection (which the client would read as "nothing was
+// mutated" and record as a failed execution). It is ErrMutationNotRecorded,
+// which the MCP server reports as internal so the client reconciles.
+func TestExecuteApprovedRollbackReportsLedgerFailureAfterPatchAsNotRecorded(t *testing.T) {
+	for name, completeErr := range map[string]error{
+		"idempotency conflict": &domain.IdempotencyConflictError{Key: "recording-key"},
+		"validation":           &domain.ValidationError{Field: "rollback_mutation", Reason: "completion precedes start"},
+		"lease not held":       ports.ErrRollbackMutationLeaseNotHeld,
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := mustTarget(t)
+			deployment := testDeployment("broken:v2")
+			current := testReplicaSet(deployment, "current", "broken:v2", false, time.Now())
+			stable := testReplicaSet(deployment, "stable", "healthy:v1", true, time.Now().Add(-time.Minute))
+			client := fake.NewClientset(deployment, current, stable)
+			approved := testApprovedRollback(t, target, mustRevision(t, deployment.Spec.Template), mustRevision(t, stable.Spec.Template))
+			guard := newSharedMutationGuard(approved)
+			guard.completeErr = completeErr
+			service, err := NewService(client, Config{ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, MutationGuard: decoratedMutationGuard{guard}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = service.ExecuteApprovedRollback(context.Background(), approved.Proposal().Hash(), "recording-key")
+
+			if !errors.Is(err, ErrMutationNotRecorded) {
+				t.Fatalf("error = %v, want ErrMutationNotRecorded", err)
+			}
+			for _, rejection := range []error{domain.ErrIdempotencyConflict, domain.ErrValidation, ports.ErrRollbackMutationLeaseNotHeld} {
+				if errors.Is(err, rejection) {
+					t.Fatalf("error = %v still matches %v after the patch was applied", err, rejection)
+				}
+			}
+			if got := patchActionCount(client.Actions()); got != 1 {
+				t.Fatalf("patch actions = %d, want 1", got)
+			}
+			if held, _ := guard.heldLeases(); held != 0 {
+				t.Fatalf("held leases = %d, want the lock released", held)
+			}
+		})
+	}
+}
+
+// The service must hand the guard the exact attempt Begin returned: the fake
+// guard, like the Postgres one, completes and releases only for the holding
+// lease, so a dropped or rebuilt attempt fails these paths.
+func TestExecuteApprovedRollbackCompletesAndReleasesWithTheAttemptLease(t *testing.T) {
+	target := mustTarget(t)
+	deployment := testDeployment("broken:v2")
+	current := testReplicaSet(deployment, "current", "broken:v2", false, time.Now())
+	stable := testReplicaSet(deployment, "stable", "healthy:v1", true, time.Now().Add(-time.Minute))
+	client := fake.NewClientset(deployment, current, stable)
+	approved := testApprovedRollback(t, target, mustRevision(t, deployment.Spec.Template), mustRevision(t, stable.Spec.Template))
+	guard := newSharedMutationGuard(approved)
+	service, err := NewService(client, Config{ClusterID: "local", AllowedTargets: []domain.DeploymentTarget{target}, MutationGuard: decoratedMutationGuard{guard}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := service.ExecuteApprovedRollback(context.Background(), approved.Proposal().Hash(), "lease-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := service.ExecuteApprovedRollback(context.Background(), approved.Proposal().Hash(), "lease-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first != replay || first.AlreadyApplied {
+		t.Fatalf("first = %#v, replay = %#v, want one recorded mutation replayed", first, replay)
+	}
+	if got := patchActionCount(client.Actions()); got != 1 {
+		t.Fatalf("patch actions = %d, want 1", got)
+	}
+	if held, stale := guard.heldLeases(); held != 0 || stale != 0 {
+		t.Fatalf("held leases = %d, stale releases = %d, want 0/0", held, stale)
+	}
+}
+
 func testApprovedRollback(t *testing.T, target domain.DeploymentTarget, currentRevision, targetRevision domain.Revision) domain.ApprovedRollback {
 	t.Helper()
 	now := time.Now().UTC()
@@ -563,16 +643,39 @@ type sharedMutationGuard struct {
 	mu       sync.Mutex
 	approved map[domain.ProposalHash]domain.ApprovedRollback
 	records  map[domain.IdempotencyKey]domain.RollbackMutation
-	released []domain.IdempotencyKey
+	// leases holds the lease of the attempt that holds each key's lock, as
+	// the Postgres guard does: Complete and Release act only for that lease.
+	leases    map[domain.IdempotencyKey]ports.RollbackMutationLease
+	nextLease int
+	released  []domain.IdempotencyKey
+	// staleReleases counts Release calls whose lease no longer held the lock
+	// (harmless: such a release must touch nothing).
+	staleReleases int
 	// releaseErr is returned by every Release call when set.
 	releaseErr error
+	// completeErr is returned by Complete, after the lease check, when set.
+	completeErr error
 }
 
 func newSharedMutationGuard(approved domain.ApprovedRollback) *sharedMutationGuard {
 	return &sharedMutationGuard{
 		approved: map[domain.ProposalHash]domain.ApprovedRollback{approved.Proposal().Hash(): approved},
 		records:  make(map[domain.IdempotencyKey]domain.RollbackMutation),
+		leases:   make(map[domain.IdempotencyKey]ports.RollbackMutationLease),
 	}
+}
+
+func (g *sharedMutationGuard) lease(key domain.IdempotencyKey) ports.RollbackMutationLease {
+	g.nextLease++
+	lease := ports.RollbackMutationLease(fmt.Sprintf("lease-%d", g.nextLease))
+	g.leases[key] = lease
+	return lease
+}
+
+func (g *sharedMutationGuard) heldLeases() (held, stale int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.leases), g.staleReleases
 }
 
 func (g *sharedMutationGuard) Begin(_ context.Context, key domain.IdempotencyKey, hash domain.ProposalHash, now time.Time) (ports.RollbackMutationAttempt, error) {
@@ -582,7 +685,10 @@ func (g *sharedMutationGuard) Begin(_ context.Context, key domain.IdempotencyKey
 		if existing.ProposalHash() != hash {
 			return ports.RollbackMutationAttempt{}, &domain.IdempotencyConflictError{Key: key}
 		}
-		return ports.RollbackMutationAttempt{Mutation: existing, Approved: g.approved[hash]}, nil
+		if existing.State() == domain.RollbackMutationCompleted {
+			return ports.RollbackMutationAttempt{Mutation: existing, Approved: g.approved[hash]}, nil
+		}
+		return ports.RollbackMutationAttempt{Mutation: existing, Approved: g.approved[hash], Lease: g.lease(key)}, nil
 	}
 	approved, ok := g.approved[hash]
 	if !ok {
@@ -594,12 +700,20 @@ func (g *sharedMutationGuard) Begin(_ context.Context, key domain.IdempotencyKey
 		return ports.RollbackMutationAttempt{}, err
 	}
 	g.records[key] = record
-	return ports.RollbackMutationAttempt{Mutation: record, Approved: approved}, nil
+	return ports.RollbackMutationAttempt{Mutation: record, Approved: approved, Lease: g.lease(key)}, nil
 }
 
-func (g *sharedMutationGuard) Complete(_ context.Context, pending domain.RollbackMutation, alreadyApplied bool, completedAt time.Time) (domain.RollbackMutation, error) {
+func (g *sharedMutationGuard) Complete(_ context.Context, attempt ports.RollbackMutationAttempt, alreadyApplied bool, completedAt time.Time) (domain.RollbackMutation, error) {
+	pending := attempt.Mutation
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if attempt.Lease == "" || g.leases[pending.Key()] != attempt.Lease {
+		return domain.RollbackMutation{}, ports.ErrRollbackMutationLeaseNotHeld
+	}
+	delete(g.leases, pending.Key())
+	if g.completeErr != nil {
+		return domain.RollbackMutation{}, g.completeErr
+	}
 	existing, ok := g.records[pending.Key()]
 	if !ok || existing.ProposalHash() != pending.ProposalHash() {
 		return domain.RollbackMutation{}, &domain.IdempotencyConflictError{Key: pending.Key()}
@@ -615,10 +729,17 @@ func (g *sharedMutationGuard) Complete(_ context.Context, pending domain.Rollbac
 	return completed, nil
 }
 
-func (g *sharedMutationGuard) Release(_ context.Context, pending domain.RollbackMutation) error {
+func (g *sharedMutationGuard) Release(_ context.Context, attempt ports.RollbackMutationAttempt) error {
+	pending := attempt.Mutation
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.released = append(g.released, pending.Key())
+	switch held := g.leases[pending.Key()]; {
+	case attempt.Lease != "" && held == attempt.Lease:
+		delete(g.leases, pending.Key())
+	case attempt.Lease != "":
+		g.staleReleases++
+	}
 	return g.releaseErr
 }
 

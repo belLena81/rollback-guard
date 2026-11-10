@@ -22,6 +22,10 @@ func Failure[T any](err error) (*mcpsdk.CallToolResult, Response[T]) {
 
 func classifyError(err error) ToolError {
 	switch {
+	case errors.Is(err, kubernetes.ErrMutationNotRecorded):
+		// The rollback is applied; only the ledger write failed. Never a
+		// rejection: the client must reconcile.
+		return ToolError{Code: CodeInternal, Message: "rollback applied but not recorded"}
 	case errors.Is(err, context.Canceled):
 		return ToolError{Code: CodeCanceled, Message: "operation canceled", Retryable: true}
 	case errors.Is(err, context.DeadlineExceeded):

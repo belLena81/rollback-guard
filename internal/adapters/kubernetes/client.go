@@ -24,7 +24,26 @@ var (
 	ErrTargetForbidden = errors.New("deployment target is not allowed")
 	ErrStableRevision  = errors.New("stable rollback revision is invalid")
 	ErrRevisionDrift   = errors.New("deployment revision drifted")
+	// ErrMutationNotRecorded: the Deployment is at the approved target
+	// revision (patched now or earlier) but the ledger could not record it.
+	// It deliberately hides the cause's domain identity, so the MCP tool
+	// reports an internal error, which the client reconciles, rather than a
+	// rejection that would be read as "nothing was mutated".
+	ErrMutationNotRecorded = errors.New("rollback applied but not recorded")
 )
+
+// mutationNotRecordedError keeps the recording failure in its message for
+// in-process debugging while unwrapping only to ErrMutationNotRecorded. The
+// MCP tool response carries only the fixed internal code and message.
+type mutationNotRecordedError struct{ cause error }
+
+func (e *mutationNotRecordedError) Error() string {
+	return ErrMutationNotRecorded.Error() + ": " + e.cause.Error()
+}
+
+func (e *mutationNotRecordedError) Unwrap() error { return ErrMutationNotRecorded }
+
+func notRecorded(err error) error { return &mutationNotRecordedError{cause: err} }
 
 type Config struct {
 	ClusterID      string
@@ -338,7 +357,7 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 	releasePending := true
 	defer func() {
 		if releasePending {
-			resultErr = errors.Join(resultErr, s.guard.Release(ctx, attempt.Mutation))
+			resultErr = errors.Join(resultErr, s.guard.Release(ctx, attempt))
 		}
 	}()
 	proposal := attempt.Approved.Proposal()
@@ -351,9 +370,9 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 		return MutationResult{}, err
 	}
 	if currentRevision == proposal.TargetRevision() {
-		completed, completeErr := s.guard.Complete(ctx, attempt.Mutation, true, s.mutationCompletedAt(attempt.Mutation))
+		completed, completeErr := s.guard.Complete(ctx, attempt, true, s.mutationCompletedAt(attempt.Mutation))
 		if completeErr != nil {
-			return MutationResult{}, completeErr
+			return MutationResult{}, notRecorded(completeErr)
 		}
 		releasePending = false
 		return mutationResult(completed), nil
@@ -375,7 +394,7 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 	}
 	if _, err := s.client.AppsV1().Deployments(proposal.Target().Namespace()).Patch(ctx, proposal.Target().Deployment(), types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		if apierrors.IsConflict(err) {
-			if releaseErr := s.guard.Release(ctx, attempt.Mutation); releaseErr != nil {
+			if releaseErr := s.guard.Release(ctx, attempt); releaseErr != nil {
 				return MutationResult{}, releaseErr
 			}
 			releasePending = false
@@ -383,9 +402,9 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 		}
 		return MutationResult{}, fmt.Errorf("patch approved deployment template: %w", err)
 	}
-	completed, err := s.guard.Complete(ctx, attempt.Mutation, false, s.mutationCompletedAt(attempt.Mutation))
+	completed, err := s.guard.Complete(ctx, attempt, false, s.mutationCompletedAt(attempt.Mutation))
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, notRecorded(err)
 	}
 	releasePending = false
 	return mutationResult(completed), nil
@@ -402,7 +421,7 @@ func (s *Service) reconcileMutation(ctx context.Context, key domain.IdempotencyK
 	releasePending := true
 	defer func() {
 		if releasePending {
-			resultErr = errors.Join(resultErr, s.guard.Release(ctx, attempt.Mutation))
+			resultErr = errors.Join(resultErr, s.guard.Release(ctx, attempt))
 		}
 	}()
 	proposal := attempt.Approved.Proposal()
@@ -417,9 +436,9 @@ func (s *Service) reconcileMutation(ctx context.Context, key domain.IdempotencyK
 	if currentRevision != proposal.TargetRevision() {
 		return MutationResult{}, ErrRevisionDrift
 	}
-	completed, err := s.guard.Complete(ctx, attempt.Mutation, true, s.mutationCompletedAt(attempt.Mutation))
+	completed, err := s.guard.Complete(ctx, attempt, true, s.mutationCompletedAt(attempt.Mutation))
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, notRecorded(err)
 	}
 	releasePending = false
 	return mutationResult(completed), nil

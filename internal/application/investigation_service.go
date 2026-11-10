@@ -439,10 +439,14 @@ func (s *ApprovalService) recordDecision(ctx context.Context, command ApprovalCo
 		if err != nil {
 			return err
 		}
-		if err := repositories.Approvals().Save(approval); err != nil {
+		// Transition first: a concurrent request that recorded the same
+		// decision has already moved the incident on, so this one fails on
+		// the version guard (a conflict) instead of a duplicate approval
+		// insert. Both writes commit or roll back together.
+		if err := repositories.Incidents().Update(incident, expected); err != nil {
 			return err
 		}
-		if err := repositories.Incidents().Update(incident, expected); err != nil {
+		if err := repositories.Approvals().Save(approval); err != nil {
 			return err
 		}
 		kind := domain.EventApprovalRecorded

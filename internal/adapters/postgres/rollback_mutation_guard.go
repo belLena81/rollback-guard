@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -139,13 +140,17 @@ func (g *RollbackMutationGuard) Begin(ctx context.Context, key domain.Idempotenc
 	}
 	releaseOnReturn = false
 	g.retainRollbackMutationLock(key, lock)
-	return ports.RollbackMutationAttempt{Mutation: existing, Approved: approved}, nil
+	return ports.RollbackMutationAttempt{Mutation: existing, Approved: approved, Lease: lock.lease}, nil
 }
 
-func (g *RollbackMutationGuard) Complete(ctx context.Context, pending domain.RollbackMutation, alreadyApplied bool, completedAt time.Time) (_ domain.RollbackMutation, resultErr error) {
-	lock, err := g.takeRollbackMutationLock(ctx, pending.Key())
-	if err != nil {
-		return domain.RollbackMutation{}, err
+// Complete records the attempt's mutation as completed while the attempt's
+// lease still holds the per-key lock, then releases that lock. An attempt
+// whose lease is not held writes nothing.
+func (g *RollbackMutationGuard) Complete(ctx context.Context, attempt ports.RollbackMutationAttempt, alreadyApplied bool, completedAt time.Time) (_ domain.RollbackMutation, resultErr error) {
+	pending := attempt.Mutation
+	lock := g.takeRollbackMutationLock(pending.Key(), attempt.Lease)
+	if lock == nil {
+		return domain.RollbackMutation{}, fmt.Errorf("complete rollback mutation: %w", ports.ErrRollbackMutationLeaseNotHeld)
 	}
 	defer func() {
 		resultErr = errors.Join(resultErr, lock.release(context.Background()))
@@ -191,22 +196,40 @@ func (g *RollbackMutationGuard) Complete(ctx context.Context, pending domain.Rol
 	return completed, nil
 }
 
-func (g *RollbackMutationGuard) Release(_ context.Context, pending domain.RollbackMutation) error {
-	lock := g.removeRollbackMutationLock(pending.Key())
+// Release unlocks the lock acquired by attempt's lease. A lock held by any
+// other attempt for the same key, including a later replay, is left alone.
+func (g *RollbackMutationGuard) Release(_ context.Context, attempt ports.RollbackMutationAttempt) error {
+	lock := g.takeRollbackMutationLock(attempt.Mutation.Key(), attempt.Lease)
 	if lock == nil {
 		return nil
 	}
+	// Detached on purpose: the advisory lock must be dropped even when the
+	// caller's request has ended.
 	return lock.release(context.Background())
 }
 
-// rollbackMutationLockCloseTimeout bounds closing a connection whose advisory
-// unlock failed; the underlying network connection is closed even if it elapses.
+// rollbackMutationLockCloseTimeout bounds the advisory unlock and, when the
+// unlock fails, closing its connection; the underlying network connection is
+// closed even if it elapses.
 const rollbackMutationLockCloseTimeout = 5 * time.Second
+
+// rollbackMutationLeaseBytes is the entropy of a lease: 128 bits, so a lease
+// can neither collide with nor be guessed from another attempt's.
+const rollbackMutationLeaseBytes = 16
 
 type rollbackMutationLock struct {
 	key         domain.IdempotencyKey
+	lease       ports.RollbackMutationLease
 	conn        *pgxpool.Conn
 	releaseHook func(context.Context) error
+}
+
+func newRollbackMutationLease() ports.RollbackMutationLease {
+	var raw [rollbackMutationLeaseBytes]byte
+	// crypto/rand.Read never returns an error (it crashes the program
+	// instead), so the lease is always fully random.
+	_, _ = rand.Read(raw[:]) //nolint:errcheck // documented never to fail
+	return ports.RollbackMutationLease(hex.EncodeToString(raw[:]))
 }
 
 func (g *RollbackMutationGuard) acquireRollbackMutationLock(ctx context.Context, key domain.IdempotencyKey) (*rollbackMutationLock, error) {
@@ -218,7 +241,7 @@ func (g *RollbackMutationGuard) acquireRollbackMutationLock(ctx context.Context,
 		conn.Release()
 		return nil, fmt.Errorf("lock rollback mutation key: %w", err)
 	}
-	return &rollbackMutationLock{key: key, conn: conn}, nil
+	return &rollbackMutationLock{key: key, lease: newRollbackMutationLease(), conn: conn}, nil
 }
 
 func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.IdempotencyKey, lock *rollbackMutationLock) {
@@ -234,18 +257,19 @@ func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.Idempotenc
 	}
 }
 
-func (g *RollbackMutationGuard) takeRollbackMutationLock(ctx context.Context, key domain.IdempotencyKey) (*rollbackMutationLock, error) {
-	lock := g.removeRollbackMutationLock(key)
-	if lock != nil {
-		return lock, nil
+// takeRollbackMutationLock removes and returns the retained lock for key only
+// when it was acquired under lease. It returns nil, and leaves the map
+// untouched, for an empty lease or a lock owned by another attempt.
+func (g *RollbackMutationGuard) takeRollbackMutationLock(key domain.IdempotencyKey, lease ports.RollbackMutationLease) *rollbackMutationLock {
+	if lease == "" {
+		return nil
 	}
-	return g.acquireRollbackMutationLock(ctx, key)
-}
-
-func (g *RollbackMutationGuard) removeRollbackMutationLock(key domain.IdempotencyKey) *rollbackMutationLock {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	lock := g.locks[key]
+	if lock == nil || lock.lease != lease {
+		return nil
+	}
 	delete(g.locks, key)
 	return lock
 }
@@ -258,7 +282,11 @@ func (l *rollbackMutationLock) release(ctx context.Context) error {
 		return nil
 	}
 	defer l.conn.Release()
-	if _, err := l.conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, l.key); err != nil {
+	// Bounded so a blackholed session cannot hang the caller; on timeout the
+	// session is closed below, which drops the lock server-side.
+	unlockCtx, cancelUnlock := context.WithTimeout(ctx, rollbackMutationLockCloseTimeout)
+	defer cancelUnlock()
+	if _, err := l.conn.Exec(unlockCtx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, l.key); err != nil {
 		// The session may still hold the advisory lock. Close it so the pool destroys
 		// the connection on Release instead of handing a lock-holding session to
 		// another caller; ending the session releases the lock server-side.

@@ -62,7 +62,7 @@ func TestRollbackMutationGuardBlocksReplayUntilCompletion(t *testing.T) {
 		t.Fatalf("rollback mutation rows = %d, want 1", count)
 	}
 
-	completed, err := guards[0].Complete(context.Background(), first.Mutation, false, now.Add(time.Second))
+	completed, err := guards[0].Complete(context.Background(), first, false, now.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +91,250 @@ func TestRollbackMutationGuardBlocksReplayUntilCompletion(t *testing.T) {
 	}
 }
 
+// Two attempts on one key in one process: a late, duplicate release (or a
+// completion) from the first attempt must not unlock the replay that now
+// holds the lock. Before leases, Release was keyed by idempotency key only and
+// would have dropped the replay's advisory lock here.
+func TestRollbackMutationGuardLateReleaseDoesNotUnlockConcurrentReplay(t *testing.T) {
+	pool := isolatedRollbackGuardPool(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	key := uniqueRollbackKey("key-late-release")
+	proposal := seedTrustedRollback(t, pool, "incident-late-release", key, now)
+	guard, err := NewRollbackMutationGuard(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	first, err := guard.Begin(ctx, key, proposal.Hash(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseOnCleanup(t, guard, first)
+	if first.Lease == "" || first.Mutation.State() != domain.RollbackMutationPending {
+		t.Fatalf("first attempt = lease %q state %s, want a leased pending attempt", first.Lease, first.Mutation.State())
+	}
+	replay := beginAsync(t, guard, key, proposal.Hash(), now.Add(time.Second))
+	replay.requireWaitingOnLock(t, pool, key, "replay while the first attempt holds the lock")
+
+	if err := guard.Release(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := replay.wait(t)
+	releaseOnCleanup(t, guard, second)
+	if second.Lease == "" || second.Lease == first.Lease || second.Mutation.State() != domain.RollbackMutationPending {
+		t.Fatalf("replay = lease %q (first %q) state %s, want a new lease on the pending mutation", second.Lease, first.Lease, second.Mutation.State())
+	}
+
+	// The first request's deferred release and a stray completion arrive
+	// late, while the replay is mid-mutation.
+	if err := guard.Release(ctx, first); err != nil {
+		t.Fatalf("late release error = %v, want nil for a lease that holds nothing", err)
+	}
+	if _, err := guard.Complete(ctx, first, false, now.Add(2*time.Second)); !errors.Is(err, ports.ErrRollbackMutationLeaseNotHeld) {
+		t.Fatalf("late complete error = %v, want lease not held", err)
+	}
+	requireAdvisoryLockHeld(t, pool, key)
+	requireMutationState(t, pool, key, "pending")
+	third := beginAsync(t, guard, key, proposal.Hash(), now.Add(3*time.Second))
+	third.requireWaitingOnLock(t, pool, key, "a third attempt after the late release")
+	requireAdvisoryLockHeld(t, pool, key)
+	third.requireNotReturned(t, "a third attempt after the late release")
+
+	completed, err := guard.Complete(ctx, second, false, now.Add(4*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirdAttempt := third.wait(t)
+	if thirdAttempt.Mutation.Snapshot() != completed.Snapshot() || thirdAttempt.Lease != "" {
+		t.Fatalf("third attempt = %#v lease %q, want the completed mutation and no lease", thirdAttempt.Mutation.Snapshot(), thirdAttempt.Lease)
+	}
+	if err := guard.Release(ctx, second); err != nil {
+		t.Fatalf("release after completion = %v, want nil", err)
+	}
+	requireAdvisoryLockFree(t, pool, key)
+}
+
+// Two guards model two rollback MCP replicas. Each lease is only meaningful
+// to the guard that issued it.
+func TestRollbackMutationGuardIgnoresLeaseFromAnotherGuard(t *testing.T) {
+	pool := isolatedRollbackGuardPool(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	key := uniqueRollbackKey("key-foreign-lease")
+	proposal := seedTrustedRollback(t, pool, "incident-foreign-lease", key, now)
+	owner, err := NewRollbackMutationGuard(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := NewRollbackMutationGuard(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := owner.Begin(context.Background(), key, proposal.Hash(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseOnCleanup(t, owner, attempt)
+
+	if err := other.Release(context.Background(), attempt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Complete(context.Background(), attempt, false, now.Add(time.Second)); !errors.Is(err, ports.ErrRollbackMutationLeaseNotHeld) {
+		t.Fatalf("foreign complete error = %v, want lease not held", err)
+	}
+	requireAdvisoryLockHeld(t, pool, key)
+	requireMutationState(t, pool, key, "pending")
+	if err := owner.Release(context.Background(), attempt); err != nil {
+		t.Fatal(err)
+	}
+	requireAdvisoryLockFree(t, pool, key)
+}
+
+// uniqueRollbackKey keeps keys distinct across concurrent runs against one
+// test database: advisory locks are database-wide, not per schema.
+func uniqueRollbackKey(prefix string) domain.IdempotencyKey {
+	return domain.IdempotencyKey(fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()))
+}
+
+// releaseOnCleanup releases attempt when the test ends, so a failing test
+// cannot leave a lock-holding connection checked out and hang pool.Close.
+// Releasing an attempt that holds nothing is a no-op.
+func releaseOnCleanup(t *testing.T, guard *RollbackMutationGuard, attempt ports.RollbackMutationAttempt) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := guard.Release(context.Background(), attempt); err != nil {
+			t.Logf("cleanup release: %v", err)
+		}
+	})
+}
+
+type asyncBegin struct {
+	attempt chan ports.RollbackMutationAttempt
+	err     chan error
+}
+
+// beginAsync runs Begin in a goroutine. Its context is cancelled when the
+// test ends, so a Begin still waiting on the lock gives its connection back,
+// and a lease it acquired is released.
+func beginAsync(t *testing.T, guard *RollbackMutationGuard, key domain.IdempotencyKey, hash domain.ProposalHash, at time.Time) asyncBegin {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	result := asyncBegin{attempt: make(chan ports.RollbackMutationAttempt, 1), err: make(chan error, 1)}
+	go func() {
+		defer close(done)
+		attempt, err := guard.Begin(ctx, key, hash, at)
+		result.err <- err
+		result.attempt <- attempt
+		if err == nil {
+			releaseOnCleanup(t, guard, attempt)
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return result
+}
+
+// requireWaitingOnLock waits until PostgreSQL shows an ungranted advisory
+// lock request for key, which proves the goroutine is blocked on this key's
+// lock rather than merely slow, and that Begin has not returned.
+func (b asyncBegin) requireWaitingOnLock(t *testing.T, pool *pgxpool.Pool, key domain.IdempotencyKey, what string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(context.Background(), `
+			SELECT count(*) FROM pg_locks
+			WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+				AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+				AND classid::text::bigint = ((hashtextextended($1, 0) >> 32) & 4294967295)
+				AND objid::text::bigint = (hashtextextended($1, 0) & 4294967295)
+		`, key).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting == 1 {
+			break
+		}
+		b.requireNotReturned(t, what)
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: no waiting advisory lock request for %q", what, key)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	b.requireNotReturned(t, what)
+}
+
+func (b asyncBegin) requireNotReturned(t *testing.T, what string) {
+	t.Helper()
+	select {
+	case err := <-b.err:
+		t.Fatalf("%s: Begin returned (err %v) instead of waiting for the lock", what, err)
+	default:
+	}
+}
+
+func (b asyncBegin) wait(t *testing.T) ports.RollbackMutationAttempt {
+	t.Helper()
+	select {
+	case err := <-b.err:
+		if err != nil {
+			t.Fatal(err)
+		}
+		return <-b.attempt
+	case <-time.After(10 * time.Second):
+		t.Fatal("Begin did not acquire the released lock")
+		return ports.RollbackMutationAttempt{}
+	}
+}
+
+// tryAdvisoryLock probes the per-key lock from a separate session and
+// immediately gives it back when it was free.
+func tryAdvisoryLock(t *testing.T, pool *pgxpool.Pool, key domain.IdempotencyKey) bool {
+	t.Helper()
+	conn, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	var acquired bool
+	if err := conn.QueryRow(context.Background(), `SELECT pg_try_advisory_lock(hashtextextended($1, 0))`, key).Scan(&acquired); err != nil {
+		t.Fatal(err)
+	}
+	if acquired {
+		if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return acquired
+}
+
+func requireAdvisoryLockHeld(t *testing.T, pool *pgxpool.Pool, key domain.IdempotencyKey) {
+	t.Helper()
+	if tryAdvisoryLock(t, pool, key) {
+		t.Fatalf("advisory lock for %q is free, want it held by the live attempt", key)
+	}
+}
+
+func requireAdvisoryLockFree(t *testing.T, pool *pgxpool.Pool, key domain.IdempotencyKey) {
+	t.Helper()
+	if !tryAdvisoryLock(t, pool, key) {
+		t.Fatalf("advisory lock for %q is still held", key)
+	}
+}
+
+func requireMutationState(t *testing.T, pool *pgxpool.Pool, key domain.IdempotencyKey, want string) {
+	t.Helper()
+	var state string
+	if err := pool.QueryRow(context.Background(), `SELECT state::text FROM rollback_mutations WHERE idempotency_key = $1`, key).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != want {
+		t.Fatalf("rollback mutation state = %s, want %s", state, want)
+	}
+}
+
 func TestRollbackMutationGuardAllowsStalePendingReplay(t *testing.T) {
 	pool := isolatedRollbackGuardPool(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -107,7 +351,7 @@ func TestRollbackMutationGuardAllowsStalePendingReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.Release(context.Background(), attempt.Mutation); err != nil {
+	if err := first.Release(context.Background(), attempt); err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,7 +362,7 @@ func TestRollbackMutationGuardAllowsStalePendingReplay(t *testing.T) {
 	if replayed.Mutation.Snapshot() != attempt.Mutation.Snapshot() {
 		t.Fatalf("stale pending replay = %#v, want %#v", replayed.Mutation.Snapshot(), attempt.Mutation.Snapshot())
 	}
-	if err := second.Release(context.Background(), replayed.Mutation); err != nil {
+	if err := second.Release(context.Background(), replayed); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -139,7 +383,7 @@ func TestRollbackMutationGuardAuthorizesFirstUseAtRecordStart(t *testing.T) {
 	if !attempt.Mutation.StartedAt().Equal(recordStartedAt) {
 		t.Fatalf("mutation started at = %s, want %s", attempt.Mutation.StartedAt(), recordStartedAt)
 	}
-	if err := guard.Release(context.Background(), attempt.Mutation); err != nil {
+	if err := guard.Release(context.Background(), attempt); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -179,6 +423,13 @@ func TestRollbackMutationLockReleaseClosesConnectionWhenUnlockFails(t *testing.T
 }
 
 func isolatedRollbackGuardPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	return isolatedSchemaPool(t, "000001_initial_schema.up.sql", "000002_rollback_mutation_ledger.up.sql")
+}
+
+// isolatedSchemaPool returns a pool bound to a fresh schema with the named
+// migrations applied in order. The schema is dropped when the test ends.
+func isolatedSchemaPool(t *testing.T, migrations ...string) *pgxpool.Pool {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("ROLLBACK_GUARD_POSTGRES_TEST_DSN"))
 	if dsn == "" {
@@ -220,7 +471,8 @@ func isolatedRollbackGuardPool(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, path := range []string{"../../../migrations/000001_initial_schema.up.sql", "../../../migrations/000002_rollback_mutation_ledger.up.sql"} {
+	for _, name := range migrations {
+		path := "../../../migrations/" + name
 		migration, readErr := os.ReadFile(path)
 		if readErr != nil {
 			t.Fatal(readErr)

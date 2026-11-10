@@ -135,11 +135,16 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 	if err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CleanupTimeout)
 		defer cancel()
+		// Terminate only the incident this request authorized against. If a
+		// concurrent request for the same approval has moved it on (started
+		// or finished the rollback, which is also why the revision no longer
+		// matches), this request's view is stale and it must not fail an
+		// incident whose rollback is in flight or applied.
 		var cleanupErr error
 		if errors.Is(err, domain.ErrExpired) {
-			cleanupErr = c.expire(cleanupCtx, loaded.incident.ID(), authorizationExpiredAuditReason)
+			cleanupErr = c.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Expire, domain.EventIncidentExpired, authorizationExpiredAuditReason)
 		} else {
-			cleanupErr = c.failIncident(cleanupCtx, loaded.incident.ID(), authorizationFailureAuditReason)
+			cleanupErr = c.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Fail, domain.EventIncidentFailed, authorizationFailureAuditReason)
 		}
 		return executionPreparation{}, errors.Join(err, cleanupErr)
 	}
@@ -281,15 +286,10 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 		if err != nil {
 			return err
 		}
-		if err := repositories.Executions().Save(execution); err != nil {
-			return err
-		}
-		if err := repositories.Idempotency().Update(completedRecord, domain.IdempotencyPending); err != nil {
-			return err
-		}
-		if err := c.appendEvent(ctx, repositories, proposal.IncidentID(), domain.EventExecutionCompleted, c.systemActor, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()}, completedAt); err != nil {
-			return err
-		}
+		// The incident transition is written first: a concurrent request
+		// that completed the same attempt has already moved the incident on,
+		// so this one fails with a conflict here instead of a duplicate
+		// execution insert. Everything below commits or rolls back together.
 		expected := fresh.Version()
 		from := fresh.Status()
 		if execution.Outcome() == domain.ExecutionSucceeded {
@@ -301,6 +301,15 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 			return err
 		}
 		if err := repositories.Incidents().Update(fresh, expected); err != nil {
+			return err
+		}
+		if err := repositories.Executions().Save(execution); err != nil {
+			return err
+		}
+		if err := repositories.Idempotency().Update(completedRecord, domain.IdempotencyPending); err != nil {
+			return err
+		}
+		if err := c.appendEvent(ctx, repositories, proposal.IncidentID(), domain.EventExecutionCompleted, c.systemActor, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()}, completedAt); err != nil {
 			return err
 		}
 		kind := domain.EventStatusChanged
@@ -460,21 +469,27 @@ func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentComm
 	return result, nil
 }
 
-func (c *workflow) expire(ctx context.Context, incidentID domain.IncidentID, reason string) error {
+// terminateIfUnchanged applies a terminal transition and its audit event in
+// one transaction, but only while the incident is still at version. When the
+// incident has changed since then it writes nothing and returns nil: the
+// caller's failure belongs to a superseded view and the newer state wins.
+func (c *workflow) terminateIfUnchanged(ctx context.Context, incidentID domain.IncidentID, version uint64, transition func(*domain.Incident, time.Time) error, kind domain.EventKind, reason string) error {
 	now := c.clock.Now()
 	return c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		incident, err := repositories.Incidents().Get(incidentID)
 		if err != nil {
 			return err
 		}
-		expected := incident.Version()
-		if err := incident.Expire(now); err != nil {
+		if incident.Version() != version {
+			return nil
+		}
+		if err := transition(&incident, now); err != nil {
 			return err
 		}
-		if err := repositories.Incidents().Update(incident, expected); err != nil {
+		if err := repositories.Incidents().Update(incident, version); err != nil {
 			return err
 		}
-		return c.appendEvent(ctx, repositories, incidentID, domain.EventIncidentExpired, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
+		return c.appendEvent(ctx, repositories, incidentID, kind, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
 	})
 }
 

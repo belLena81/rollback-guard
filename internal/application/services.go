@@ -61,6 +61,9 @@ type Services struct {
 	Executions     *ExecutionService
 	Verifications  *VerificationService
 	Queries        *QueryService
+	// ApproveAndExecute composes Approvals, Executions, Verifications, and
+	// Queries into the approve -> execute -> verify use case.
+	ApproveAndExecute *ApproveAndExecuteService
 }
 
 type IncidentService struct{ workflow *workflow }
@@ -92,9 +95,14 @@ func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, er
 		approvalPolicy: dependencies.ApprovalPolicy, clock: dependencies.Clock, ids: dependencies.IDGenerator,
 		config: config, systemActor: config.SystemActor,
 	}
-	return Services{
+	services := Services{
 		Incidents: &IncidentService{workflow: w}, Investigations: &InvestigationService{workflow: w},
 		Approvals: &ApprovalService{workflow: w}, Executions: &ExecutionService{workflow: w},
 		Verifications: &VerificationService{workflow: w}, Queries: &QueryService{workflow: w},
-	}, nil
+	}
+	services.ApproveAndExecute = &ApproveAndExecuteService{
+		approvals: services.Approvals, executions: services.Executions,
+		verifications: services.Verifications, queries: services.Queries,
+	}
+	return services, nil
 }

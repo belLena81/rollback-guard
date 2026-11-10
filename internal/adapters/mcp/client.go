@@ -120,7 +120,10 @@ func callTool[In, Out any](ctx context.Context, caller Caller, name string, inpu
 	}
 	if result.StructuredContent == nil {
 		if result.IsError {
-			return zero, &domain.ValidationError{Field: "mcp_tool_input", Reason: "tool rejected request"}
+			// Every tool here answers with a structured result, including its
+			// rejections. An unstructured error comes from the SDK, possibly
+			// after the handler ran, so it is not a definitive rejection.
+			return zero, &toolCallError{code: CodeInternal, message: "MCP tool " + name + " returned an unstructured error"}
 		}
 		return zero, fmt.Errorf("MCP tool %s returned no structured result", name)
 	}
@@ -163,14 +166,16 @@ func (e *toolCallError) Transient() bool {
 
 func errorFromTool(toolError ToolError) error {
 	switch toolError.Code {
+	// Reasons are fixed here, never copied from the server's message: a
+	// validation error's text can reach an API response body.
 	case CodeInvalidArgument:
-		return &domain.ValidationError{Field: "mcp_tool_input", Reason: toolError.Message}
+		return &domain.ValidationError{Field: "mcp_tool_input", Reason: "tool rejected the request"}
 	case CodeTargetForbidden:
-		return &domain.ValidationError{Field: "mcp_target", Reason: toolError.Message}
+		return &domain.ValidationError{Field: "mcp_target", Reason: "target is not allowed"}
 	case CodeNotFound:
 		return &domain.NotFoundError{Resource: "MCP resource", ID: "requested"}
 	case CodeRevisionDrift, CodeApprovalMismatch:
-		return &domain.ApprovalMismatchError{Reason: toolError.Message}
+		return &domain.ApprovalMismatchError{Reason: "MCP server reported revision drift or an approval mismatch"}
 	case CodePolicyDenied:
 		return &domain.PolicyDenialError{Rule: "mcp_policy_validation"}
 	case CodeExpired:
