@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -66,10 +68,20 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	writeJSON(w, status, errorDTO{Error: code, Message: message, RequestID: requestID(r)})
 }
 
+// encodeFailureBody is the internal_error body sent when a response value
+// cannot be encoded. It is fixed so that writing it cannot fail to encode.
+const encodeFailureBody = `{"error":"internal_error","message":"internal server error"}` + "\n"
+
+// writeJSON encodes before writing the status line, so an encode failure is
+// reported as a 500 instead of a success status with a broken body.
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(value); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, encodeFailureBody)
+		return
 	}
+	w.WriteHeader(status)
+	_, _ = w.Write(body.Bytes())
 }
