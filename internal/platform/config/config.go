@@ -49,6 +49,7 @@ type Config struct {
 	Telemetry             TelemetryConfig
 	Resilience            ResilienceConfig
 	Session               SessionConfig
+	Auth                  AuthConfig
 }
 
 type InvestigatorConfig struct {
@@ -147,6 +148,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	auth, err := authEnv()
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		HTTPAddr:              stringEnv("HTTP_ADDR", DefaultOrchestratorAddr),
 		DatabaseURL:           db.url,
@@ -180,6 +185,7 @@ func Load() (Config, error) {
 		Telemetry:             telemetry,
 		Resilience:            resilience,
 		Session:               session,
+		Auth:                  auth,
 	}, nil
 }
 

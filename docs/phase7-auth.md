@@ -21,7 +21,7 @@ Contract: `DEVELOPMENT_PLAN.md` "Phase 7", `.agents/07-auth-identity-agent.md`. 
 
 ## Sessions (7.3)
 
-Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMiddleware`. `cmd/orchestrator` wiring (`AUTH_MODE`) arrives in 7.4.
+Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMiddleware`. `cmd/orchestrator` wires them in `AUTH_MODE=github` (see "GitHub login").
 
 - **Token.** 32 bytes from `ports.RandomSource` (crypto/rand), unpadded base64url (43 characters). Only `SHA-256(token bytes)` is stored. `Issue` returns the raw token once; nothing stores, logs or formats it. A disabled user gets no session.
 - **Carriers.** `Authorization: Bearer <token>` wins whenever an `Authorization` header is present; a bad header is not replaced by the cookie. Otherwise the `rollback_guard_session` cookie is used (two such cookies are rejected). The cookie is `HttpOnly`, `SameSite=Strict`, `Path=/`, expires with the session, and is `Secure` unless `SESSION_COOKIE_SECURE=false`. `ClearSessionCookie` clears it on logout. The middleware removes the `Authorization` header and the session cookie before calling any handler, public ones included.
@@ -34,6 +34,36 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 |---|---|---|
 | `SESSION_TTL` | `8h` | `5m` to `720h` (30 days) |
 | `SESSION_COOKIE_SECURE` | `true` | `true` or `false` (plain-HTTP local development only) |
+
+## GitHub login (7.4)
+
+**Production must set `AUTH_MODE=github`.** The default `local` injects the fixed `LOCAL_ACTOR_ID` on every request and exists only for local development. In `local` mode the login routes are not registered (404) and the GitHub variables are ignored without validation. In `github` mode every variable below is validated at startup and the orchestrator refuses to start on any problem (fail closed). It logs the auth mode at startup (no secrets), and logs a warning when `SESSION_COOKIE_SECURE=false`.
+
+- **Login** (`GET /v1/auth/github/login`). Draws a 256-bit `state` and a 256-bit PKCE verifier from crypto/rand and seals them with an expiry into the `rollback_guard_oauth_state` cookie. The seal is HMAC-SHA256 keyed by `AUTH_STATE_SECRET`. The cookie is `HttpOnly`, `SameSite=Lax` (the callback is a cross-site top-level redirect), `Path=/v1/auth/github`, lives 10 minutes, and is `Secure` per `SESSION_COOKIE_SECURE`. The response is `302` to GitHub with scopes `read:org user:email` and `code_challenge_method=S256`. There is no `return_to` parameter.
+- **Callback** (`GET /v1/auth/github/callback`). Clears the state cookie on every outcome, then performs these steps in order:
+  1. Verify the MAC and expiry, then compare `state` in constant time. On failure: `400`, and GitHub is not called.
+  2. Exchange the code with the verifier. A rejected or expired code returns `400`.
+  3. Read `/user` and `/user/orgs`, then discard the access token.
+  4. Check membership in `AUTH_GITHUB_ALLOWED_ORG` (case-insensitive). A non-member gets `403`, and no user row or session is written.
+  5. In one transaction, upsert the user and issue the session. A new user is `viewer`, or `administrator` when the login is in `AUTH_BOOTSTRAP_ADMINS`; that elevation applies only at creation. An existing user has login, email and organizations refreshed under an optimistic lock with bounded retry, and keeps the role. A disabled user gets `403`.
+  6. Respond `200` with the session body and session cookie, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+- **Failures.** Response bodies are fixed per class and never say which check failed. Only the class is logged: never the code, state, cookie, token, client secret or provider body. Any GitHub failure, including a timeout or an unexpected response, returns `502 bad_gateway`.
+- **Bounds.** Each GitHub request is limited by a 10 s timeout (`config.GitHubHTTPTimeout`) and a 1 MiB response limit; redirects are not followed. Organizations are read 100 per page for at most 5 pages. A member whose allowed organization is not within the first 500 is denied (fail closed).
+- **Resilience.** The token exchange is not retried, because an authorization code is single-use. A failed login is retried by the user starting again.
+- **Gap: rate limiting.** The login and callback endpoints are not rate-limited. Put them behind a proxy rate limit in any exposed deployment.
+- **Fake GitHub.** `internal/adapters/githuboauth/githubfake` serves the authorize, token, user and org endpoints for tests (7.6 reuses it).
+
+| Variable | Default | Rule (github mode) |
+|---|---|---|
+| `AUTH_MODE` | `local` | `local` or `github` |
+| `AUTH_GITHUB_CLIENT_ID` | none | required, printable ASCII, at most 128 characters |
+| `AUTH_GITHUB_CLIENT_SECRET` | none | required; never logged or rendered |
+| `AUTH_GITHUB_REDIRECT_URL` | none | required, absolute, HTTPS unless loopback, no credentials, query or fragment; must match the OAuth app |
+| `AUTH_GITHUB_ALLOWED_ORG` | none | required, GitHub organization name |
+| `AUTH_BOOTSTRAP_ADMINS` | none | required, comma-separated GitHub logins (at most 32) |
+| `AUTH_STATE_SECRET` | none | required, at least 32 bytes; never logged or rendered |
+| `AUTH_GITHUB_BASE_URL` | `https://github.com` | HTTPS unless loopback |
+| `AUTH_GITHUB_API_URL` | `https://api.github.com` | HTTPS unless loopback |
 
 ## Tasks
 

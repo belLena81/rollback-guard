@@ -12,6 +12,7 @@ import (
 	"time"
 
 	a2aadapter "github.com/belLena81/rollback-guard/internal/adapters/a2a"
+	"github.com/belLena81/rollback-guard/internal/adapters/githuboauth"
 	"github.com/belLena81/rollback-guard/internal/adapters/httpapi"
 	mcpadapter "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/adapters/postgres"
@@ -83,7 +84,11 @@ func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 		}
 		return clients.ping(ctx)
 	}
-	handler, err := buildHTTP(cfg, services, ready, tel, logger)
+	authStore, err := postgres.NewAuthUnitOfWork(pool)
+	if err != nil {
+		return fmt.Errorf("create auth unit of work: %w", err)
+	}
+	handler, err := buildHTTP(cfg, services, authStore, ready, tel, logger)
 	if err != nil {
 		return err
 	}
@@ -310,23 +315,90 @@ func buildCoordinator(
 func buildHTTP(
 	cfg config.Config,
 	services application.Services,
+	authStore ports.AuthUnitOfWork,
 	ready httpserver.ReadyCheck,
 	tel *telemetry.Provider,
 	logger *slog.Logger,
 ) (http.Handler, error) {
-	localActor, err := domain.NewActor(cfg.LocalActorID, domain.ActorHuman)
+	auth, loginOptions, err := buildAuth(cfg, authStore, logger)
 	if err != nil {
 		return nil, err
 	}
-	auth, err := httpserver.NewLocalAuthMiddleware(localActor)
-	if err != nil {
-		return nil, fmt.Errorf("create local auth middleware: %w", err)
-	}
-	api, err := httpapi.NewServer(services, logger, httpapi.WithRouteMiddleware(tel.Route), httpapi.WithMetricsHandler(tel.MetricsHandler()))
+	options := append([]httpapi.Option{httpapi.WithRouteMiddleware(tel.Route), httpapi.WithMetricsHandler(tel.MetricsHandler())}, loginOptions...)
+	api, err := httpapi.NewServer(services, logger, options...)
 	if err != nil {
 		return nil, fmt.Errorf("create api server: %w", err)
 	}
 	return api.Routes(ready, cfg.DBPingTimeout, auth), nil
+}
+
+// buildAuth selects request authentication by AUTH_MODE. Local mode injects
+// LOCAL_ACTOR_ID and registers no login routes (they answer 404); github mode
+// requires a server-side session issued by the GitHub OAuth login.
+func buildAuth(cfg config.Config, authStore ports.AuthUnitOfWork, logger *slog.Logger) (httpserver.AuthMiddleware, []httpapi.Option, error) {
+	if cfg.Session.CookieSecure {
+		logger.Info("authentication configured", "auth_mode", string(cfg.Auth.Mode))
+	} else {
+		logger.Warn("authentication configured with SESSION_COOKIE_SECURE=false; cookies are sent over plain HTTP", "auth_mode", string(cfg.Auth.Mode))
+	}
+	switch cfg.Auth.Mode {
+	case config.AuthModeLocal:
+		localActor, err := domain.NewActor(cfg.LocalActorID, domain.ActorHuman)
+		if err != nil {
+			return nil, nil, err
+		}
+		auth, err := httpserver.NewLocalAuthMiddleware(localActor)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create local auth middleware: %w", err)
+		}
+		return auth, nil, nil
+	case config.AuthModeGitHub:
+		return buildGitHubAuth(cfg, authStore, logger)
+	default:
+		return nil, nil, fmt.Errorf("unsupported auth mode %q", cfg.Auth.Mode)
+	}
+}
+
+func buildGitHubAuth(cfg config.Config, authStore ports.AuthUnitOfWork, logger *slog.Logger) (httpserver.AuthMiddleware, []httpapi.Option, error) {
+	github := cfg.Auth.GitHub
+	ids := &runtime.IDGenerator{}
+	// Session tokens, login state and PKCE verifiers come from crypto/rand.
+	random := runtime.RandomSource{}
+	sessions, err := application.NewSessionService(
+		application.SessionDependencies{UnitOfWork: authStore, Clock: runtime.Clock{}, IDGenerator: ids, Random: random},
+		cfg.Session.TTL,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create session service: %w", err)
+	}
+	// The token exchange is not retried: an authorization code is single-use.
+	provider, err := githuboauth.New(githuboauth.Config{
+		ClientID:     github.ClientID,
+		ClientSecret: github.ClientSecret.Reveal(),
+		RedirectURL:  github.RedirectURL,
+		BaseURL:      github.BaseURL,
+		APIURL:       github.APIURL,
+		Timeout:      github.HTTPTimeout,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("create github identity provider: %w", err)
+	}
+	login, err := application.NewLoginService(
+		application.LoginDependencies{Sessions: sessions, UnitOfWork: authStore, Clock: runtime.Clock{}, IDGenerator: ids, Random: random, Provider: provider},
+		application.LoginPolicy{
+			AllowedOrganization: github.AllowedOrganization,
+			BootstrapAdmins:     github.BootstrapAdmins,
+			StateKey:            []byte(github.StateSecret.Reveal()),
+		},
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create login service: %w", err)
+	}
+	auth, err := httpserver.NewSessionAuthMiddleware(sessions, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create session auth middleware: %w", err)
+	}
+	return auth, []httpapi.Option{httpapi.WithGitHubLogin(login, cfg.Session.CookieSecure)}, nil
 }
 
 // coordinatorRunner is the background worker served next to the API.

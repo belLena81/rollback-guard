@@ -30,6 +30,8 @@ func wiringConfig(t *testing.T, read, write, observability *mcptest.Server) conf
 	cfg.RuleMinimumConfidence, cfg.RuleCorrelationWindow = 0.8, 10*time.Minute
 	cfg.AllowedTargets = []domain.DeploymentTarget{target}
 	cfg.MetricsWindow = 5 * time.Minute
+	cfg.Session = config.SessionConfig{TTL: time.Hour, CookieSecure: true}
+	cfg.Auth = config.AuthConfig{Mode: config.AuthModeLocal}
 	return cfg
 }
 
@@ -79,7 +81,7 @@ func TestBuildServicesAndHTTPWireTheAPI(t *testing.T) {
 		}
 		return clients.ping(ctx)
 	}
-	handler, err := buildHTTP(cfg, services, ready, tel, logger)
+	handler, err := buildHTTP(cfg, services, memory.NewAuthUnitOfWork(), ready, tel, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

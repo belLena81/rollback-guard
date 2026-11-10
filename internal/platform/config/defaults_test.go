@@ -23,6 +23,8 @@ var everyVariable = []string{
 	"DIAGNOSIS_STRATEGY", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "LLM_TIMEOUT", "LLM_MAX_OUTPUT_TOKENS",
 	"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME", "OTEL_TRACES_SAMPLE_RATIO", "TELEMETRY_SHUTDOWN_TIMEOUT", "LOG_LEVEL",
 	"SESSION_TTL", "SESSION_COOKIE_SECURE",
+	"AUTH_MODE", "AUTH_GITHUB_CLIENT_ID", "AUTH_GITHUB_CLIENT_SECRET", "AUTH_GITHUB_REDIRECT_URL", "AUTH_GITHUB_ALLOWED_ORG",
+	"AUTH_BOOTSTRAP_ADMINS", "AUTH_STATE_SECRET", "AUTH_GITHUB_BASE_URL", "AUTH_GITHUB_API_URL",
 }
 
 const testDatabaseURL = "postgres://rollback@database/rollback_guard"
@@ -100,6 +102,7 @@ func TestOrchestratorDefaults(t *testing.T) {
 		Telemetry:             defaultTelemetry("orchestrator"),
 		Resilience:            defaultResilience(),
 		Session:               SessionConfig{TTL: 8 * time.Hour, CookieSecure: true},
+		Auth:                  AuthConfig{Mode: AuthModeLocal},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Load() defaults:\n got %+v\nwant %+v", got, want)
