@@ -211,22 +211,6 @@ func failureOfState(state a2a.TaskState) error {
 	}
 }
 
-func (g *Gateway) Get(ctx context.Context, ref domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	task, err := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
-	if err != nil {
-		return ports.InvestigationTaskSnapshot{}, err
-	}
-	state, err := mapTaskState(task.Status.State)
-	if err != nil {
-		return ports.InvestigationTaskSnapshot{}, err
-	}
-	snapshot := ports.InvestigationTaskSnapshot{Ref: ref, State: state}
-	if result, err := resultFromArtifacts(task.Artifacts); err == nil {
-		snapshot.Result = &result
-	}
-	return snapshot, nil
-}
-
 func (g *Gateway) Cancel(ctx context.Context, ref domain.InvestigationTaskRef) error {
 	_, err := g.client.CancelTask(extensionContext(ctx), &a2a.CancelTaskRequest{ID: a2a.TaskID(ref.TaskID)})
 	if err != nil {
@@ -283,28 +267,6 @@ func resultFromParts(parts a2a.ContentParts) (ports.InvestigationResult, error) 
 		return ports.InvestigationResult{}, fmt.Errorf("invalid result artifact")
 	}
 	return decodeResult(parts[0].Data())
-}
-
-// mapTaskState fails closed on states the Investigator never reports
-// (interactive or unspecified) instead of treating them as still submitted.
-func mapTaskState(state a2a.TaskState) (domain.InvestigationTaskState, error) {
-	switch state {
-	case a2a.TaskStateSubmitted:
-		return domain.InvestigationTaskSubmitted, nil
-	case a2a.TaskStateWorking:
-		return domain.InvestigationTaskWorking, nil
-	case a2a.TaskStateCompleted:
-		return domain.InvestigationTaskCompleted, nil
-	case a2a.TaskStateCanceled:
-		return domain.InvestigationTaskCanceled, nil
-	case a2a.TaskStateFailed, a2a.TaskStateRejected:
-		return domain.InvestigationTaskFailed, nil
-	case a2a.TaskStateUnspecified, a2a.TaskStateAuthRequired, a2a.TaskStateInputRequired:
-		return 0, fmt.Errorf("unsupported investigation task state")
-	default:
-		// The remote value is not echoed: it is untrusted and unbounded.
-		return 0, fmt.Errorf("unknown investigation task state")
-	}
 }
 
 var _ ports.InvestigationGateway = (*Gateway)(nil)

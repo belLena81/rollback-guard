@@ -78,28 +78,37 @@ func newApproveHarness(t *testing.T, options harnessOptions) *approveHarness {
 	executor := &spyExecutor{next: infra, clock: clock}
 	system := mustActor(t, "rollback-guardian", domain.ActorSystem)
 	services, err := NewServices(Dependencies{
-		UnitOfWork: unitOfWork, Inspector: inspector, Metrics: infra, Diagnoser: diagnoser, Executor: executor,
+		UnitOfWork: unitOfWork, Inspector: inspector, Metrics: infra, Executor: executor,
 		RollbackPolicy: policy, ApprovalPolicy: approvalPolicy, Clock: clock, IDGenerator: ids,
 	}, WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: testApprovalTTL, CleanupTimeout: time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	incident, err := services.Incidents.CreateIncident(ctx, CreateIncidentCommand{Target: target, Symptom: symptom, Actor: system})
+	runner, err := NewInvestigationRunner(inspector, infra, diagnoser, clock, ids)
 	if err != nil {
 		t.Fatal(err)
 	}
-	incident, err = services.Investigations.Investigate(ctx, incident.ID())
+	incident, err := services.Incidents.CreateIncidentAsync(ctx, CreateIncidentCommand{Target: target, Symptom: symptom, Actor: system})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Investigate(ctx, ports.InvestigationRequest{Incident: incident})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incident, err = services.Investigations.Complete(ctx, incident.ID(), result)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if incident.Status() != domain.StatusAwaitingApproval {
 		t.Fatalf("incident status = %s, want awaiting_approval", incident.Status())
 	}
-	proposal, err := services.Queries.GetProposal(ctx, incident.ID())
-	if err != nil {
-		t.Fatal(err)
+	summary, err := services.Queries.GetIncidentSummary(ctx, incident.ID())
+	if err != nil || summary.Proposal == nil {
+		t.Fatalf("proposal after investigation = %v, %v", summary.Proposal, err)
 	}
+	proposal := *summary.Proposal
 	return &approveHarness{
 		services: services, uow: uow, clock: clock, infra: infra, inspector: inspector, executor: executor,
 		incident: incident.ID(), proposal: proposal, human: mustActor(t, "alice", domain.ActorHuman), faults: faults, t: t,

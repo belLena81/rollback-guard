@@ -63,7 +63,6 @@ type InvestigatorConfig struct {
 	MetricsWindow         time.Duration
 	RuleCorrelationWindow time.Duration
 	DiagnosisStrategy     domain.DiagnosisStrategy
-	LLMProvider           LLMProvider
 	LLMBaseURL            string
 	LLMModel              string
 	LLMAPIKey             string
@@ -229,7 +228,6 @@ func LoadInvestigator() (InvestigatorConfig, error) {
 		MetricsWindow:         metricsWindow,
 		RuleCorrelationWindow: ruleWindow,
 		DiagnosisStrategy:     strategy,
-		LLMProvider:           llm.provider,
 		LLMBaseURL:            llm.baseURL,
 		LLMModel:              llm.model,
 		LLMAPIKey:             llm.apiKey,

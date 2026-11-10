@@ -81,19 +81,6 @@ func (s *QueryService) GetIncidentSummary(ctx context.Context, incidentID domain
 	return summary, nil
 }
 
-func (s *QueryService) GetProposal(ctx context.Context, incidentID domain.IncidentID) (domain.RollbackProposal, error) {
-	var proposal domain.RollbackProposal
-	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		var err error
-		proposal, err = repositories.Proposals().GetByIncident(incidentID)
-		return err
-	})
-	if err != nil {
-		return domain.RollbackProposal{}, fmt.Errorf("get proposal: %w", err)
-	}
-	return proposal, nil
-}
-
 func (s *QueryService) ListEvents(ctx context.Context, incidentID domain.IncidentID) ([]domain.OperationEvent, error) {
 	var events []domain.OperationEvent
 	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {

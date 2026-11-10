@@ -131,12 +131,6 @@ func (g gateway) Watch(ctx context.Context, ref domain.InvestigationTaskRef, pro
 	})
 }
 
-func (g gateway) Get(ctx context.Context, ref domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	return Call(ctx, g.protector, func(ctx context.Context) (ports.InvestigationTaskSnapshot, error) {
-		return g.next.Get(ctx, ref)
-	})
-}
-
 func (g gateway) Cancel(ctx context.Context, ref domain.InvestigationTaskRef) error {
 	_, err := Call(ctx, g.protector, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, g.next.Cancel(ctx, ref)

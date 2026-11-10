@@ -332,7 +332,7 @@ func asyncHarness(t *testing.T) (Services, *InvestigationCoordinator, domain.Dep
 		t.Fatal(err)
 	}
 	uow := memory.NewUnitOfWork()
-	services, err := NewServices(Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Diagnoser: diagnoser, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids}, WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Second, SystemActor: system})
+	services, err := NewServices(Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids}, WorkflowConfig{ProposalTTL: time.Minute, ApprovalTTL: time.Minute, CleanupTimeout: time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,10 +374,6 @@ func (g *blockedWatchGateway) Watch(ctx context.Context, _ domain.InvestigationT
 	return ports.InvestigationResult{}, ctx.Err()
 }
 
-func (g *blockedWatchGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	return ports.InvestigationTaskSnapshot{}, nil
-}
-
 func (g *blockedWatchGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
 	g.cancelCalls.Add(1)
 	return nil
@@ -400,10 +396,6 @@ func (g *progressAfterCancelGateway) Watch(_ context.Context, _ domain.Investiga
 	err := progress(domain.InvestigationStageMetrics)
 	g.progressRejected.Store(err != nil)
 	return ports.InvestigationResult{}, err
-}
-
-func (g *progressAfterCancelGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	return ports.InvestigationTaskSnapshot{}, nil
 }
 
 func (g *progressAfterCancelGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
@@ -435,10 +427,6 @@ func (g *lateProgressGateway) Watch(ctx context.Context, _ domain.InvestigationT
 	return ports.InvestigationResult{}, ctx.Err()
 }
 
-func (g *lateProgressGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	return ports.InvestigationTaskSnapshot{}, nil
-}
-
 func (g *lateProgressGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
 	return nil
 }
@@ -452,10 +440,6 @@ func (g *blockedSubmitGateway) Submit(context.Context, ports.InvestigationSubmis
 func (g *blockedSubmitGateway) Watch(context.Context, domain.InvestigationTaskRef, func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	g.watchCalls.Add(1)
 	return ports.InvestigationResult{}, errors.New("watch must not be called")
-}
-
-func (g *blockedSubmitGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	return ports.InvestigationTaskSnapshot{}, nil
 }
 
 func (g *blockedSubmitGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
@@ -507,10 +491,6 @@ func (g *localInvestigationGateway) Watch(ctx context.Context, ref domain.Invest
 	result, err := g.investigator.Investigate(ctx, ports.InvestigationRequest{Incident: g.request.Incident})
 	g.result = result
 	return result, err
-}
-
-func (g *localInvestigationGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	return ports.InvestigationTaskSnapshot{Ref: domain.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, State: domain.InvestigationTaskCompleted, Stage: domain.InvestigationStageFinalizing, Result: &g.result}, nil
 }
 
 func (g *localInvestigationGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {

@@ -16,6 +16,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/fake"
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/application/applicationtest"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 	"github.com/belLena81/rollback-guard/internal/testkit"
@@ -300,7 +301,7 @@ func newTestHandlerWithInfrastructure(t *testing.T, configure func(*fake.Infrast
 
 type synchronousInvestigationHandler struct {
 	next   http.Handler
-	server *Server
+	server *testServer
 }
 
 func (h synchronousInvestigationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -319,7 +320,7 @@ func (h synchronousInvestigationHandler) ServeHTTP(w http.ResponseWriter, r *htt
 		copyRecordedResponse(w, recorder)
 		return
 	}
-	if _, err := h.server.services.Investigations.Investigate(r.Context(), domain.IncidentID(accepted.Incident.ID)); err != nil {
+	if _, err := h.server.flow.Investigate(r.Context(), domain.IncidentID(accepted.Incident.ID)); err != nil {
 		copyRecordedResponse(w, recorder)
 		return
 	}
@@ -352,7 +353,7 @@ func newUnauthenticatedTestHandler(t *testing.T) http.Handler {
 	return newTestServer(t, nil).Routes(nil, 0, nil)
 }
 
-func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *Server {
+func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *testServer {
 	t.Helper()
 	now := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
 	clock := testkit.NewClock(now)
@@ -387,6 +388,7 @@ func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *Server {
 	if configure != nil {
 		configure(infrastructure)
 	}
+	uow := memory.NewUnitOfWork()
 	diagnoser, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: 10 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
@@ -400,10 +402,9 @@ func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *Server {
 		t.Fatal(err)
 	}
 	services, err := application.NewServices(application.Dependencies{
-		UnitOfWork:     memory.NewUnitOfWork(),
+		UnitOfWork:     uow,
 		Inspector:      infrastructure,
 		Metrics:        infrastructure,
-		Diagnoser:      diagnoser,
 		Executor:       infrastructure,
 		RollbackPolicy: policy,
 		ApprovalPolicy: domain.ApprovalAuthorizer{},
@@ -417,7 +418,18 @@ func newTestServer(t *testing.T, configure func(*fake.Infrastructure)) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return server
+	runner, err := application.NewInvestigationRunner(infrastructure, infrastructure, diagnoser, clock, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow := applicationtest.Flow{Services: services, UnitOfWork: uow, Clock: clock, IDs: ids, Runner: runner, SystemActor: systemActor, CleanupTimeout: 5 * time.Second}
+	return &testServer{Server: server, flow: flow}
+}
+
+// testServer is a Server whose investigations a test can run in process.
+type testServer struct {
+	*Server
+	flow applicationtest.Flow
 }
 
 func createHTTPIncident(t *testing.T, handler http.Handler) incidentSummaryDTO {

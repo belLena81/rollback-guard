@@ -105,18 +105,9 @@ type InvestigationSubmission struct {
 	RequestHash    string
 }
 
-type InvestigationTaskSnapshot struct {
-	Ref         domain.InvestigationTaskRef
-	State       domain.InvestigationTaskState
-	Stage       domain.InvestigationStage
-	Result      *InvestigationResult
-	FailureCode string
-}
-
 type InvestigationGateway interface {
 	Submit(context.Context, InvestigationSubmission) (domain.InvestigationTaskRef, error)
 	Watch(context.Context, domain.InvestigationTaskRef, func(domain.InvestigationStage) error) (InvestigationResult, error)
-	Get(context.Context, domain.InvestigationTaskRef) (InvestigationTaskSnapshot, error)
 	Cancel(context.Context, domain.InvestigationTaskRef) error
 }
 type RollbackExecutor interface {

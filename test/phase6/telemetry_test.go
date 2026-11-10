@@ -107,7 +107,7 @@ func TestTelemetryLinksRESTThroughA2AAndMCP(t *testing.T) {
 	policy := must(domain.NewEligibilityPolicy(domain.EligibilityPolicyConfig{MinimumConfidence: 0.8, CorrelationWindow: 10 * time.Minute, AllowedTargets: []domain.DeploymentTarget{target}}))
 	system := must(domain.NewActor("rollback-guardian", domain.ActorSystem))
 	human := must(domain.NewActor("local-admin", domain.ActorHuman))
-	services, err := application.NewServices(application.Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Diagnoser: rules, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: runtime.Clock{}, IDGenerator: ids, Tracer: orchestrator},
+	services, err := application.NewServices(application.Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: runtime.Clock{}, IDGenerator: ids, Tracer: orchestrator},
 		application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)

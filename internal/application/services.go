@@ -12,7 +12,6 @@ type Dependencies struct {
 	UnitOfWork     ports.UnitOfWork
 	Inspector      ports.DeploymentInspector
 	Metrics        ports.MetricsPort
-	Diagnoser      ports.Diagnoser
 	Executor       ports.RollbackExecutor
 	RollbackPolicy ports.RollbackPolicy
 	ApprovalPolicy ports.ApprovalPolicy
@@ -63,15 +62,11 @@ type Services struct {
 }
 
 func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, error) {
-	if dependencies.UnitOfWork == nil || dependencies.Inspector == nil || dependencies.Metrics == nil || dependencies.Diagnoser == nil || dependencies.Executor == nil || dependencies.RollbackPolicy == nil || dependencies.ApprovalPolicy == nil || dependencies.Clock == nil || dependencies.IDGenerator == nil {
+	if dependencies.UnitOfWork == nil || dependencies.Inspector == nil || dependencies.Metrics == nil || dependencies.Executor == nil || dependencies.RollbackPolicy == nil || dependencies.ApprovalPolicy == nil || dependencies.Clock == nil || dependencies.IDGenerator == nil {
 		return Services{}, fmt.Errorf("all service dependencies are required")
 	}
 	if err := config.validate(); err != nil {
 		return Services{}, fmt.Errorf("validate workflow config: %w", err)
-	}
-	investigator, err := NewInvestigationRunner(dependencies.Inspector, dependencies.Metrics, dependencies.Diagnoser, dependencies.Clock, dependencies.IDGenerator)
-	if err != nil {
-		return Services{}, err
 	}
 	tracer := dependencies.Tracer
 	if tracer == nil {
@@ -82,7 +77,7 @@ func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, er
 	services := Services{
 		Incidents: &IncidentService{audit: trail, uow: uow, clock: clock, tracer: tracer},
 		Investigations: &InvestigationService{
-			audit: trail, uow: uow, clock: clock, investigator: investigator,
+			audit: trail, uow: uow, clock: clock,
 			rollbackPolicy: dependencies.RollbackPolicy, proposalTTL: config.ProposalTTL, cleanupTimeout: config.CleanupTimeout,
 		},
 		Approvals: &ApprovalService{audit: trail, uow: uow, clock: clock, approvalTTL: config.ApprovalTTL},

@@ -13,6 +13,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/fake"
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/application/applicationtest"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
@@ -250,19 +251,24 @@ func runLifecycle(t *testing.T, provider *telemetry.Provider) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	services, err := application.NewServices(application.Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Diagnoser: diagnoser, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids, Tracer: provider}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: time.Second, SystemActor: system})
+	services, err := application.NewServices(application.Dependencies{UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids, Tracer: provider}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	resolved, err := services.Incidents.CreateIncident(ctx, application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: human})
+	runner, err := application.NewInvestigationRunner(infra, infra, diagnoser, clock, ids)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := services.Investigations.Investigate(ctx, resolved.ID()); err != nil {
+	flow := applicationtest.Flow{Services: services, UnitOfWork: uow, Clock: clock, IDs: ids, Runner: runner, SystemActor: system, CleanupTimeout: time.Second}
+	resolved, err := flow.CreateIncident(ctx, application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: human})
+	if err != nil {
 		t.Fatal(err)
 	}
-	proposal, err := services.Queries.GetProposal(ctx, resolved.ID())
+	if _, err := flow.Investigate(ctx, resolved.ID()); err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := flow.Proposal(ctx, resolved.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,10 +311,6 @@ func (stubGateway) Submit(context.Context, ports.InvestigationSubmission) (domai
 
 func (stubGateway) Watch(context.Context, domain.InvestigationTaskRef, func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
 	return ports.InvestigationResult{}, context.DeadlineExceeded
-}
-
-func (stubGateway) Get(context.Context, domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	return ports.InvestigationTaskSnapshot{}, nil
 }
 
 func (stubGateway) Cancel(context.Context, domain.InvestigationTaskRef) error { return nil }

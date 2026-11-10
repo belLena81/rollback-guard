@@ -41,13 +41,6 @@ func (g observedGateway) Watch(ctx context.Context, ref domain.InvestigationTask
 	return result, err
 }
 
-func (g observedGateway) Get(ctx context.Context, ref domain.InvestigationTaskRef) (ports.InvestigationTaskSnapshot, error) {
-	ctx, finish := g.provider.observeA2A(ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID}), "get")
-	snapshot, err := g.next.Get(ctx, ref)
-	finish(ctx, err)
-	return snapshot, err
-}
-
 func (g observedGateway) Cancel(ctx context.Context, ref domain.InvestigationTaskRef) error {
 	ctx, finish := g.provider.observeA2A(ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID}), "cancel")
 	err := g.next.Cancel(ctx, ref)

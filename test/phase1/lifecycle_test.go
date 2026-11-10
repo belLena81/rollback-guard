@@ -9,6 +9,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/fake"
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/application/applicationtest"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/belLena81/rollback-guard/internal/testkit"
@@ -78,9 +79,10 @@ func runCompleteRollbackLifecycle(t *testing.T, factory diagnosisFactory, effect
 	if err != nil {
 		t.Fatal(err)
 	}
+	uow := memory.NewUnitOfWork()
 	services, err := application.NewServices(application.Dependencies{
-		UnitOfWork: memory.NewUnitOfWork(), Inspector: infrastructure, Metrics: infrastructure,
-		Diagnoser: diagnoser, Executor: infrastructure, RollbackPolicy: policy,
+		UnitOfWork: uow, Inspector: infrastructure, Metrics: infrastructure,
+		Executor: infrastructure, RollbackPolicy: policy,
 		ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids,
 	}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: systemActor})
 	if err != nil {
@@ -91,11 +93,16 @@ func runCompleteRollbackLifecycle(t *testing.T, factory diagnosisFactory, effect
 		t.Fatal(err)
 	}
 
-	incident, err := services.Incidents.CreateIncident(ctx, application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: human})
+	runner, err := application.NewInvestigationRunner(infrastructure, infrastructure, diagnoser, clock, ids)
 	if err != nil {
 		t.Fatal(err)
 	}
-	incident, err = services.Investigations.Investigate(ctx, incident.ID())
+	flow := applicationtest.Flow{Services: services, UnitOfWork: uow, Clock: clock, IDs: ids, Runner: runner, SystemActor: systemActor, CleanupTimeout: 5 * time.Second}
+	incident, err := flow.CreateIncident(ctx, application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: human})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incident, err = flow.Investigate(ctx, incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +116,7 @@ func runCompleteRollbackLifecycle(t *testing.T, factory diagnosisFactory, effect
 	if summary.Conclusion == nil || summary.Conclusion.Strategy() != effective || summary.Conclusion.Provenance().RequestedStrategy != requested || summary.Conclusion.Provenance().FallbackReason != fallback {
 		t.Fatalf("diagnosis path = %#v, want effective/requested/fallback %s/%s/%s", summary.Conclusion, effective, requested, fallback)
 	}
-	proposal, err := services.Queries.GetProposal(ctx, incident.ID())
+	proposal, err := flow.Proposal(ctx, incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}

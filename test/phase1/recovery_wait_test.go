@@ -313,7 +313,7 @@ func TestWorkflowConfigRejectsInvalidRecoveryWait(t *testing.T) {
 			}
 			h := newHarness(t, nil)
 			_, err = application.NewServices(application.Dependencies{
-				UnitOfWork: h.uow, Inspector: h.infrastructure, Metrics: h.infrastructure, Diagnoser: noopDiagnoser{},
+				UnitOfWork: h.uow, Inspector: h.infrastructure, Metrics: h.infrastructure,
 				Executor: h.infrastructure, RollbackPolicy: domain.EligibilityPolicy{}, ApprovalPolicy: domain.ApprovalAuthorizer{},
 				Clock: h.clock, IDGenerator: idGenerator{},
 			}, application.WorkflowConfig{
@@ -325,12 +325,6 @@ func TestWorkflowConfigRejectsInvalidRecoveryWait(t *testing.T) {
 			}
 		})
 	}
-}
-
-type noopDiagnoser struct{}
-
-func (noopDiagnoser) Diagnose(context.Context, ports.InvestigationInput) (domain.InvestigationConclusion, error) {
-	return domain.InvestigationConclusion{}, errors.New("unused")
 }
 
 type idGenerator struct{}

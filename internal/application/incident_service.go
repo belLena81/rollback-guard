@@ -24,24 +24,6 @@ type CreateIncidentCommand struct {
 	Actor   domain.Actor
 }
 
-func (s *IncidentService) CreateIncident(ctx context.Context, command CreateIncidentCommand) (domain.Incident, error) {
-	now := s.clock.Now()
-	incident, err := domain.NewIncident(domain.IncidentID(s.ids.NewID("incident")), command.Target, command.Symptom, now)
-	if err != nil {
-		return domain.Incident{}, err
-	}
-	err = s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		if err := repositories.Incidents().Create(incident); err != nil {
-			return err
-		}
-		return s.appendEvents(ctx, repositories, incident.ID(), now, incidentCreated(command))
-	})
-	if err != nil {
-		return domain.Incident{}, fmt.Errorf("create incident transaction: %w", err)
-	}
-	return incident, nil
-}
-
 func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command CreateIncidentCommand) (domain.Incident, error) {
 	now := s.clock.Now()
 	incident, err := domain.NewIncident(domain.IncidentID(s.ids.NewID("incident")), command.Target, command.Symptom, now)

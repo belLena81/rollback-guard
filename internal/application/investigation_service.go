@@ -19,7 +19,6 @@ type InvestigationService struct {
 	audit
 	uow            ports.UnitOfWork
 	clock          ports.Clock
-	investigator   ports.Investigator
 	rollbackPolicy ports.RollbackPolicy
 	proposalTTL    time.Duration
 	cleanupTimeout time.Duration
@@ -48,19 +47,6 @@ func InvestigationRequestHash(incident domain.Incident) string {
 
 func canonicalInvestigationTime(value time.Time) string {
 	return value.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
-}
-
-func (s *InvestigationService) Investigate(ctx context.Context, incidentID domain.IncidentID) (domain.Incident, error) {
-	incident, err := s.beginOrResumeInvestigation(ctx, incidentID)
-	if err != nil {
-		return domain.Incident{}, err
-	}
-
-	result, err := s.investigator.Investigate(ctx, ports.InvestigationRequest{Incident: incident})
-	if err != nil {
-		return domain.Incident{}, s.failAfterExternalError(ctx, incidentID, err)
-	}
-	return s.complete(ctx, incident, result)
 }
 
 func (s *InvestigationService) Complete(ctx context.Context, incidentID domain.IncidentID, result ports.InvestigationResult) (domain.Incident, error) {
@@ -226,28 +212,6 @@ func (s *InvestigationService) loadInvestigatingIncident(ctx context.Context, in
 		return domain.Incident{}, &domain.IllegalTransitionError{From: incident.Status(), To: domain.StatusAwaitingApproval}
 	}
 	return incident, nil
-}
-
-func (s *InvestigationService) beginOrResumeInvestigation(ctx context.Context, incidentID domain.IncidentID) (domain.Incident, error) {
-	now := s.clock.Now()
-	var result domain.Incident
-	err := s.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
-		incident, err := repositories.Incidents().Get(incidentID)
-		if err != nil {
-			return err
-		}
-		if incident.Status() == domain.StatusInvestigating {
-			result = incident
-			return nil
-		}
-
-		result, err = s.transition(ctx, repositories, incident, now, (*domain.Incident).StartInvestigation, statusChanged(s.systemActor))
-		return err
-	})
-	if err != nil {
-		return domain.Incident{}, fmt.Errorf("begin investigation: %w", err)
-	}
-	return result, nil
 }
 
 func validateEvidenceReferences(incidentID domain.IncidentID, conclusion domain.InvestigationConclusion, evidence []domain.Evidence) error {

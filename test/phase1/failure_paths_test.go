@@ -13,6 +13,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/fake"
 	"github.com/belLena81/rollback-guard/internal/adapters/memory"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/application/applicationtest"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/belLena81/rollback-guard/internal/testkit"
@@ -23,14 +24,14 @@ import (
 func TestInvestigationProposesRollbackForCompletedRolloutWithBreachedMetric(t *testing.T) {
 	h := newHarness(t, nil)
 	h.infrastructure.SetHealthy(true)
-	incident, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	incident, err := h.flow.Investigate(context.Background(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if incident.Status() != domain.StatusAwaitingApproval {
 		t.Fatalf("status = %s, want awaiting_approval", incident.Status())
 	}
-	if _, err := h.services.Queries.GetProposal(context.Background(), incident.ID()); err != nil {
+	if _, err := h.flow.Proposal(context.Background(), incident.ID()); err != nil {
 		t.Fatalf("GetProposal() error = %v, want a proposal", err)
 	}
 }
@@ -41,14 +42,14 @@ func TestInvestigationDeclinesWhenPolicyFails(t *testing.T) {
 	h := newHarness(t, nil)
 	h.infrastructure.SetHealthy(false)
 	h.infrastructure.SetRecoveryMetric(0.01)
-	incident, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	incident, err := h.flow.Investigate(context.Background(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if incident.Status() != domain.StatusDeclined {
 		t.Fatalf("status = %s, want declined", incident.Status())
 	}
-	_, err = h.services.Queries.GetProposal(context.Background(), incident.ID())
+	_, err = h.flow.Proposal(context.Background(), incident.ID())
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("GetProposal() error = %v, want not found", err)
 	}
@@ -69,7 +70,7 @@ func TestInvestigationDeclinesWhenPolicyFails(t *testing.T) {
 
 func TestInvalidEvidenceReferenceFailsIncident(t *testing.T) {
 	h := newHarness(t, invalidReferenceDiagnoser{})
-	_, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	_, err := h.flow.Investigate(context.Background(), h.incident.ID())
 	if !errors.Is(err, domain.ErrInvalidEvidenceReference) {
 		t.Fatalf("Investigate() error = %v, want invalid evidence reference", err)
 	}
@@ -79,7 +80,7 @@ func TestInvalidEvidenceReferenceFailsIncident(t *testing.T) {
 
 func TestForeignIncidentConclusionFailsBeforePolicyOrPersistence(t *testing.T) {
 	h := newHarness(t, foreignIncidentDiagnoser{})
-	_, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	_, err := h.flow.Investigate(context.Background(), h.incident.ID())
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("Investigate() error = %v, want validation error", err)
 	}
@@ -119,7 +120,7 @@ func TestCanceledInvestigationStillFailsIncidentAtomically(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			h := newHarnessWithOverrides(t, test.overrides(cancel))
-			_, err := h.services.Investigations.Investigate(ctx, h.incident.ID())
+			_, err := h.flow.Investigate(ctx, h.incident.ID())
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("Investigate() error = %v, want context canceled", err)
 			}
@@ -143,7 +144,7 @@ func TestInvestigationAuditRedactsAdapterFailures(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarnessWithOverrides(t, test.overrides)
-			_, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+			_, err := h.flow.Investigate(context.Background(), h.incident.ID())
 			if err == nil || !strings.Contains(err.Error(), sensitiveDetail) {
 				t.Fatalf("Investigate() error = %v, want original adapter failure", err)
 			}
@@ -169,13 +170,13 @@ func TestInvestigationRetryAfterFinalPersistenceFailure(t *testing.T) {
 		},
 	})
 
-	_, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	_, err := h.flow.Investigate(context.Background(), h.incident.ID())
 	if !errors.Is(err, persistenceErr) {
 		t.Fatalf("first Investigate() error = %v, want persistence failure", err)
 	}
 	assertIncidentStatus(t, h, domain.StatusInvestigating)
 
-	incident, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	incident, err := h.flow.Investigate(context.Background(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,6 +565,7 @@ func TestVerificationAdapterFailureLeavesIncidentRetryable(t *testing.T) {
 
 type phaseHarness struct {
 	services       application.Services
+	flow           applicationtest.Flow
 	infrastructure *fake.Infrastructure
 	uow            *memory.UnitOfWork
 	clock          *testkit.Clock
@@ -647,7 +649,7 @@ func newHarnessWithOverrides(t *testing.T, overrides harnessOverrides) phaseHarn
 		t.Fatal(err)
 	}
 	services, err := application.NewServices(application.Dependencies{
-		UnitOfWork: selectedUnitOfWork, Inspector: selectedInspector, Metrics: selectedMetrics, Diagnoser: selectedDiagnoser,
+		UnitOfWork: selectedUnitOfWork, Inspector: selectedInspector, Metrics: selectedMetrics,
 		Executor: selectedExecutor, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids,
 	}, application.WorkflowConfig{
 		ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: systemActor,
@@ -656,21 +658,26 @@ func newHarnessWithOverrides(t *testing.T, overrides harnessOverrides) phaseHarn
 	if err != nil {
 		t.Fatal(err)
 	}
+	runner, err := application.NewInvestigationRunner(selectedInspector, selectedMetrics, selectedDiagnoser, clock, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow := applicationtest.Flow{Services: services, UnitOfWork: selectedUnitOfWork, Clock: clock, IDs: ids, Runner: runner, SystemActor: systemActor, CleanupTimeout: 5 * time.Second}
 	human, err := domain.NewActor("local-admin", domain.ActorHuman)
 	if err != nil {
 		t.Fatal(err)
 	}
-	incident, err := services.Incidents.CreateIncident(context.Background(), application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: human})
+	incident, err := flow.CreateIncident(context.Background(), application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: human})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return phaseHarness{services: services, infrastructure: infrastructure, uow: uow, clock: clock, incident: incident, human: human}
+	return phaseHarness{services: services, flow: flow, infrastructure: infrastructure, uow: uow, clock: clock, incident: incident, human: human}
 }
 
 func awaitingApprovalHarness(t *testing.T) phaseHarness {
 	t.Helper()
 	h := newHarness(t, nil)
-	incident, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	incident, err := h.flow.Investigate(context.Background(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +693,7 @@ func approvedHarness(t *testing.T) phaseHarness {
 func approvedHarnessWithOverrides(t *testing.T, overrides harnessOverrides) phaseHarness {
 	t.Helper()
 	h := newHarnessWithOverrides(t, overrides)
-	incident, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	incident, err := h.flow.Investigate(context.Background(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -735,7 +742,7 @@ func assertCompletedAttempt(t *testing.T, h phaseHarness, key domain.Idempotency
 
 func mustServiceProposal(t *testing.T, h phaseHarness) domain.RollbackProposal {
 	t.Helper()
-	proposal, err := h.services.Queries.GetProposal(context.Background(), h.incident.ID())
+	proposal, err := h.flow.Proposal(context.Background(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}

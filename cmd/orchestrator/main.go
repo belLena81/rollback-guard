@@ -12,7 +12,6 @@ import (
 	"time"
 
 	a2aadapter "github.com/belLena81/rollback-guard/internal/adapters/a2a"
-	"github.com/belLena81/rollback-guard/internal/adapters/diagnosis"
 	"github.com/belLena81/rollback-guard/internal/adapters/httpapi"
 	mcpadapter "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/adapters/postgres"
@@ -205,10 +204,6 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 		return application.Services{}, err
 	}
 	ids := &runtime.IDGenerator{}
-	diagnoser, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: cfg.RuleCorrelationWindow})
-	if err != nil {
-		return application.Services{}, err
-	}
 	policy, err := domain.NewEligibilityPolicy(domain.EligibilityPolicyConfig{
 		MinimumConfidence: cfg.RuleMinimumConfidence,
 		CorrelationWindow: cfg.RuleCorrelationWindow,
@@ -225,7 +220,6 @@ func buildServices(cfg config.Config, uow ports.UnitOfWork, clients mcpClients, 
 		UnitOfWork:     uow,
 		Inspector:      protectedInspector,
 		Metrics:        protectedMetrics,
-		Diagnoser:      diagnoser,
 		Executor:       protectedExecutor,
 		RollbackPolicy: policy,
 		ApprovalPolicy: domain.ApprovalAuthorizer{},

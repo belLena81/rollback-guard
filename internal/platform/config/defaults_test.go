@@ -124,7 +124,6 @@ func TestInvestigatorDefaults(t *testing.T) {
 		MetricsWindow:         5 * time.Minute,
 		RuleCorrelationWindow: 10 * time.Minute,
 		DiagnosisStrategy:     domain.StrategyRules,
-		LLMProvider:           LLMProviderOpenAICompatible,
 		LLMTimeout:            15 * time.Second,
 		LLMMaxOutputTokens:    512,
 		Telemetry:             defaultTelemetry("investigator"),

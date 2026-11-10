@@ -12,6 +12,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/diagnosis"
 	"github.com/belLena81/rollback-guard/internal/adapters/fake"
 	"github.com/belLena81/rollback-guard/internal/application"
+	"github.com/belLena81/rollback-guard/internal/application/applicationtest"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/belLena81/rollback-guard/internal/testkit"
@@ -86,21 +87,26 @@ func newApprovePostgresHarness(t *testing.T, unitOfWork func(*UnitOfWork) ports.
 		uow = unitOfWork(store)
 	}
 	services, err := application.NewServices(application.Dependencies{
-		UnitOfWork: uow, Inspector: infra, Metrics: infra, Diagnoser: diagnoser, Executor: infra,
+		UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra,
 		RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids,
 	}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 5 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	incident, err := services.Incidents.CreateIncident(ctx, application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: system})
+	runner, err := application.NewInvestigationRunner(infra, infra, diagnoser, clock, ids)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := services.Investigations.Investigate(ctx, incident.ID()); err != nil {
+	flow := applicationtest.Flow{Services: services, UnitOfWork: uow, Clock: clock, IDs: ids, Runner: runner, SystemActor: system, CleanupTimeout: 5 * time.Second}
+	incident, err := flow.CreateIncident(ctx, application.CreateIncidentCommand{Target: target, Symptom: symptom, Actor: system})
+	if err != nil {
 		t.Fatal(err)
 	}
-	proposal, err := services.Queries.GetProposal(ctx, incident.ID())
+	if _, err := flow.Investigate(ctx, incident.ID()); err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := flow.Proposal(ctx, incident.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
