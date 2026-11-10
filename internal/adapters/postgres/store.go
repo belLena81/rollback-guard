@@ -27,18 +27,27 @@ func (u *UnitOfWork) WithinTransaction(ctx context.Context, fn func(ports.Reposi
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	tx, err := u.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
+	// pgx.BeginFunc rolls back in a deferred call, so a panicking callback
+	// still ends the transaction and returns the connection to the pool.
+	var started, finished bool
+	err := pgx.BeginFunc(ctx, u.pool, func(tx pgx.Tx) error {
+		started = true
+		if err := fn(&repositories{ctx: ctx, tx: tx}); err != nil {
+			return err
+		}
+		finished = true
+		return nil
+	})
+	switch {
+	case err == nil:
+		return nil
+	case !started:
 		return fmt.Errorf("begin transaction: %w", err)
-	}
-	repositories := &repositories{ctx: ctx, tx: tx}
-	if err := fn(repositories); err != nil {
-		return errors.Join(err, tx.Rollback(ctx))
-	}
-	if err := tx.Commit(ctx); err != nil {
+	case finished:
 		return fmt.Errorf("commit transaction: %w", err)
+	default:
+		return err
 	}
-	return nil
 }
 
 type repositories struct {
@@ -90,6 +99,14 @@ func (r *repositories) Events() ports.EventRepository {
 	return eventRepo{r}
 }
 
+// uniqueViolation is the PostgreSQL SQLSTATE for a unique constraint violation.
+const uniqueViolation = "23505"
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == uniqueViolation
+}
+
 func mapError(err error, resource, id string) error {
 	if err == nil {
 		return nil
@@ -100,7 +117,7 @@ func mapError(err error, resource, id string) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case "23505":
+		case uniqueViolation:
 			return &domain.ValidationError{Field: resource, Reason: "already exists"}
 		case "23503":
 			return &domain.NotFoundError{Resource: resource, ID: id}

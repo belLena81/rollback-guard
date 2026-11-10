@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	a2aadapter "github.com/belLena81/rollback-guard/internal/adapters/a2a"
 	"github.com/belLena81/rollback-guard/internal/adapters/diagnosis"
@@ -17,123 +15,193 @@ import (
 	mcpadapter "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/bootstrap"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
+	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	"github.com/belLena81/rollback-guard/internal/platform/runtime"
+	"github.com/belLena81/rollback-guard/internal/platform/telemetry"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const serviceName = "investigator"
+
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(logger); err != nil {
+	level := new(slog.LevelVar)
+	logger := telemetry.NewLogger(os.Stdout, level)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	err := run(ctx, logger, level)
+	stop()
+	if err != nil {
 		logger.Error("investigator exited", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run(ctx context.Context, logger *slog.Logger, level *slog.LevelVar) error {
 	cfg, err := config.LoadInvestigator()
 	if err != nil {
 		return err
 	}
-	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	tel, stopTelemetry, err := bootstrap.StartTelemetry(cfg.Telemetry, logger, level)
 	if err != nil {
 		return err
 	}
-	poolConfig.MaxConns = cfg.DBMaxConns
-	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
+	defer stopTelemetry()
+	pool, err := bootstrap.NewPool(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
-	connectCtx, cancelConnect := context.WithTimeout(context.Background(), cfg.MCPConnectTimeout)
-	defer cancelConnect()
-	mcpHTTPClient := &http.Client{Timeout: cfg.MCPCallTimeout}
-	readClient, err := connectMCP(connectCtx, cfg.KubernetesReadMCPURL, mcpHTTPClient, []string{mcpadapter.ToolGetDeployment})
-	if err != nil {
-		return fmt.Errorf("connect readonly kubernetes MCP: %w", err)
-	}
-	defer func() {
-		if err := readClient.Close(); err != nil {
-			logger.Warn("close readonly Kubernetes MCP client", "error", err)
-		}
-	}()
-	observabilityClient, err := connectMCP(connectCtx, cfg.ObservabilityMCPURL, mcpHTTPClient, []string{mcpadapter.ToolGetHTTPErrorRate})
-	if err != nil {
-		return fmt.Errorf("connect observability MCP: %w", err)
-	}
-	defer func() {
-		if err := observabilityClient.Close(); err != nil {
-			logger.Warn("close observability MCP client", "error", err)
-		}
-	}()
-	boundedRead, err := mcpadapter.BoundCalls(readClient, cfg.MCPCallTimeout)
+	clients, err := buildMCP(ctx, cfg, tel, logger)
 	if err != nil {
 		return err
 	}
-	boundedObservability, err := mcpadapter.BoundCalls(observabilityClient, cfg.MCPCallTimeout)
+	defer clients.close(logger)
+	investigator, err := buildServices(cfg, pool, clients, tel)
 	if err != nil {
 		return err
 	}
-	inspector, err := mcpadapter.NewDeploymentInspector(boundedRead)
-	if err != nil {
-		return err
-	}
-	metrics, err := mcpadapter.NewMetricsAdapter(boundedObservability, cfg.MetricsWindow)
-	if err != nil {
-		return err
-	}
-	ids := &runtime.IDGenerator{}
-	diagnoser, err := newDiagnoser(cfg, ids, &http.Client{Timeout: cfg.LLMTimeout})
-	if err != nil {
-		return err
-	}
-	runner, err := application.NewInvestigationRunner(inspector, metrics, diagnoser, runtime.Clock{}, ids)
-	if err != nil {
-		return err
-	}
-	idempotentRunner, err := a2aadapter.NewIdempotentInvestigator(pool, runner)
-	if err != nil {
-		return err
-	}
-	store, err := a2aadapter.NewPostgresTaskStore(pool)
-	if err != nil {
-		return err
-	}
-	handler, err := a2aadapter.NewServerHandler(idempotentRunner, store, logger, a2aadapter.ServerConfig{PublicURL: cfg.PublicURL, TaskTimeout: cfg.TaskTimeout, Ready: func(ctx context.Context) error {
+	ready := func(ctx context.Context) error {
 		if err := pool.Ping(ctx); err != nil {
 			return err
 		}
-		if err := readClient.Ping(ctx); err != nil {
-			return err
-		}
-		return observabilityClient.Ping(ctx)
-	}})
+		return clients.ping(ctx)
+	}
+	handler, err := buildHTTP(cfg, investigator, pool, ready, tel, logger)
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	errCh := make(chan error, 1)
-	go func() {
-		logger.Info("investigator listening", "addr", cfg.HTTPAddr, "public_url", cfg.PublicURL)
-		errCh <- server.ListenAndServe()
-	}()
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return server.Shutdown(shutdownCtx)
-	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	}
+	logger.Info("investigator agent card", "public_url", cfg.PublicURL)
+	return httpserver.Serve(ctx, httpserver.Config{Name: serviceName, Addr: cfg.HTTPAddr}, handler, logger)
 }
 
-func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, providerHTTPClient *http.Client) (ports.Diagnoser, error) {
+// mcpClients are the investigator's two read-only MCP sessions.
+type mcpClients struct {
+	read          *mcpadapter.Client
+	observability *mcpadapter.Client
+}
+
+func (c mcpClients) close(logger *slog.Logger) {
+	bootstrap.CloseMCP(c.observability, "observability", logger)
+	bootstrap.CloseMCP(c.read, "readonly kubernetes", logger)
+}
+
+func (c mcpClients) ping(ctx context.Context) error {
+	if err := c.read.Ping(ctx); err != nil {
+		return err
+	}
+	return c.observability.Ping(ctx)
+}
+
+// buildMCP connects the two MCP sessions the investigator collects evidence
+// through and fails closed unless each server serves exactly its full
+// catalog. The investigator never connects to the rollback server. On
+// failure it closes the session it already opened.
+func buildMCP(ctx context.Context, cfg config.InvestigatorConfig, tel *telemetry.Provider, logger *slog.Logger) (clients mcpClients, err error) {
+	connectCtx, cancel := context.WithTimeout(ctx, cfg.MCPConnectTimeout)
+	defer cancel()
+	defer func() {
+		if err != nil {
+			clients.close(logger)
+			clients = mcpClients{}
+		}
+	}()
+	httpClient := tel.HTTPClient(cfg.MCPCallTimeout)
+	clients.read, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientInvestigator, httpClient, bootstrap.MCPServer{
+		Name:     "readonly kubernetes",
+		Endpoint: cfg.KubernetesReadMCPURL,
+		Tools:    mcpadapter.KubernetesReadonlyCatalog(),
+	})
+	if err != nil {
+		return clients, err
+	}
+	clients.observability, err = bootstrap.ConnectMCP(connectCtx, mcpadapter.ClientInvestigator, httpClient, bootstrap.MCPServer{
+		Name:     "observability",
+		Endpoint: cfg.ObservabilityMCPURL,
+		Tools:    mcpadapter.ObservabilityCatalog(),
+	})
+	return clients, err
+}
+
+// buildServices wires the investigation use case: evidence through MCP,
+// diagnosis by the configured strategy, deduplicated by idempotency key.
+func buildServices(cfg config.InvestigatorConfig, pool *pgxpool.Pool, clients mcpClients, tel *telemetry.Provider) (ports.Investigator, error) {
+	read, err := bootstrap.ObservedCalls(clients.read, cfg.MCPCallTimeout, mcpadapter.ServerKubernetesReadonly, tel)
+	if err != nil {
+		return nil, err
+	}
+	observability, err := bootstrap.ObservedCalls(clients.observability, cfg.MCPCallTimeout, mcpadapter.ServerObservability, tel)
+	if err != nil {
+		return nil, err
+	}
+	rawInspector, err := mcpadapter.NewDeploymentInspector(read)
+	if err != nil {
+		return nil, err
+	}
+	rawMetrics, err := mcpadapter.NewMetricsAdapter(observability, cfg.MetricsWindow)
+	if err != nil {
+		return nil, err
+	}
+	readProtector, err := bootstrap.NewProtector(resilience.DependencyKubernetesReadonlyMCP, cfg.Resilience, tel)
+	if err != nil {
+		return nil, err
+	}
+	observabilityProtector, err := bootstrap.NewProtector(resilience.DependencyObservabilityMCP, cfg.Resilience, tel)
+	if err != nil {
+		return nil, err
+	}
+	inspector, err := resilience.NewInspector(rawInspector, readProtector)
+	if err != nil {
+		return nil, err
+	}
+	metrics, err := resilience.NewMetrics(rawMetrics, observabilityProtector)
+	if err != nil {
+		return nil, err
+	}
+	ids := &runtime.IDGenerator{}
+	// The LLM provider client is deliberately not traced: its requests carry
+	// the API key and prompt, and nothing about them is exported.
+	strategyDiagnoser, err := newDiagnoser(cfg, ids, &http.Client{Timeout: cfg.LLMTimeout}, tel)
+	if err != nil {
+		return nil, err
+	}
+	diagnoser, err := tel.ObserveDiagnoser(strategyDiagnoser, cfg.DiagnosisStrategy)
+	if err != nil {
+		return nil, err
+	}
+	runner, err := application.NewInvestigationRunner(inspector, metrics, diagnoser, runtime.Clock{}, ids)
+	if err != nil {
+		return nil, err
+	}
+	return a2aadapter.NewIdempotentInvestigator(pool, runner, cfg.TaskTimeout)
+}
+
+// buildHTTP assembles the A2A server with durable task storage.
+func buildHTTP(cfg config.InvestigatorConfig, investigator ports.Investigator, pool *pgxpool.Pool, ready httpserver.ReadyCheck, tel *telemetry.Provider, logger *slog.Logger) (http.Handler, error) {
+	store, err := a2aadapter.NewPostgresTaskStore(pool)
+	if err != nil {
+		return nil, err
+	}
+	handler, err := a2aadapter.NewServerHandler(investigator, store, logger, a2aadapter.ServerConfig{
+		PublicURL:    cfg.PublicURL,
+		TaskTimeout:  cfg.TaskTimeout,
+		Ready:        ready,
+		ReadyTimeout: cfg.DBPingTimeout,
+		Tracer:       tel,
+		Metrics:      tel.MetricsHandler(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return tel.InstrumentServer(handler, a2aadapter.RouteOf), nil
+}
+
+// newDiagnoser builds the configured strategy. The LLM is wrapped in retry
+// and a circuit breaker; an open breaker reads as an unavailable provider, so
+// the rule diagnoser stays in charge. observer may be nil.
+func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, providerHTTPClient *http.Client, observer resilience.Observer) (ports.Diagnoser, error) {
 	rules, err := diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: cfg.RuleCorrelationWindow})
 	if err != nil {
 		return nil, err
@@ -141,10 +209,18 @@ func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, provider
 	if cfg.DiagnosisStrategy == domain.StrategyRules {
 		return rules, nil
 	}
-	reasoner, err := llmadapter.NewOpenAICompatibleReasoner(llmadapter.OpenAICompatibleConfig{
+	rawReasoner, err := llmadapter.NewOpenAICompatibleReasoner(llmadapter.OpenAICompatibleConfig{
 		BaseURL: cfg.LLMBaseURL, APIKey: cfg.LLMAPIKey, Model: cfg.LLMModel,
 		MaxOutputTokens: cfg.LLMMaxOutputTokens, HTTPClient: providerHTTPClient,
 	})
+	if err != nil {
+		return nil, err
+	}
+	llmProtector, err := bootstrap.NewLLMProtector(cfg.Resilience, observer)
+	if err != nil {
+		return nil, err
+	}
+	reasoner, err := resilience.NewReasoner(rawReasoner, llmProtector)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +228,8 @@ func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, provider
 		Model: cfg.LLMModel, PromptVersion: application.DiagnosisPromptVersion, Timeout: cfg.LLMTimeout,
 	}
 	switch cfg.DiagnosisStrategy {
+	case domain.StrategyRules:
+		return rules, nil
 	case domain.StrategyLLM:
 		return application.NewLLMDiagnoser(reasoner, rules, ids, modelConfig)
 	case domain.StrategyHybrid:
@@ -159,15 +237,4 @@ func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, provider
 	default:
 		return nil, fmt.Errorf("unsupported diagnosis strategy %q", cfg.DiagnosisStrategy)
 	}
-}
-
-func connectMCP(ctx context.Context, endpoint string, httpClient *http.Client, tools []string) (*mcpadapter.Client, error) {
-	client, err := mcpadapter.Connect(ctx, endpoint, httpClient)
-	if err != nil {
-		return nil, err
-	}
-	if err := client.RequireTools(ctx, tools); err != nil {
-		return nil, errors.Join(err, client.Close())
-	}
-	return client, nil
 }

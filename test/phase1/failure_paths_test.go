@@ -18,9 +18,29 @@ import (
 	"github.com/belLena81/rollback-guard/internal/testkit"
 )
 
-func TestInvestigationDeclinesWhenPolicyFails(t *testing.T) {
+// A breached service metric after a rollout that completed (an error-storm
+// build passes readiness) is a regression and gets a rollback proposal.
+func TestInvestigationProposesRollbackForCompletedRolloutWithBreachedMetric(t *testing.T) {
 	h := newHarness(t, nil)
 	h.infrastructure.SetHealthy(true)
+	incident, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incident.Status() != domain.StatusAwaitingApproval {
+		t.Fatalf("status = %s, want awaiting_approval", incident.Status())
+	}
+	if _, err := h.services.Queries.GetProposal(context.Background(), incident.ID()); err != nil {
+		t.Fatalf("GetProposal() error = %v, want a proposal", err)
+	}
+}
+
+// A stalled rollout whose service metric is not breached (a crashloop build
+// while the old pods keep serving) is declined: nothing supports a rollback.
+func TestInvestigationDeclinesWhenPolicyFails(t *testing.T) {
+	h := newHarness(t, nil)
+	h.infrastructure.SetHealthy(false)
+	h.infrastructure.SetRecoveryMetric(0.01)
 	incident, err := h.services.Investigations.Investigate(context.Background(), h.incident.ID())
 	if err != nil {
 		t.Fatal(err)
@@ -557,6 +577,13 @@ type harnessOverrides struct {
 	diagnoser          ports.Diagnoser
 	executor           ports.RollbackExecutor
 	decorateUnitOfWork func(ports.UnitOfWork) ports.UnitOfWork
+	// recoveryTimeout and recoveryPollInterval set WorkflowConfig's recovery
+	// wait; zero keeps the single recovery check.
+	recoveryTimeout      time.Duration
+	recoveryPollInterval time.Duration
+	// wrapMetrics and wrapInspector decorate the selected ports.
+	wrapMetrics   func(ports.MetricsPort) ports.MetricsPort
+	wrapInspector func(ports.DeploymentInspector) ports.DeploymentInspector
 }
 
 func newHarness(t *testing.T, diagnoserOverride ports.Diagnoser) phaseHarness {
@@ -589,6 +616,12 @@ func newHarnessWithOverrides(t *testing.T, overrides harnessOverrides) phaseHarn
 	if selectedMetrics == nil {
 		selectedMetrics = infrastructure
 	}
+	if overrides.wrapInspector != nil {
+		selectedInspector = overrides.wrapInspector(selectedInspector)
+	}
+	if overrides.wrapMetrics != nil {
+		selectedMetrics = overrides.wrapMetrics(selectedMetrics)
+	}
 	selectedDiagnoser := overrides.diagnoser
 	if selectedDiagnoser == nil {
 		selectedDiagnoser, err = diagnosis.NewRuleDiagnoser(ids, diagnosis.RuleDiagnoserConfig{CorrelationWindow: 10 * time.Minute})
@@ -616,7 +649,10 @@ func newHarnessWithOverrides(t *testing.T, overrides harnessOverrides) phaseHarn
 	services, err := application.NewServices(application.Dependencies{
 		UnitOfWork: selectedUnitOfWork, Inspector: selectedInspector, Metrics: selectedMetrics, Diagnoser: selectedDiagnoser,
 		Executor: selectedExecutor, RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Clock: clock, IDGenerator: ids,
-	}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: systemActor})
+	}, application.WorkflowConfig{
+		ProposalTTL: 15 * time.Minute, ApprovalTTL: 10 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: systemActor,
+		RecoveryTimeout: overrides.recoveryTimeout, RecoveryPollInterval: overrides.recoveryPollInterval,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

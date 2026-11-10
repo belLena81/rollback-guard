@@ -202,13 +202,38 @@ type RollbackExecutor interface {
 	// repeating the mutation when called again with the same idempotency key.
 	ExecuteApprovedRollback(context.Context, domain.ApprovedRollback, domain.IdempotencyKey) (domain.RollbackExecution, error)
 }
+
+// RollbackMutationLease is the ownership token of one acquisition of the
+// per-key rollback mutation lock. Begin issues a fresh, unguessable lease for
+// every pending attempt; only an attempt carrying that lease can complete or
+// release the lock it acquired. A lease is opaque: callers compare and pass it,
+// never build one.
+type RollbackMutationLease string
+
+// ErrRollbackMutationLeaseNotHeld is returned by Complete when the attempt's
+// lease no longer holds the mutation lock. Nothing is written; a later Begin
+// for the same key reconciles the pending ledger entry.
+var ErrRollbackMutationLeaseNotHeld = errors.New("rollback mutation lease is not held")
+
 type RollbackMutationAttempt struct {
 	Mutation domain.RollbackMutation
 	Approved domain.ApprovedRollback
+	// Lease is set when Mutation is pending and this attempt holds the lock.
+	// It is empty for an already completed mutation, which holds no lock.
+	Lease RollbackMutationLease
 }
 type RollbackMutationGuard interface {
 	Begin(context.Context, domain.IdempotencyKey, domain.ProposalHash, time.Time) (RollbackMutationAttempt, error)
-	Complete(context.Context, domain.RollbackMutation, bool, time.Time) (domain.RollbackMutation, error)
+	// Complete records the attempt's pending mutation as completed and
+	// releases the attempt's lock. It returns ErrRollbackMutationLeaseNotHeld,
+	// without writing, when the attempt's lease does not hold the lock.
+	Complete(context.Context, RollbackMutationAttempt, bool, time.Time) (domain.RollbackMutation, error)
+	// Release gives up the lock held by a pending attempt returned by Begin
+	// that will not be completed, so a later Begin for the same key can
+	// proceed. It releases only the lock acquired by this attempt's lease: a
+	// late Release from one attempt never unlocks another attempt for the
+	// same key. Releasing an attempt that holds no lock is not an error.
+	Release(context.Context, RollbackMutationAttempt) error
 }
 type RollbackPolicy interface {
 	Evaluate(domain.EligibilityCandidate) (domain.PolicyDecision, error)
@@ -266,6 +291,9 @@ type InvestigationTaskRepository interface {
 }
 type EventRepository interface {
 	NextSequence(context.Context, domain.IncidentID) (uint64, error)
+	// Append returns a VersionConflictError when the sequence is already
+	// taken. The caller must return that error from its unit of work so the
+	// state change it was auditing is rolled back with it.
 	Append(domain.OperationEvent) error
 	List(domain.IncidentID) ([]domain.OperationEvent, error)
 }

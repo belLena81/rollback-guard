@@ -71,11 +71,15 @@ func TestPortsOperateAcrossStreamableHTTPMCP(t *testing.T) {
 
 func connect(t *testing.T, ctx context.Context, endpoint string, client *http.Client, tools []string) *protocol.Client {
 	t.Helper()
-	connected, err := protocol.Connect(ctx, endpoint, client)
+	connected, err := protocol.Connect(ctx, endpoint, client, protocol.ClientOrchestrator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = connected.Close() })
+	t.Cleanup(func() {
+		if err := connected.Close(); err != nil {
+			t.Errorf("close MCP client: %v", err)
+		}
+	})
 	if err := connected.RequireTools(ctx, tools); err != nil {
 		t.Fatal(err)
 	}

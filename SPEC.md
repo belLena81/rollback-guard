@@ -27,8 +27,10 @@ Rollback Guardian demonstrates how autonomous agents can safely interact with in
 
 - Orchestrator: owns incident state, public REST API, validation, policy, approval, execution coordination, audit timeline.
 - Investigator Agent: A2A-addressable agent that collects normalized evidence and returns evidence-linked diagnosis.
-- Kubernetes MCP Server: exposes narrow deployment, pod, event, rollout, prepare rollback, execute approved rollback, and watch rollout tools.
-- Observability MCP Server: exposes narrow error-rate, latency, resource, and recovery-evaluation tools.
+- Kubernetes MCP Server: one binary deployed twice with separate identities. The read-only catalog is `get_deployment`, `get_replica_sets`, `list_pods`, `get_pod_events`, `get_rollout_status`, `watch_rollout`. The rollback catalog is `prepare_rollback`, `execute_approved_rollback`.
+- Observability MCP Server: `get_http_error_rate`, `compare_error_rate_windows`, `get_request_latency`, `get_pod_cpu_usage`, `get_pod_memory_usage`, `evaluate_recovery`.
+
+These catalogs are exhaustive. Clients verify the exact catalog at startup and fail closed on a missing or additional tool.
 - Demo API: Kubernetes workload with healthy and deliberately broken image tags.
 
 ## Domain Model
@@ -38,18 +40,23 @@ Core entities:
 - `Incident`: cluster, namespace, deployment, service, symptom, status, version, timestamps.
 - `Symptom`: type, observed value, threshold, start time.
 - `Evidence`: typed source records linked to an incident.
-- `InvestigationConclusion`: hypothesis, confidence, evidence references, recommended action.
+- `InvestigationConclusion`: hypothesis, confidence, evidence references, recommended action, diagnosis strategy and provenance.
+- `PolicyDecision`: allowed flag and the per-rule results that produced it.
 - `RollbackProposal`: action ID, proposal hash, current revision, target revision, expiration.
 - `Approval`: actor, action ID, proposal hash, decision, expiration.
+- `RollbackExecution`: idempotency key, from/to revision, outcome.
+- `RecoveryVerification`: rollout and metric recovery result.
 - `Actor`: typed identity from Phase 1 onward, even before real auth exists.
 
-The incident state machine must reject illegal transitions with typed domain errors.
+Incident statuses: `created`, `investigating`, `awaiting_approval`, `approved`, `executing`, `verifying`, and the terminal statuses `resolved`, `canceled`, `declined` (policy refused a proposal), `rejected` (human rejected), `expired`, `failed`.
+
+The incident state machine must reject illegal transitions with typed domain errors. At most one non-terminal incident may exist per deployment target.
 
 ## REST API
 
 Base path: `/v1`.
 
-- `POST /v1/incidents`: create an incident.
+- `POST /v1/incidents`: create an incident. Returns `202 Accepted` with a `Location` header; investigation runs asynchronously and its progress is visible on the incident resource.
 - `GET /v1/incidents/{incidentId}`: return incident summary, status, conclusion, proposal, approval, and latest execution result.
 - `GET /v1/incidents/{incidentId}/events`: return ordered audit events.
 - `POST /v1/incidents/{incidentId}/approve`: approve an exact action/proposal hash.
@@ -57,18 +64,26 @@ Base path: `/v1`.
 - `POST /v1/incidents/{incidentId}/cancel`: cancel a non-terminal incident.
 - `GET /health/live`, `GET /health/ready`, `GET /metrics`: operational endpoints.
 
+Request bodies are size-limited and decoded strictly (unknown fields rejected). The contract is `api/openapi.yaml`.
+
+Until Phase 7, there is no authentication: a middleware injects a fixed local human `Actor`, and all services must stay on a trusted network.
+
 ## Persistence
 
 PostgreSQL is the canonical v1 persistence mechanism. Required tables:
 
 - `incidents`
 - `incident_evidence`
-- `investigation_results`
+- `investigation_results`, `investigation_result_evidence_refs`
+- `policy_decisions`
 - `action_proposals`
 - `approvals`
 - `executions`
+- `recovery_verifications`
 - `operation_events`
 - `idempotency_keys`
+- `rollback_mutations` (the rollback MCP's own idempotency ledger)
+- `investigation_dispatches`, `a2a_tasks`, `a2a_investigation_requests` (durable A2A delegation)
 
 Every state mutation and corresponding audit event must be persisted in the same database transaction. `operation_events` is append-only at the application level.
 
@@ -83,7 +98,7 @@ Every state mutation and corresponding audit event must be persisted in the same
 
 ## Observability
 
-All services expose health endpoints and structured logs with correlation fields such as incident ID, operation ID, task ID, trace ID, and idempotency key. Later phases add Prometheus metrics and OpenTelemetry traces across REST, A2A, MCP, and Kubernetes calls.
+All services expose health endpoints and structured logs with correlation fields such as incident ID, operation ID, task ID, trace ID, and idempotency key. Every service exposes Prometheus metrics on `GET /metrics` and emits OpenTelemetry traces that follow one incident across REST, A2A, MCP, and Kubernetes/Prometheus calls using W3C trace context. Trace export is off unless an OTLP endpoint is configured. Metric labels are bounded sets only: never incident IDs, keys, hashes, or free text. The metric catalogue and configuration are in `docs/phase6-telemetry.md`.
 
 ## Package Rules
 

@@ -194,7 +194,10 @@ func TestObserveBuildsFixedEscapedQuery(t *testing.T) {
 	}
 }
 
-func TestHTTPErrorRateQueryPreservesLowTrafficAndMissingDataSemantics(t *testing.T) {
+// An error ratio needs requests. Low traffic yields a ratio; zero traffic in
+// the window yields no sample (ErrInvalidResult), never 0: a 0 would let
+// recovery verification pass on a service that serves nothing.
+func TestHTTPErrorRateQueryTreatsZeroTrafficAsMissingData(t *testing.T) {
 	now := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
 	target := testTarget(t)
 	client, err := NewClient(&fakeAPI{}, Config{AllowedTargets: []domain.DeploymentTarget{target}, MaxSampleAge: time.Minute, Now: func() time.Time { return now }})
@@ -220,8 +223,15 @@ func TestHTTPErrorRateQueryPreservesLowTrafficAndMissingDataSemantics(t *testing
 			if strings.Contains(query, "clamp_min") || strings.Contains(query, "vector(0)") {
 				t.Fatalf("unsafe error-rate query = %q", query)
 			}
-			if !strings.Contains(query, "> 0") || !strings.Contains(query, " or ") || !strings.Contains(query, " * 0") {
-				t.Fatalf("query does not preserve zero/missing semantics: %q", query)
+			// The zero-traffic filter on the denominator is the outermost
+			// operation: nothing after it can substitute a 0. The 0 x total
+			// fallback is only inside the numerator (no 5xx series yet).
+			numerator, denominator, found := strings.Cut(query, ") / (")
+			if !found || !strings.HasSuffix(denominator, " > 0)") || strings.Contains(denominator, " or ") {
+				t.Fatalf("query does not drop zero-traffic windows last: %q", query)
+			}
+			if !strings.Contains(numerator, " or ") || !strings.Contains(numerator, " * 0") {
+				t.Fatalf("numerator has no 0 fallback for a window without 5xx series: %q", query)
 			}
 			if test.offset > 0 && strings.Count(query, "offset ") != 3 {
 				t.Fatalf("offset query = %q", query)

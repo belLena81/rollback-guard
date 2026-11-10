@@ -2,6 +2,7 @@ package a2aadapter
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -204,6 +205,76 @@ func TestResultWireAcceptsLegacyRuleConclusionWithoutProvenance(t *testing.T) {
 	}
 	if decoded.Conclusion.Provenance().RequestedStrategy != domain.StrategyRules {
 		t.Fatalf("legacy provenance = %#v", decoded.Conclusion.Provenance())
+	}
+}
+
+func TestResultWireRejectsUnknownRecommendation(t *testing.T) {
+	tests := []struct {
+		name           string
+		recommendation string
+		legacy         bool
+		wantErr        bool
+	}{
+		{name: "rollback", recommendation: domain.RecommendRollback.String()},
+		{name: "no action", recommendation: domain.RecommendNoAction.String()},
+		{name: "unknown value", recommendation: "restart_pods", wantErr: true},
+		{name: "empty value", recommendation: "", wantErr: true},
+		{name: "wrong case", recommendation: "Rollback", wantErr: true},
+		{name: "zero value spelling", recommendation: domain.Recommendation(0).String(), wantErr: true},
+		{name: "legacy result with unknown value", recommendation: "restart_pods", legacy: true, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := modelWireResult(t)
+			wire := encodeResult(result.Conclusion.IncidentID(), result)
+			if test.legacy {
+				wire.Conclusion.Strategy = domain.StrategyRules.String()
+				wire.Conclusion.Provenance = nil
+			}
+			wire.Conclusion.Recommendation = test.recommendation
+
+			decoded, err := decodeResult(wire)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("decodeResult() with recommendation %q error = %v, wantErr %t", test.recommendation, err, test.wantErr)
+			}
+			var validation *domain.ValidationError
+			if test.wantErr && (!errors.As(err, &validation) || validation.Field != "conclusion.recommendation") {
+				t.Fatalf("decodeResult() with recommendation %q error = %v, want a conclusion.recommendation validation error", test.recommendation, err)
+			}
+			if err == nil && decoded.Conclusion.Recommendation().String() != test.recommendation {
+				t.Fatalf("decoded recommendation = %s, want %s", decoded.Conclusion.Recommendation(), test.recommendation)
+			}
+		})
+	}
+}
+
+func TestMapTaskStateRejectsStatesTheInvestigatorNeverUses(t *testing.T) {
+	tests := []struct {
+		state   a2a.TaskState
+		want    ports.InvestigationTaskState
+		wantErr bool
+	}{
+		{state: a2a.TaskStateSubmitted, want: ports.InvestigationTaskSubmitted},
+		{state: a2a.TaskStateWorking, want: ports.InvestigationTaskWorking},
+		{state: a2a.TaskStateCompleted, want: ports.InvestigationTaskCompleted},
+		{state: a2a.TaskStateCanceled, want: ports.InvestigationTaskCanceled},
+		{state: a2a.TaskStateFailed, want: ports.InvestigationTaskFailed},
+		{state: a2a.TaskStateRejected, want: ports.InvestigationTaskFailed},
+		{state: a2a.TaskStateUnspecified, wantErr: true},
+		{state: a2a.TaskStateAuthRequired, wantErr: true},
+		{state: a2a.TaskStateInputRequired, wantErr: true},
+		{state: a2a.TaskState("TASK_STATE_FROM_A_NEWER_PROTOCOL"), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(string(test.state), func(t *testing.T) {
+			got, err := mapTaskState(test.state)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("mapTaskState(%q) error = %v, wantErr %t", test.state, err, test.wantErr)
+			}
+			if err == nil && got != test.want {
+				t.Fatalf("mapTaskState(%q) = %v, want %v", test.state, got, test.want)
+			}
+		})
 	}
 }
 

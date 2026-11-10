@@ -18,6 +18,8 @@ type Dependencies struct {
 	ApprovalPolicy ports.ApprovalPolicy
 	Clock          ports.Clock
 	IDGenerator    ports.IDGenerator
+	// Tracer is optional; nil disables tracing.
+	Tracer ports.Tracer
 }
 
 type WorkflowConfig struct {
@@ -25,6 +27,14 @@ type WorkflowConfig struct {
 	ApprovalTTL    time.Duration
 	CleanupTimeout time.Duration
 	SystemActor    domain.Actor
+	// RecoveryTimeout bounds how long recovery verification keeps checking
+	// after a rollback: right after the rollout completes, the metrics window
+	// still holds the errors from before it. Verify checks once, then every
+	// RecoveryPollInterval while the check fails, at most
+	// 1 + RecoveryTimeout/RecoveryPollInterval times, and records the first
+	// passing result or the last failing one. Zero checks exactly once.
+	RecoveryTimeout      time.Duration
+	RecoveryPollInterval time.Duration
 }
 
 type workflow struct {
@@ -37,6 +47,7 @@ type workflow struct {
 	approvalPolicy ports.ApprovalPolicy
 	clock          ports.Clock
 	ids            ports.IDGenerator
+	tracer         ports.Tracer
 	config         WorkflowConfig
 	systemActor    domain.Actor
 }
@@ -44,6 +55,9 @@ type workflow struct {
 func (c WorkflowConfig) validate() error {
 	if c.ProposalTTL <= 0 || c.ApprovalTTL <= 0 || c.CleanupTimeout <= 0 {
 		return &domain.ValidationError{Field: "workflow_config", Reason: "durations must be positive"}
+	}
+	if c.RecoveryTimeout < 0 || c.RecoveryPollInterval < 0 || (c.RecoveryTimeout > 0 && c.RecoveryPollInterval == 0) {
+		return &domain.ValidationError{Field: "workflow_config.recovery", Reason: "recovery timeout must not be negative and needs a positive poll interval"}
 	}
 	if !c.SystemActor.Valid() || c.SystemActor.Kind() != domain.ActorSystem {
 		return &domain.ValidationError{Field: "workflow_config.system_actor", Reason: "must be a system actor"}
@@ -58,6 +72,9 @@ type Services struct {
 	Executions     *ExecutionService
 	Verifications  *VerificationService
 	Queries        *QueryService
+	// ApproveAndExecute composes Approvals, Executions, Verifications, and
+	// Queries into the approve -> execute -> verify use case.
+	ApproveAndExecute *ApproveAndExecuteService
 }
 
 type IncidentService struct{ workflow *workflow }
@@ -78,15 +95,25 @@ func NewServices(dependencies Dependencies, config WorkflowConfig) (Services, er
 	if err != nil {
 		return Services{}, err
 	}
+	tracer := dependencies.Tracer
+	if tracer == nil {
+		tracer = ports.NoopTracer{}
+	}
 	w := &workflow{
-		uow: dependencies.UnitOfWork, inspector: dependencies.Inspector, metrics: dependencies.Metrics,
+		tracer: tracer,
+		uow:    dependencies.UnitOfWork, inspector: dependencies.Inspector, metrics: dependencies.Metrics,
 		investigator: investigator, executor: dependencies.Executor, rollbackPolicy: dependencies.RollbackPolicy,
 		approvalPolicy: dependencies.ApprovalPolicy, clock: dependencies.Clock, ids: dependencies.IDGenerator,
 		config: config, systemActor: config.SystemActor,
 	}
-	return Services{
+	services := Services{
 		Incidents: &IncidentService{workflow: w}, Investigations: &InvestigationService{workflow: w},
 		Approvals: &ApprovalService{workflow: w}, Executions: &ExecutionService{workflow: w},
 		Verifications: &VerificationService{workflow: w}, Queries: &QueryService{workflow: w},
-	}, nil
+	}
+	services.ApproveAndExecute = &ApproveAndExecuteService{
+		approvals: services.Approvals, executions: services.Executions,
+		verifications: services.Verifications, queries: services.Queries,
+	}
+	return services, nil
 }

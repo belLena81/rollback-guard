@@ -13,6 +13,8 @@ import (
 
 const investigationFailureAuditReason = "investigation failed"
 const executionFailureAuditReason = "rollback execution failed"
+const authorizationFailureAuditReason = "rollback authorization failed"
+const authorizationExpiredAuditReason = "rollback authorization expired"
 
 func (s *ExecutionService) Execute(ctx context.Context, incidentID domain.IncidentID, key domain.IdempotencyKey) (domain.RollbackExecution, error) {
 	if key == "" {
@@ -133,11 +135,16 @@ func (s *ExecutionService) authorizeAndStart(ctx context.Context, loaded loadedE
 	if err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CleanupTimeout)
 		defer cancel()
+		// Terminate only the incident this request authorized against. If a
+		// concurrent request for the same approval has moved it on (started
+		// or finished the rollback, which is also why the revision no longer
+		// matches), this request's view is stale and it must not fail an
+		// incident whose rollback is in flight or applied.
 		var cleanupErr error
 		if errors.Is(err, domain.ErrExpired) {
-			cleanupErr = c.expire(cleanupCtx, loaded.incident.ID(), err.Error())
+			cleanupErr = c.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Expire, domain.EventIncidentExpired, authorizationExpiredAuditReason)
 		} else {
-			cleanupErr = c.failIncident(cleanupCtx, loaded.incident.ID(), err.Error())
+			cleanupErr = c.terminateIfUnchanged(cleanupCtx, loaded.incident.ID(), loaded.incident.Version(), (*domain.Incident).Fail, domain.EventIncidentFailed, authorizationFailureAuditReason)
 		}
 		return executionPreparation{}, errors.Join(err, cleanupErr)
 	}
@@ -279,15 +286,10 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 		if err != nil {
 			return err
 		}
-		if err := repositories.Executions().Save(execution); err != nil {
-			return err
-		}
-		if err := repositories.Idempotency().Update(completedRecord, domain.IdempotencyPending); err != nil {
-			return err
-		}
-		if err := c.appendEvent(ctx, repositories, proposal.IncidentID(), domain.EventExecutionCompleted, c.systemActor, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()}, completedAt); err != nil {
-			return err
-		}
+		// The incident transition is written first: a concurrent request
+		// that completed the same attempt has already moved the incident on,
+		// so this one fails with a conflict here instead of a duplicate
+		// execution insert. Everything below commits or rolls back together.
 		expected := fresh.Version()
 		from := fresh.Status()
 		if execution.Outcome() == domain.ExecutionSucceeded {
@@ -299,6 +301,15 @@ func (s *ExecutionService) completeExecution(ctx context.Context, proposal domai
 			return err
 		}
 		if err := repositories.Incidents().Update(fresh, expected); err != nil {
+			return err
+		}
+		if err := repositories.Executions().Save(execution); err != nil {
+			return err
+		}
+		if err := repositories.Idempotency().Update(completedRecord, domain.IdempotencyPending); err != nil {
+			return err
+		}
+		if err := c.appendEvent(ctx, repositories, proposal.IncidentID(), domain.EventExecutionCompleted, c.systemActor, domain.ExecutionCompletedDetail{ExecutionID: execution.ID(), Outcome: execution.Outcome()}, completedAt); err != nil {
 			return err
 		}
 		kind := domain.EventStatusChanged
@@ -327,6 +338,66 @@ func validateExecutionResult(execution domain.RollbackExecution, proposal domain
 	return nil
 }
 
+// awaitRecovery evaluates recovery until it passes or the wait is used up,
+// and returns the passing or the last failing evaluation. The wait ends after
+// 1 + RecoveryTimeout/RecoveryPollInterval checks or once RecoveryTimeout has
+// elapsed on the workflow clock, whichever comes first, so slow checks cannot
+// stretch it past RecoveryTimeout.
+//
+// A check whose deployment or metric read fails is neither a pass nor a
+// failure: right after the pod switch the metric can be briefly unreadable,
+// so the wait continues. If the last allowed check also fails to read, or the
+// context ends, that error is returned. Nothing is persisted here, so on an
+// error the incident stays verifying and a retry of the approval resumes it.
+func (s *VerificationService) awaitRecovery(ctx context.Context, incident domain.Incident, proposal domain.RollbackProposal, execution domain.RollbackExecution) (domain.RecoveryVerification, error) {
+	c := s.workflow
+	checks := 1
+	if c.config.RecoveryTimeout > 0 {
+		checks += int(c.config.RecoveryTimeout / c.config.RecoveryPollInterval)
+	}
+	deadline := c.clock.Now().Add(c.config.RecoveryTimeout)
+	for check := 1; ; check++ {
+		verification, err := s.checkRecovery(ctx, incident, proposal, execution)
+		last := check >= checks || !c.clock.Now().Before(deadline)
+		if err == nil && (verification.Passed() || last) {
+			return verification, nil
+		}
+		if err != nil && (last || ctx.Err() != nil) {
+			return domain.RecoveryVerification{}, err
+		}
+		if err := waitFor(ctx, c.config.RecoveryPollInterval); err != nil {
+			return domain.RecoveryVerification{}, fmt.Errorf("await recovery: %w", err)
+		}
+	}
+}
+
+// checkRecovery reads the deployment and the recovery metric once and
+// evaluates them against the proposal's target revision.
+func (s *VerificationService) checkRecovery(ctx context.Context, incident domain.Incident, proposal domain.RollbackProposal, execution domain.RollbackExecution) (domain.RecoveryVerification, error) {
+	c := s.workflow
+	deployment, err := c.inspector.InspectDeployment(ctx, incident.Target())
+	if err != nil {
+		return domain.RecoveryVerification{}, fmt.Errorf("inspect recovery deployment: %w", err)
+	}
+	metric, err := c.metrics.Observe(ctx, incident.Target(), incident.Symptom())
+	if err != nil {
+		return domain.RecoveryVerification{}, fmt.Errorf("observe recovery metric: %w", err)
+	}
+	return domain.EvaluateRecovery(incident.Target(), proposal.TargetRevision(), deployment, metric, incident.Symptom(), incident.ID(), execution.ID(), c.clock.Now())
+}
+
+// waitFor blocks for d or until ctx ends, whichever comes first.
+func waitFor(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (s *VerificationService) Verify(ctx context.Context, incidentID domain.IncidentID) (domain.RecoveryVerification, error) {
 	c := s.workflow
 	var incident domain.Incident
@@ -352,19 +423,11 @@ func (s *VerificationService) Verify(ctx context.Context, incidentID domain.Inci
 		return domain.RecoveryVerification{}, &domain.IllegalTransitionError{From: incident.Status(), To: domain.StatusResolved}
 	}
 
-	deployment, err := c.inspector.InspectDeployment(ctx, incident.Target())
-	if err != nil {
-		return domain.RecoveryVerification{}, fmt.Errorf("inspect recovery deployment: %w", err)
-	}
-	metric, err := c.metrics.Observe(ctx, incident.Target(), incident.Symptom())
-	if err != nil {
-		return domain.RecoveryVerification{}, fmt.Errorf("observe recovery metric: %w", err)
-	}
-	now := c.clock.Now()
-	verification, err := domain.EvaluateRecovery(incident.Target(), proposal.TargetRevision(), deployment, metric, incident.Symptom(), incidentID, execution.ID(), now)
+	verification, err := s.awaitRecovery(ctx, incident, proposal, execution)
 	if err != nil {
 		return domain.RecoveryVerification{}, err
 	}
+	now := verification.CheckedAt()
 	err = c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		fresh, err := repositories.Incidents().Get(incidentID)
 		if err != nil {
@@ -458,21 +521,27 @@ func (s *IncidentService) Cancel(ctx context.Context, command CancelIncidentComm
 	return result, nil
 }
 
-func (c *workflow) expire(ctx context.Context, incidentID domain.IncidentID, reason string) error {
+// terminateIfUnchanged applies a terminal transition and its audit event in
+// one transaction, but only while the incident is still at version. When the
+// incident has changed since then it writes nothing and returns nil: the
+// caller's failure belongs to a superseded view and the newer state wins.
+func (c *workflow) terminateIfUnchanged(ctx context.Context, incidentID domain.IncidentID, version uint64, transition func(*domain.Incident, time.Time) error, kind domain.EventKind, reason string) error {
 	now := c.clock.Now()
 	return c.uow.WithinTransaction(ctx, func(repositories ports.Repositories) error {
 		incident, err := repositories.Incidents().Get(incidentID)
 		if err != nil {
 			return err
 		}
-		expected := incident.Version()
-		if err := incident.Expire(now); err != nil {
+		if incident.Version() != version {
+			return nil
+		}
+		if err := transition(&incident, now); err != nil {
 			return err
 		}
-		if err := repositories.Incidents().Update(incident, expected); err != nil {
+		if err := repositories.Incidents().Update(incident, version); err != nil {
 			return err
 		}
-		return c.appendEvent(ctx, repositories, incidentID, domain.EventIncidentExpired, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
+		return c.appendEvent(ctx, repositories, incidentID, kind, c.systemActor, domain.TerminalDetail{Reason: reason}, now)
 	})
 }
 

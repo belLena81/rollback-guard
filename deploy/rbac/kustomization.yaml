@@ -1,0 +1,6 @@
+# Least-privilege identities for the two Kubernetes MCP processes. Applied as
+# part of deploy/kubernetes, which creates the rollback-demo namespace first.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - mcp.yaml

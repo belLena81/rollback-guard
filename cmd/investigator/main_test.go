@@ -38,6 +38,7 @@ func TestNewDiagnoserSelectsConfiguredStrategy(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := config.InvestigatorConfig{
 				DiagnosisStrategy: test.strategy, RuleCorrelationWindow: 10 * time.Minute,
+				Resilience: config.DefaultResilience(),
 			}
 			var client *http.Client
 			if test.strategy != domain.StrategyRules {
@@ -48,7 +49,7 @@ func TestNewDiagnoserSelectsConfiguredStrategy(t *testing.T) {
 				cfg.LLMMaxOutputTokens = 512
 				client = &http.Client{}
 			}
-			diagnoser, err := newDiagnoser(cfg, &testkit.IDGenerator{}, client)
+			diagnoser, err := newDiagnoser(cfg, &testkit.IDGenerator{}, client, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

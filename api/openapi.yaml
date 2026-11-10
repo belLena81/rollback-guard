@@ -1,7 +1,11 @@
 openapi: 3.1.0
 info:
   title: Rollback Guardian Orchestrator API
-  version: 0.1.0
+  version: 0.2.0
+  description: >-
+    Every error response carries the Error body. Validation and not-found
+    messages describe the client's input; every other class has a fixed
+    message and never echoes internal error text.
 paths:
   /v1/incidents:
     post:
@@ -23,6 +27,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/IncidentSummary'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409':
+          description: >-
+            A non-terminal incident already exists for this deployment target
+            (error conflict).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/incidents/{incidentId}:
     get:
       operationId: getIncident
@@ -35,6 +50,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/IncidentSummary'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/incidents/{incidentId}/events:
     get:
       operationId: listIncidentEvents
@@ -43,6 +61,9 @@ paths:
       responses:
         '200':
           description: Ordered audit events
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/incidents/{incidentId}/approve:
     post:
       operationId: approveIncident
@@ -56,7 +77,17 @@ paths:
               $ref: '#/components/schemas/ApprovalRequest'
       responses:
         '200':
-          description: Incident approved, executed, and verified
+          description: >-
+            Approval processed: the rollback was executed and recovery
+            verified. The summary's incident status is the outcome (resolved,
+            or failed with the recorded execution or verification).
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RollbackOutcomeUnknown' }
   /v1/incidents/{incidentId}/reject:
     post:
       operationId: rejectIncident
@@ -71,6 +102,12 @@ paths:
       responses:
         '200':
           description: Incident rejected
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/incidents/{incidentId}/cancel:
     post:
       operationId: cancelIncident
@@ -85,6 +122,11 @@ paths:
       responses:
         '200':
           description: Incident canceled
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /health/live:
     get:
       operationId: live
@@ -102,10 +144,83 @@ paths:
   /metrics:
     get:
       operationId: metrics
+      description: >-
+        Prometheus metrics for this orchestrator process (per-process registry).
+        Labels are bounded: route patterns, enum outcomes, and tool names only;
+        incident IDs, keys, and hashes never appear. See docs/phase6-telemetry.md.
       responses:
         '200':
-          description: Placeholder metrics
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # TYPE rollback_guardian_incidents_total counter
+                rollback_guardian_incidents_total 3
 components:
+  responses:
+    BadRequest:
+      description: >-
+        The request is invalid (error validation_failed, message names the
+        field) or the body is not exactly one JSON value without unknown
+        fields (error invalid_json).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthenticated:
+      description: No request actor (error unauthenticated).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Only a human actor can decide approvals (error forbidden).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: The incident or a resource it needs does not exist (error not_found).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: >-
+        The request conflicts with the incident's state (error conflict):
+        illegal transition, concurrent change, idempotency conflict, approval
+        that does not match the current proposal or deployment, expired
+        proposal or approval, or a policy denial. The fixed message says which.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Unexpected server failure (error internal_error); the cause is logged with the request ID, never returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RollbackOutcomeUnknown:
+      description: >-
+        Error rollback_outcome_unknown: the rollback request may or may not
+        have reached the cluster, and reconciling it was not possible. Nothing
+        was recorded as failed; the incident stays executing with its
+        execution attempt pending. Retry the same approval (same actionId and
+        proposalHash): it reuses the approval's idempotency key, so the
+        rollback MCP's ledger applies the mutation at most once and the retry
+        reconciles the attempt, then verifies recovery. Do not create a new
+        incident or roll back by other means.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying the same approval.
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
   parameters:
     IncidentId:
       name: incidentId
@@ -114,6 +229,21 @@ components:
       schema:
         type: string
   schemas:
+    Error:
+      type: object
+      required: [error, message]
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          description: Stable, machine-readable error code.
+          enum: [validation_failed, invalid_json, unauthenticated, forbidden, not_found, conflict, rollback_outcome_unknown, internal_error]
+        message:
+          type: string
+          description: Human-readable message; fixed per code except for validation_failed and not_found.
+        requestId:
+          type: string
+          description: The X-Request-Id of the request (or "local" when none was sent), for log correlation.
     Target:
       type: object
       required: [cluster, namespace, deployment, service]

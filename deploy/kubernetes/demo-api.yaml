@@ -1,0 +1,111 @@
+# demo-api: the workload Rollback Guardian watches and rolls back.
+#
+# - Rollouts are plain `kubectl set image` changes of container `demo-api`
+#   between the tags built by `make images-demo-api`. The images are side-loaded
+#   into kind, so they must never be pulled.
+# - replicas is 1 on purpose: Prometheus scrapes demo-api through the NodePort,
+#   which load-balances scrapes across pods. Pods emit identical label sets
+#   (cluster/namespace/deployment/service, no pod label), so two pods behind
+#   one scrape target would interleave counters and corrupt rate().
+# - The pod template must stay identical across versions apart from the image:
+#   Rollback Guardian identifies revisions by the SHA-256 of the normalised Pod
+#   template. Never put the rollback-guardian.io/stable annotation on this
+#   Deployment or its template (the controller copies Deployment annotations to
+#   every new ReplicaSet); `make demo-v1` puts it on the verified ReplicaSet.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-api
+  namespace: rollback-demo
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/part-of: rollback-guardian-demo
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 120
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: demo-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: demo-api
+        app.kubernetes.io/part-of: rollback-guardian-demo
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: demo-api
+          image: demo-api:v1-healthy
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          # Metric target labels; must equal the observability MCP ALLOWED_TARGETS
+          # entry (default local/rollback-demo/demo-api/demo-api). DEMO_MODE and
+          # DEMO_VERSION come from the image so only the image changes per rollout.
+          env:
+            - name: DEMO_CLUSTER
+              value: local
+            - name: DEMO_NAMESPACE
+              value: rollback-demo
+            - name: DEMO_DEPLOYMENT
+              value: demo-api
+            - name: DEMO_SERVICE
+              value: demo-api
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 250m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-api
+  namespace: rollback-demo
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/part-of: rollback-guardian-demo
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: demo-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30080

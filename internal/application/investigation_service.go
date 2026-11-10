@@ -48,8 +48,15 @@ func (s *IncidentService) CreateIncidentAsync(ctx context.Context, command Creat
 	if err := incident.StartInvestigation(now); err != nil {
 		return domain.Incident{}, err
 	}
+	operationID, messageID := c.ids.NewID("operation"), c.ids.NewID("message")
+	// The dispatch persists the creating request's trace context so the
+	// asynchronous coordinator continues the same trace.
+	traceID := c.tracer.TraceCarrier(ctx)
+	if traceID == "" {
+		traceID = c.ids.NewID("trace")
+	}
 	dispatch := ports.InvestigationDispatch{
-		IncidentID: incident.ID(), OperationID: c.ids.NewID("operation"), MessageID: c.ids.NewID("message"), TraceID: c.ids.NewID("trace"),
+		IncidentID: incident.ID(), OperationID: operationID, MessageID: messageID, TraceID: traceID,
 		IdempotencyKey: "investigation:" + string(incident.ID()), RequestHash: InvestigationRequestHash(incident),
 		State: ports.InvestigationTaskQueued, Stage: ports.InvestigationStageQueued, Version: 1, CreatedAt: now, UpdatedAt: now,
 	}
@@ -432,10 +439,14 @@ func (s *ApprovalService) recordDecision(ctx context.Context, command ApprovalCo
 		if err != nil {
 			return err
 		}
-		if err := repositories.Approvals().Save(approval); err != nil {
+		// Transition first: a concurrent request that recorded the same
+		// decision has already moved the incident on, so this one fails on
+		// the version guard (a conflict) instead of a duplicate approval
+		// insert. Both writes commit or roll back together.
+		if err := repositories.Incidents().Update(incident, expected); err != nil {
 			return err
 		}
-		if err := repositories.Incidents().Update(incident, expected); err != nil {
+		if err := repositories.Approvals().Save(approval); err != nil {
 			return err
 		}
 		kind := domain.EventApprovalRecorded

@@ -11,12 +11,16 @@ import (
 )
 
 type Infrastructure struct {
-	mu               sync.Mutex
-	Deployment       domain.DeploymentEvidence
-	Metric           domain.MetricEvidence
-	InspectErr       error
-	MetricErr        error
-	ExecuteErr       error
+	mu         sync.Mutex
+	Deployment domain.DeploymentEvidence
+	Metric     domain.MetricEvidence
+	InspectErr error
+	MetricErr  error
+	ExecuteErr error
+	// ExecuteCallErr, when set, is returned by ExecuteApprovedRollback as the
+	// call's error without touching the deployment, as an executor does when
+	// the outcome is unknown (ports.ErrRollbackOutcomeUnknown).
+	ExecuteCallErr   error
 	Executions       int
 	Now              func() time.Time
 	BeforeMutation   func(*domain.DeploymentEvidence)
@@ -60,6 +64,9 @@ func (f *Infrastructure) ExecuteApprovedRollback(ctx context.Context, approved d
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.ExecuteCallErr != nil {
+		return domain.RollbackExecution{}, f.ExecuteCallErr
+	}
 	if existing, ok := f.executionResults[key]; ok {
 		return existing, nil
 	}

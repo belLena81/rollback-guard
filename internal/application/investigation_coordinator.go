@@ -17,7 +17,12 @@ type InvestigationCoordinatorConfig struct {
 	PollInterval  time.Duration
 	LeaseTTL      time.Duration
 	MaxAttempts   int
-	ReportError   func(error)
+	// ReportError receives iteration failures with a context carrying the
+	// dispatch correlation and trace, so callers can log them correlated.
+	ReportError func(context.Context, error)
+	// Tracer resumes the trace persisted with each dispatch. Nil disables
+	// tracing.
+	Tracer ports.Tracer
 }
 
 type InvestigationCoordinator struct {
@@ -51,6 +56,9 @@ func NewInvestigationCoordinator(uow ports.UnitOfWork, gateway ports.Investigati
 	if config.MaxAttempts <= 0 {
 		config.MaxAttempts = 3
 	}
+	if config.Tracer == nil {
+		config.Tracer = ports.NoopTracer{}
+	}
 	return &InvestigationCoordinator{uow: uow, gateway: gateway, investigations: investigations, clock: clock, config: config}, nil
 }
 
@@ -58,9 +66,9 @@ func (c *InvestigationCoordinator) Run(ctx context.Context) error {
 	ticker := time.NewTicker(c.config.PollInterval)
 	defer ticker.Stop()
 	for {
-		if err := c.ProcessNext(ctx); err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, context.Canceled) {
+		if reportCtx, err := c.processNext(ctx); err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, context.Canceled) {
 			if c.config.ReportError != nil {
-				c.config.ReportError(err)
+				c.config.ReportError(reportCtx, err)
 			}
 		}
 		select {
@@ -72,6 +80,26 @@ func (c *InvestigationCoordinator) Run(ctx context.Context) error {
 }
 
 func (c *InvestigationCoordinator) ProcessNext(ctx context.Context) error {
+	_, err := c.processNext(ctx)
+	return err
+}
+
+// processNext claims and drives one dispatch. It returns the context it ran
+// under (carrying the dispatch correlation and resumed trace) so failures can
+// be reported against it.
+func (c *InvestigationCoordinator) processNext(ctx context.Context) (context.Context, error) {
+	dispatch, incident, err := c.claim(ctx)
+	if err != nil {
+		return ctx, err
+	}
+	ctx = ports.WithCorrelation(ctx, ports.Correlation{IncidentID: dispatch.IncidentID, OperationID: dispatch.OperationID, TaskID: dispatch.Ref.TaskID, TraceID: dispatch.TraceID, IdempotencyKey: dispatch.IdempotencyKey})
+	ctx, end := c.config.Tracer.StartSpan(ctx, "investigation.dispatch", dispatch.TraceID)
+	err = c.drive(ctx, dispatch, incident)
+	end(err)
+	return ctx, err
+}
+
+func (c *InvestigationCoordinator) claim(ctx context.Context) (ports.InvestigationDispatch, domain.Incident, error) {
 	now := c.clock.Now()
 	var dispatch ports.InvestigationDispatch
 	var incident domain.Incident
@@ -85,8 +113,12 @@ func (c *InvestigationCoordinator) ProcessNext(ctx context.Context) error {
 		return err
 	})
 	if err != nil {
-		return err
+		return ports.InvestigationDispatch{}, domain.Incident{}, err
 	}
+	return dispatch, incident, nil
+}
+
+func (c *InvestigationCoordinator) drive(ctx context.Context, dispatch ports.InvestigationDispatch, incident domain.Incident) error {
 	if dispatch.State == ports.InvestigationTaskCancelRequested || incident.Status() == domain.StatusCanceled {
 		return c.cancelInvestigation(ctx, dispatch)
 	}
@@ -95,8 +127,14 @@ func (c *InvestigationCoordinator) ProcessNext(ctx context.Context) error {
 	defer cancel()
 	ref := dispatch.Ref
 	if ref.TaskID == "" {
+		// Hand the Investigator the trace context of this dispatch span so
+		// a detached task execution still joins the incident's trace.
+		traceID := c.config.Tracer.TraceCarrier(ctx)
+		if traceID == "" {
+			traceID = dispatch.TraceID
+		}
 		var err error
-		ref, err = c.gateway.Submit(taskCtx, ports.InvestigationSubmission{Incident: incident, OperationID: dispatch.OperationID, IdempotencyKey: dispatch.IdempotencyKey, MessageID: dispatch.MessageID, TraceID: dispatch.TraceID, RequestHash: dispatch.RequestHash})
+		ref, err = c.gateway.Submit(taskCtx, ports.InvestigationSubmission{Incident: incident, OperationID: dispatch.OperationID, IdempotencyKey: dispatch.IdempotencyKey, MessageID: dispatch.MessageID, TraceID: traceID, RequestHash: dispatch.RequestHash})
 		if err != nil {
 			if dispatch.Attempts < c.config.MaxAttempts {
 				if retryErr := c.retry(ctx, dispatch.IncidentID, false); retryErr != nil {
@@ -109,6 +147,7 @@ func (c *InvestigationCoordinator) ProcessNext(ctx context.Context) error {
 			}
 			return c.fail(ctx, dispatch.IncidentID, "submission_failed", err)
 		}
+		ctx = ports.WithCorrelation(ctx, ports.Correlation{TaskID: ref.TaskID})
 		dispatch, err = c.attachTaskRef(ctx, dispatch.IncidentID, ref)
 		if err != nil {
 			return err

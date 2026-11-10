@@ -1,0 +1,67 @@
+# Local dependencies for the kind demo outside the agent sandbox
+# (`make compose-up`, docs/local-demo-env.md). The five Rollback Guardian
+# services run as local processes (`make services-up`) and reach these on the
+# host's loopback:
+#
+#   DATABASE_URL=postgres://rollback_guard:rollback_guard@127.0.0.1:5432/rollback_guard?sslmode=disable
+#   PROMETHEUS_URL=http://127.0.0.1:9090
+#
+# Prometheus joins kind's Docker network and scrapes demo-api on the kind node
+# (prometheus.yml), so the kind cluster must exist first (`make kind-create`).
+# Credentials are throwaway local-only values. Ports bind COMPOSE_BIND_ADDR
+# (default 127.0.0.1); nothing here is authenticated beyond that.
+name: rollback-guard
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rollback_guard
+      POSTGRES_PASSWORD: rollback_guard
+      POSTGRES_DB: rollback_guard
+    ports:
+      - "${COMPOSE_BIND_ADDR:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rollback_guard"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  prometheus:
+    # prometheus.yml is copied in at build time rather than bind-mounted, so
+    # this also works against a remote Docker daemon (DOCKER_HOST=tcp://...),
+    # which cannot see local files but receives the build context.
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM prom/prometheus:v3.5.0
+        COPY prometheus.yml /etc/prometheus/prometheus.yml
+    image: rollback-guard/compose-prometheus:local
+    ports:
+      - "${COMPOSE_BIND_ADDR:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
+    networks: [default, kind]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Optional trace backend (`make compose-up COMPOSE_PROFILES="--profile tracing"`):
+  # OTLP/HTTP on 4318 for OTEL_EXPORTER_OTLP_ENDPOINT, query API and UI on
+  # 16686 for TRACE_QUERY_URL (`make verify` trace check).
+  jaeger:
+    image: jaegertracing/jaeger:2.11.0
+    profiles: [tracing]
+    ports:
+      - "${COMPOSE_BIND_ADDR:-127.0.0.1}:${JAEGER_OTLP_PORT:-4318}:4318"
+      - "${COMPOSE_BIND_ADDR:-127.0.0.1}:${JAEGER_UI_PORT:-16686}:16686"
+
+networks:
+  # Created by kind; holds the node container that publishes the NodePort.
+  kind:
+    external: true
+
+volumes:
+  pg-data:

@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+# Run the five Rollback Guardian processes against the kind demo cluster.
+#
+#   services.sh up | down | status
+#
+# `up` starts the processes in dependency order from prebuilt binaries
+# (make services-build), waits for each /health/ready, and records a pid and
+# log file per process under $DEMO_STATE_DIR. `down` stops them in reverse
+# order. `status` prints liveness and readiness. The make targets
+# services-up/services-down/services-status build, migrate, and generate the
+# service-account kubeconfigs first (docs/local-demo-env.md).
+#
+# Every process binds loopback (the config defaults); nothing is authenticated
+# before Phase 7. Database URLs and kubeconfig contents are never printed.
+set -euo pipefail
+
+action="${1:?usage: services.sh up|down|status}"
+
+state_dir="${DEMO_STATE_DIR:-.demo}"
+bin_dir="${SERVICES_BIN_DIR:-bin/demo}"
+ready_timeout="${SERVICES_READY_TIMEOUT:-60}"
+stop_timeout="${SERVICES_STOP_TIMEOUT:-15}"
+pid_dir="$state_dir/pids"
+log_dir="$state_dir/logs"
+
+# Start order; `down` walks it backwards. name:port
+services=(
+  kubernetes-mcp-readonly:8091
+  kubernetes-mcp-rollback:8092
+  observability-mcp:8093
+  investigator:8094
+  orchestrator:8080
+)
+
+fail() {
+  echo "services: $*" >&2
+  exit 1
+}
+
+# binary_for maps a process name to the binary that runs it.
+binary_for() {
+  case "$1" in
+  kubernetes-mcp-*) echo "$bin_dir/kubernetes-mcp" ;;
+  *) echo "$bin_dir/$1" ;;
+  esac
+}
+
+# running reports whether the pid file names a live process started from our
+# binary, so a recycled pid is never signalled.
+running() {
+  local name="$1" pid_file="$pid_dir/$1.pid" pid args
+  [[ -f "$pid_file" ]] || return 1
+  pid="$(cat "$pid_file")"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  args="$(ps -p "$pid" -o args= 2>/dev/null)" || return 1
+  [[ "$args" == *"$(basename "$(binary_for "$name")")"* ]]
+}
+
+ready_code() {
+  curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$1/health/ready" 2>/dev/null || true
+}
+
+# start_one launches one process with its own environment. Only the variables
+# listed here are passed (plus PATH/HOME), so the admin KUBECONFIG of the
+# calling shell never reaches a service.
+start_one() {
+  local name="$1" port="$2"
+  shift 2
+  local binary
+  binary="$(binary_for "$name")"
+  [[ -x "$binary" ]] || fail "$binary is missing; run make services-build"
+  if running "$name"; then
+    echo "==> $name already running (pid $(cat "$pid_dir/$name.pid"))"
+    return 0
+  fi
+  echo "==> starting $name on 127.0.0.1:$port"
+  local telemetry=()
+  local var
+  for var in OTEL_EXPORTER_OTLP_ENDPOINT OTEL_TRACES_SAMPLE_RATIO LOG_LEVEL; do
+    if [[ -n "${!var:-}" ]]; then telemetry+=("$var=${!var}"); fi
+  done
+  nohup env -i PATH="$PATH" HOME="${HOME:-/tmp}" \
+    HTTP_ADDR="127.0.0.1:$port" \
+    "${telemetry[@]}" "$@" "$binary" >"$log_dir/$name.log" 2>&1 </dev/null &
+  echo "$!" >"$pid_dir/$name.pid"
+  wait_ready "$name" "$port"
+}
+
+wait_ready() {
+  local name="$1" port="$2" deadline=$((SECONDS + ready_timeout))
+  while ((SECONDS < deadline)); do
+    if ! running "$name"; then
+      echo "services: $name exited during start-up; last log lines:" >&2
+      tail -n 20 "$log_dir/$name.log" >&2 || true
+      return 1
+    fi
+    if [[ "$(ready_code "$port")" == 200 ]]; then
+      echo "    $name ready"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "services: $name not ready after ${ready_timeout}s; last log lines:" >&2
+  tail -n 20 "$log_dir/$name.log" >&2 || true
+  return 1
+}
+
+stop_one() {
+  local name="$1" pid_file="$pid_dir/$1.pid" pid deadline
+  if ! running "$name"; then
+    rm -f "$pid_file"
+    return 0
+  fi
+  pid="$(cat "$pid_file")"
+  echo "==> stopping $name (pid $pid)"
+  kill -TERM "$pid" 2>/dev/null || true
+  deadline=$((SECONDS + stop_timeout))
+  while ((SECONDS < deadline)) && kill -0 "$pid" 2>/dev/null; do
+    sleep 0.5
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "    $name did not stop in ${stop_timeout}s; sending SIGKILL" >&2
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pid_file"
+}
+
+up() {
+  : "${DATABASE_URL:?DATABASE_URL is required}"
+  : "${PROMETHEUS_URL:?PROMETHEUS_URL is required}"
+  local readonly_kubeconfig="$state_dir/kubeconfig-readonly" rollback_kubeconfig="$state_dir/kubeconfig-rollback"
+  [[ -f "$readonly_kubeconfig" && -f "$rollback_kubeconfig" ]] || fail "service-account kubeconfigs missing; run make kubeconfigs"
+  mkdir -p "$pid_dir" "$log_dir"
+  chmod 700 "$state_dir"
+
+  local common=(ALLOWED_TARGETS="${ALLOWED_TARGETS:-local/rollback-demo/demo-api/demo-api}")
+  if [[ -n "${METRICS_WINDOW:-}" ]]; then common+=("METRICS_WINDOW=$METRICS_WINDOW"); fi
+  local readonly_url="http://127.0.0.1:8091/mcp" rollback_url="http://127.0.0.1:8092/mcp"
+  local observability_url="http://127.0.0.1:8093/mcp" investigator_url="http://127.0.0.1:8094"
+
+  trap 'echo "services: start-up failed; stopping what was started" >&2; down' ERR
+
+  start_one kubernetes-mcp-readonly 8091 "${common[@]}" \
+    KUBERNETES_MCP_MODE=readonly CLUSTER_ID="${CLUSTER_ID:-local}" \
+    KUBECONFIG="$(realpath "$readonly_kubeconfig")"
+  # The rollback MCP should use the dedicated database role from
+  # docs/phase3-mcp.md; ROLLBACK_MCP_DATABASE_URL selects it.
+  if [[ -z "${ROLLBACK_MCP_DATABASE_URL:-}" ]]; then
+    echo "services: WARNING: ROLLBACK_MCP_DATABASE_URL is not set; the rollback MCP uses DATABASE_URL's role, which can write approvals (demo only, see docs/phase3-mcp.md)" >&2
+  fi
+  start_one kubernetes-mcp-rollback 8092 "${common[@]}" \
+    KUBERNETES_MCP_MODE=rollback CLUSTER_ID="${CLUSTER_ID:-local}" \
+    KUBECONFIG="$(realpath "$rollback_kubeconfig")" \
+    DATABASE_URL="${ROLLBACK_MCP_DATABASE_URL:-$DATABASE_URL}"
+  start_one observability-mcp 8093 "${common[@]}" PROMETHEUS_URL="$PROMETHEUS_URL"
+  local investigator_env=(DATABASE_URL="$DATABASE_URL" INVESTIGATOR_PUBLIC_URL="$investigator_url"
+    KUBERNETES_READ_MCP_URL="$readonly_url" OBSERVABILITY_MCP_URL="$observability_url"
+    DIAGNOSIS_STRATEGY="${DIAGNOSIS_STRATEGY:-rule_based}")
+  local var
+  for var in LLM_BASE_URL LLM_MODEL LLM_API_KEY LLM_TIMEOUT A2A_TASK_TIMEOUT; do
+    if [[ -n "${!var:-}" ]]; then investigator_env+=("$var=${!var}"); fi
+  done
+  start_one investigator 8094 "${common[@]}" "${investigator_env[@]}"
+  local orchestrator_env=(DATABASE_URL="$DATABASE_URL" INVESTIGATOR_URL="$investigator_url"
+    KUBERNETES_READ_MCP_URL="$readonly_url" KUBERNETES_ROLLBACK_MCP_URL="$rollback_url"
+    OBSERVABILITY_MCP_URL="$observability_url")
+  for var in A2A_TASK_TIMEOUT RECOVERY_TIMEOUT RECOVERY_POLL_INTERVAL; do
+    if [[ -n "${!var:-}" ]]; then orchestrator_env+=("$var=${!var}"); fi
+  done
+  start_one orchestrator 8080 "${common[@]}" "${orchestrator_env[@]}"
+  trap - ERR
+  echo "all services ready; logs in $log_dir"
+}
+
+down() {
+  local index name
+  for ((index = ${#services[@]} - 1; index >= 0; index--)); do
+    name="${services[index]%%:*}"
+    stop_one "$name"
+  done
+}
+
+status() {
+  local entry name port state code failed=0
+  printf '%-26s %-8s %-8s %s\n' SERVICE PID STATE READY
+  for entry in "${services[@]}"; do
+    name="${entry%%:*}"
+    port="${entry##*:}"
+    if running "$name"; then
+      state=running
+      code="$(ready_code "$port")"
+      printf '%-26s %-8s %-8s %s\n' "$name" "$(cat "$pid_dir/$name.pid")" "$state" "$code"
+      [[ "$code" == 200 ]] || failed=1
+    else
+      printf '%-26s %-8s %-8s %s\n' "$name" - stopped -
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
+case "$action" in
+up) up ;;
+down) down ;;
+status) status ;;
+*) fail "unknown action $action (want up, down, or status)" ;;
+esac

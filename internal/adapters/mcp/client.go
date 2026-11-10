@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/buildinfo"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -45,7 +47,16 @@ func (c boundedCaller) CallTool(ctx context.Context, params *mcpsdk.CallToolPara
 	return c.next.CallTool(callCtx, params)
 }
 
-func Connect(ctx context.Context, endpoint string, httpClient *http.Client) (*Client, error) {
+// MCP client implementation names, one per process that connects to the MCP
+// servers.
+const (
+	ClientOrchestrator = "rollback-guardian-orchestrator"
+	ClientInvestigator = "rollback-guardian-investigator"
+)
+
+// Connect opens a session identifying itself as clientName, which the
+// composition root chooses (ClientOrchestrator or ClientInvestigator).
+func Connect(ctx context.Context, endpoint string, httpClient *http.Client, clientName string) (*Client, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, fmt.Errorf("invalid MCP endpoint")
@@ -53,7 +64,10 @@ func Connect(ctx context.Context, endpoint string, httpClient *http.Client) (*Cl
 	if httpClient == nil {
 		return nil, fmt.Errorf("MCP HTTP client is required")
 	}
-	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "rollback-guardian-orchestrator", Version: "v0.3.0"}, nil)
+	if strings.TrimSpace(clientName) == "" {
+		return nil, fmt.Errorf("MCP client name is required")
+	}
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: clientName, Version: buildinfo.Version}, nil)
 	session, err := client.Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("connect MCP client: %w", err)
@@ -74,8 +88,6 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) RequireTools(ctx context.Context, expected []string) error {
-	want := append([]string(nil), expected...)
-	sort.Strings(want)
 	var got []string
 	for tool, err := range c.session.Tools(ctx, nil) {
 		if err != nil {
@@ -83,9 +95,16 @@ func (c *Client) RequireTools(ctx context.Context, expected []string) error {
 		}
 		got = append(got, tool.Name)
 	}
-	sort.Strings(got)
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		return fmt.Errorf("MCP tool catalog = %v, want %v", got, want)
+	return requireToolCatalog(got, expected)
+}
+
+// requireToolCatalog fails closed unless the served tool names are exactly
+// the expected ones, in any order.
+func requireToolCatalog(served, expected []string) error {
+	want := slices.Sorted(slices.Values(expected))
+	got := slices.Sorted(slices.Values(served))
+	if !slices.Equal(got, want) {
+		return fmt.Errorf("MCP tool catalog = %q, want %q", got, want)
 	}
 	return nil
 }
@@ -101,7 +120,10 @@ func callTool[In, Out any](ctx context.Context, caller Caller, name string, inpu
 	}
 	if result.StructuredContent == nil {
 		if result.IsError {
-			return zero, &domain.ValidationError{Field: "mcp_tool_input", Reason: "tool rejected request"}
+			// Every tool here answers with a structured result, including its
+			// rejections. An unstructured error comes from the SDK, possibly
+			// after the handler ran, so it is not a definitive rejection.
+			return zero, &toolCallError{code: CodeInternal, message: "MCP tool " + name + " returned an unstructured error"}
 		}
 		return zero, fmt.Errorf("MCP tool %s returned no structured result", name)
 	}
@@ -135,16 +157,25 @@ func (e *toolCallError) Error() string {
 	return e.message
 }
 
+// Transient lets the resilience decorators retry reads when the server says
+// a dependency was unavailable. Internal and unrecognized codes are not
+// transient: the server may already have acted.
+func (e *toolCallError) Transient() bool {
+	return e.code == CodeDependencyUnavailable
+}
+
 func errorFromTool(toolError ToolError) error {
 	switch toolError.Code {
+	// Reasons are fixed here, never copied from the server's message: a
+	// validation error's text can reach an API response body.
 	case CodeInvalidArgument:
-		return &domain.ValidationError{Field: "mcp_tool_input", Reason: toolError.Message}
+		return &domain.ValidationError{Field: "mcp_tool_input", Reason: "tool rejected the request"}
 	case CodeTargetForbidden:
-		return &domain.ValidationError{Field: "mcp_target", Reason: toolError.Message}
+		return &domain.ValidationError{Field: "mcp_target", Reason: "target is not allowed"}
 	case CodeNotFound:
 		return &domain.NotFoundError{Resource: "MCP resource", ID: "requested"}
 	case CodeRevisionDrift, CodeApprovalMismatch:
-		return &domain.ApprovalMismatchError{Reason: toolError.Message}
+		return &domain.ApprovalMismatchError{Reason: "MCP server reported revision drift or an approval mismatch"}
 	case CodePolicyDenied:
 		return &domain.PolicyDenialError{Rule: "mcp_policy_validation"}
 	case CodeExpired:
@@ -155,7 +186,12 @@ func errorFromTool(toolError ToolError) error {
 		return context.Canceled
 	case CodeTimeout:
 		return context.DeadlineExceeded
+	case CodeDependencyUnavailable, CodeInternal:
+		// Outcome unknown: kept as a tool error so ambiguousToolError sees the code.
+		return &toolCallError{code: toolError.Code, message: toolError.Message, retryable: toolError.Retryable}
 	default:
+		// Codes this client does not know stay tool errors and are never
+		// mapped to a domain outcome.
 		return &toolCallError{code: toolError.Code, message: toolError.Message, retryable: toolError.Retryable}
 	}
 }

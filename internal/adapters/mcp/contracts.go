@@ -24,6 +24,34 @@ const (
 	ToolEvaluateRecovery        = "evaluate_recovery"
 )
 
+// The exact tool catalog of each MCP server. Servers must serve exactly
+// these tools and clients must require exactly these (Client.RequireTools
+// fails closed on a missing or extra tool), so both sides and the contract
+// test take the catalog from here. Each call returns a fresh slice.
+
+// KubernetesReadonlyCatalog is the tool catalog of the readonly Kubernetes
+// MCP server (KUBERNETES_MCP_MODE=readonly).
+func KubernetesReadonlyCatalog() []string {
+	return []string{
+		ToolGetDeployment, ToolGetReplicaSets, ToolListPods,
+		ToolGetPodEvents, ToolGetRolloutStatus, ToolWatchRollout,
+	}
+}
+
+// KubernetesRollbackCatalog is the tool catalog of the rollback Kubernetes
+// MCP server (KUBERNETES_MCP_MODE=rollback).
+func KubernetesRollbackCatalog() []string {
+	return []string{ToolPrepareRollback, ToolExecuteApprovedRollback}
+}
+
+// ObservabilityCatalog is the tool catalog of the observability MCP server.
+func ObservabilityCatalog() []string {
+	return []string{
+		ToolGetHTTPErrorRate, ToolCompareErrorRateWindows, ToolGetRequestLatency,
+		ToolGetPodCPUUsage, ToolGetPodMemoryUsage, ToolEvaluateRecovery,
+	}
+}
+
 type ErrorCode string
 
 const (

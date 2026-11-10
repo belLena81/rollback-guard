@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -558,7 +559,12 @@ func (repo idempotencyRepo) Create(record domain.IdempotencyRecord) error {
 		VALUES ($1,$2,$3,$4,$5,$6)
 	`, s.Key, idempotencyOperationText(s.Operation), s.RequestHash, s.ResourceID, idempotencyStateText(s.State), s.StartedAt)
 	if err != nil {
-		return &domain.IdempotencyConflictError{Key: s.Key}
+		if isUniqueViolation(err) {
+			return &domain.IdempotencyConflictError{Key: s.Key}
+		}
+		// Not mapped through mapError: a missing incident or proposal here is
+		// an internal inconsistency, not a missing idempotency key.
+		return fmt.Errorf("create idempotency key: %w", err)
 	}
 	return nil
 }
@@ -600,19 +606,25 @@ func (repo eventRepo) Append(event domain.OperationEvent) error {
 	if err != nil {
 		return err
 	}
-	_, err = repo.r.tx.Exec(repo.r.ctx, `
+	// ON CONFLICT keeps the transaction usable when another writer already
+	// holds this sequence, so the conflict can be reported with the current
+	// maximum. A duplicate event id still raises a unique violation.
+	command, err := repo.r.tx.Exec(repo.r.ctx, `
 		INSERT INTO operation_events (id, incident_id, sequence, kind, occurred_at, actor_id, actor_kind, detail)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (incident_id, sequence) DO NOTHING
 	`, event.ID(), event.IncidentID(), event.Sequence(), eventKindText(event.Kind()), event.OccurredAt(), event.Actor().ID(), actorKindText(event.Actor().Kind()), payload)
-	if err == nil {
+	if err != nil {
+		return mapError(err, "event", string(event.ID()))
+	}
+	if command.RowsAffected() == 1 {
 		return nil
 	}
-	var max uint64
-	maxErr := repo.r.tx.QueryRow(repo.r.ctx, `SELECT COALESCE(MAX(sequence), 0) FROM operation_events WHERE incident_id = $1`, event.IncidentID()).Scan(&max)
-	if maxErr == nil && event.Sequence() != max+1 {
-		return &domain.VersionConflictError{Expected: max + 1, Actual: event.Sequence()}
+	var latest uint64
+	if err := repo.r.tx.QueryRow(repo.r.ctx, `SELECT COALESCE(MAX(sequence), 0) FROM operation_events WHERE incident_id = $1`, event.IncidentID()).Scan(&latest); err != nil {
+		return fmt.Errorf("load latest event sequence after conflict: %w", err)
 	}
-	return mapError(err, "event", string(event.ID()))
+	return &domain.VersionConflictError{Expected: latest + 1, Actual: event.Sequence()}
 }
 
 func (repo eventRepo) List(id domain.IncidentID) ([]domain.OperationEvent, error) {

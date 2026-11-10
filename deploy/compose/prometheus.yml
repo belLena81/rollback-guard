@@ -1,0 +1,15 @@
+# Prometheus for `make compose-up`. Same scrape setup as the agent sandbox
+# (.devcontainer/prometheus.yml): job demo-api, 5s interval, no relabeling, so
+# demo-api's own cluster/namespace/deployment/service labels are kept as-is
+# (docs/phase6-kind.md, "Metrics"). The target is demo-api's NodePort on the
+# kind node container, reached over kind's Docker network; rename it if
+# KIND_CLUSTER is not rollback-guard.
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+  - job_name: demo-api
+    static_configs:
+      - targets: ["rollback-guard-control-plane:30080"]

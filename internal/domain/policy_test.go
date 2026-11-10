@@ -32,7 +32,6 @@ func TestEligibilityPolicyReportsEveryRule(t *testing.T) {
 		{name: "metric unit", rule: "metric_matches_symptom", mutate: func(value *eligibilityValues) { value.metricUnit = "seconds" }},
 		{name: "current metric breach", rule: "current_metric_threshold_breached", mutate: func(value *eligibilityValues) { value.metricValue = 0.09 }},
 		{name: "symptom breach", rule: "symptom_threshold_breached", mutate: func(value *eligibilityValues) { value.observed = 0.09 }},
-		{name: "rollout health", rule: "current_rollout_unhealthy", mutate: func(value *eligibilityValues) { value.healthy = true }},
 		{name: "temporal correlation", rule: "rollout_temporally_correlated", mutate: func(value *eligibilityValues) { value.rolloutAt = value.now.Add(time.Minute) }},
 		{name: "stable revision", rule: "previous_stable_revision_distinct", mutate: func(value *eligibilityValues) { value.previousRevision = "revision-2" }},
 	}
@@ -51,6 +50,119 @@ func TestEligibilityPolicyReportsEveryRule(t *testing.T) {
 			assertRule(t, decision.Rules(), test.rule, false)
 		})
 	}
+}
+
+// A regression is eligible whether or not the rollout completed. On a real
+// cluster an error-storm build passes readiness, so its rollout completes and
+// only the breached service metric shows the regression; a stalled rollout
+// is eligible on the same evidence. Rollout health is not a policy input.
+func TestEligibilityPolicyAllowsRegressionOnStalledOrCompletedRollout(t *testing.T) {
+	for _, healthy := range []bool{false, true} {
+		values := eligibilityFixture(t)
+		values.healthy = healthy
+		decision, err := mustEligibilityPolicy(t, values.incidentTarget).Evaluate(values.candidate(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !decision.Allowed() {
+			t.Fatalf("healthy rollout = %v: decision denied, want allowed; rules %+v", healthy, decision.Rules())
+		}
+		for _, rule := range decision.Rules() {
+			if rule.Name == "current_rollout_unhealthy" {
+				t.Fatalf("healthy rollout = %v: rollout health is still a policy rule", healthy)
+			}
+		}
+	}
+}
+
+// The correlation window is inclusive at both ends: a rollout at the symptom
+// start and one exactly a window before it are correlated; a nanosecond
+// earlier, or any time after the symptom started, is not.
+func TestEligibilityPolicyCorrelationWindowBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		offset  time.Duration
+		allowed bool
+	}{
+		{name: "at the symptom start", offset: 0, allowed: true},
+		{name: "exactly one window before", offset: -10 * time.Minute, allowed: true},
+		{name: "just past the window", offset: -10*time.Minute - time.Nanosecond, allowed: false},
+		{name: "after the symptom started", offset: time.Nanosecond, allowed: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := eligibilityFixture(t)
+			values.healthy = true
+			values.rolloutAt = values.now.Add(test.offset)
+			decision, err := mustEligibilityPolicy(t, values.incidentTarget).Evaluate(values.candidate(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Allowed() != test.allowed {
+				t.Fatalf("allowed = %v, want %v", decision.Allowed(), test.allowed)
+			}
+			assertRule(t, decision.Rules(), "rollout_temporally_correlated", test.allowed)
+		})
+	}
+}
+
+// Correlation must not rest on the client-reported symptom start alone. A
+// healthy rollout from days ago, with a symptom start reported 30s after it
+// and a breached metric (a downstream outage), is not a rollout regression:
+// the rollout must also be recent on the policy's own clock.
+func TestEligibilityPolicyRequiresARecentRolloutOnItsOwnClock(t *testing.T) {
+	tests := []struct {
+		name    string
+		age     time.Duration
+		allowed bool
+	}{
+		{name: "rollout a minute ago", age: time.Minute, allowed: true},
+		{name: "rollout exactly one window ago", age: 10 * time.Minute, allowed: true},
+		{name: "rollout just over one window ago", age: 10*time.Minute + time.Nanosecond, allowed: false},
+		{name: "rollout three days ago", age: 72 * time.Hour, allowed: false},
+		// The rollout time comes from the API server's clock: a few seconds
+		// ahead is skew, not a future rollout.
+		{name: "rollout within the clock skew tolerance", age: -time.Second, allowed: true},
+		{name: "rollout beyond the clock skew tolerance", age: -31 * time.Second, allowed: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := eligibilityFixture(t)
+			values.healthy = true
+			values.rolloutAt = values.now.Add(-test.age)
+			// The client claims the symptom started right after the rollout,
+			// so rollout_temporally_correlated passes whenever it can.
+			values.startedAt = values.rolloutAt.Add(30 * time.Second)
+			if test.age < 0 {
+				values.startedAt = values.rolloutAt
+			}
+			decision, err := mustEligibilityPolicy(t, values.incidentTarget).Evaluate(values.candidate(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Allowed() != test.allowed {
+				t.Fatalf("allowed = %v, want %v; rules %+v", decision.Allowed(), test.allowed, decision.Rules())
+			}
+			assertRule(t, decision.Rules(), "rollout_recent", test.allowed)
+		})
+	}
+}
+
+// A completed rollout without a breached metric is still declined: the
+// policy decides from the metric evidence, never from the reported symptom
+// or rollout state alone.
+func TestEligibilityPolicyDeclinesCompletedRolloutWithoutMetricBreach(t *testing.T) {
+	values := eligibilityFixture(t)
+	values.healthy = true
+	values.metricValue = 0.09
+	decision, err := mustEligibilityPolicy(t, values.incidentTarget).Evaluate(values.candidate(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Allowed() {
+		t.Fatal("decision allowed without a breached metric")
+	}
+	assertRule(t, decision.Rules(), "current_metric_threshold_breached", false)
 }
 
 func TestEligibilityPolicyRejectsInvalidAllowedTargets(t *testing.T) {
@@ -158,6 +270,8 @@ type eligibilityValues struct {
 	metricName           string
 	metricValue          float64
 	metricUnit           string
+	// startedAt is the client-reported symptom start; zero means now.
+	startedAt time.Time
 }
 
 func eligibilityFixture(t *testing.T) eligibilityValues {
@@ -183,9 +297,16 @@ func eligibilityFixture(t *testing.T) eligibilityValues {
 	}
 }
 
+func (v eligibilityValues) symptomStart() time.Time {
+	if v.startedAt.IsZero() {
+		return v.now
+	}
+	return v.startedAt
+}
+
 func (v eligibilityValues) candidate(t *testing.T) domain.EligibilityCandidate {
 	t.Helper()
-	symptom, err := domain.NewSymptom("http_error_rate", v.observed, 0.10, "ratio", v.now)
+	symptom, err := domain.NewSymptom("http_error_rate", v.observed, 0.10, "ratio", v.symptomStart())
 	if err != nil {
 		t.Fatal(err)
 	}

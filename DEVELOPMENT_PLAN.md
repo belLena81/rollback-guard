@@ -16,6 +16,39 @@ Build the system in phases so every phase ends runnable, testable, and demoable.
 | 6. Real Kubernetes & Production Qualities | `kind`, demo workload, telemetry, CI | kind, Helm/Compose, OTel |
 | 7. Auth & Users | GitHub OAuth, sessions, role policy | OAuth |
 
+## Current Status
+
+Phases 1-5 are complete. Phase 6 has every task built and its exit gate automated locally (`make e2e`, `make e2e-decline`) and in CI (the `e2e` job), but it stays open until the workflow has had its first green run on a GitHub-hosted runner:
+
+| Phase 6 task | State |
+|---|---|
+| `cmd/demo-api` and container images | done |
+| kind manifests, RBAC ordering, local demo make targets (`docs/phase6-kind.md`) | done |
+| Prometheus metrics, log correlation, OpenTelemetry tracing (`docs/phase6-telemetry.md`) | done |
+| Retry/circuit-breaker decorators (`docs/phase6-resilience.md`) | done |
+| Unattended E2E flow (`make e2e`, `e2e-decline`, `e2e-test`; `docs/local-demo-env.md`) | done |
+| CI checks (`.github/workflows/ci.yml`, `docs/ci.md`) | done: lint, unit, contract, vuln, manifests, integration, images, and the kind e2e job (`make e2e`, `make e2e-decline`); written and validated locally, first hosted-runner run pending |
+
+Code-quality refactoring is interleaved with the remaining tasks in the order given in `docs/refactoring-plan.md`.
+
+The first real end-to-end run on kind found two defects that no earlier test could see, both fixed test-first with the E2E task:
+
+- **Policy required an unhealthy rollout.** The rule diagnoser and the `current_rollout_unhealthy` policy rule only allowed a rollback while the rollout was incomplete. An error-storm build passes readiness, so its rollout completes and every such regression (the scenario in `SPEC.md`) was declined. Rollout health is no longer a rule. In its place, the new rule `rollout_recent` requires the rollout to lie within `RULE_CORRELATION_WINDOW` of the policy's own clock, so correlation no longer rests on the client-reported symptom start alone (an old healthy rollout cannot be made eligible by reporting a symptom start right after it). A stalled rollout without a breached metric is still declined (the decline scenario).
+- **Recovery verification checked once, immediately.** Right after the rollout the metrics window still held the pre-rollback errors, so verification always failed. It now waits up to `RECOVERY_TIMEOUT` (default `METRICS_WINDOW` + 30s, capped at 7m, bounded by count and by the clock), checking every `RECOVERY_POLL_INTERVAL`, and treats a transient read failure during the wait as "not yet" (`docs/phase3-mcp.md`). The shared HTTP `WriteTimeout` rose from 10m to 15m so an approve request with the full wait still fits.
+- **Recovery could pass without traffic.** The error-rate query returned `0` for a window with no requests. It now returns no sample (a failed read), so recovery cannot pass on a service that serves nothing (`docs/phase6-kind.md`). A healthy window without 5xx series still yields `0`.
+
+Open findings from the E2E task:
+
+- A rollout is dated by the current ReplicaSet's creation time. When a Deployment returns to a template it ran before, Kubernetes reuses the old ReplicaSet and its old timestamp, so a re-deployed bad template is declined as not recent (fail-safe). `make demo-reset` prunes old ReplicaSets so demo runs are repeatable; the product fix (a rollout start time that survives ReplicaSet reuse) is open.
+- The threshold is still client-supplied: a very low reported threshold makes a small error rate a breach. A configured per-symptom minimum threshold, or a baseline comparison against the window before the rollout (`QueryRequest.Offset` exists), would anchor it server-side.
+- Recovery accepts any non-zero traffic and the first passing window, which can still include samples from before the rollback. A minimum request rate, or a window that starts after the execution completed, would tighten it.
+- `rollout_recent` is evaluated on the orchestrator's clock after the investigation, so a rollout near the window edge or a slow investigation is declined (fail-safe); rollout times up to `RolloutClockSkew` (30s) ahead are tolerated.
+- Policy rule results are persisted (`policy_decisions.rules`) but not returned by the API, so a decline's reasons are visible only in the database.
+- Two approve requests for one incident each run their own recovery wait; the version check lets only one commit (the other gets 409). A per-incident single-flight or lease would avoid the duplicate polling.
+- The demo runs the investigator and, unless `ROLLBACK_MCP_DATABASE_URL` is set, the rollback MCP with the owner database role; `migrate` receives `DATABASE_URL` on its command line. Dedicated roles (`docs/phase3-mcp.md`) and passing the URL by environment are left to the deployment work.
+
+Phase 7 has not started.
+
 ## Phase 1: Domain Core
 
 Goal: prove the full lifecycle in process, against fakes.
@@ -91,7 +124,7 @@ Goal: add LLM and hybrid strategies without making correctness depend on a model
 
 Build:
 
-- `ReasonerPort`/LLM adapter behind the existing diagnoser boundary.
+- `ports.Reasoner` and an LLM adapter behind the existing diagnoser boundary.
 - Rule-based, LLM-based, and hybrid strategies selected by config.
 - Structured output validation outside the LLM adapter.
 - Deterministic fallback when the LLM is unavailable or invalid.
@@ -108,7 +141,7 @@ Goal: make the local demo and operational baseline complete.
 Build:
 
 - `cmd/demo-api` with healthy and broken image tags.
-- `deploy/kubernetes`, `deploy/helm` or equivalent manifests, and local `kind` setup.
+- `deploy/kubernetes` kustomize manifests and local `kind` setup. The four services run as local processes against the cluster (see `docs/phase6-kind.md`).
 - Prometheus metrics, structured logging, OpenTelemetry tracing.
 - Retry/circuit-breaker decorators around transient external ports.
 - Make targets and CI checks.

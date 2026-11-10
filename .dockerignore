@@ -1,0 +1,7 @@
+# Allow-list: images are built only from Go sources.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+**/*_test.go

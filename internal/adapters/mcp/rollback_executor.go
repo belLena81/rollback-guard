@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/platform/resilience"
 	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
@@ -17,7 +18,7 @@ type RollbackExecutor struct {
 }
 
 func NewRollbackExecutor(rollback, readonly Caller, timeout time.Duration) (*RollbackExecutor, error) {
-	if rollback == nil || readonly == nil || timeout < time.Second || timeout > 2*time.Minute {
+	if rollback == nil || readonly == nil || !domain.ValidRolloutWatch(timeout) {
 		return nil, fmt.Errorf("invalid rollback MCP adapter configuration")
 	}
 	return &RollbackExecutor{rollback: rollback, readonly: readonly, timeout: timeout}, nil
@@ -31,9 +32,20 @@ func (a *RollbackExecutor) ExecuteApprovedRollback(ctx context.Context, approved
 	}
 	alreadyApplied := inspectErr == nil && current.CurrentRevision == proposal.TargetRevision()
 	if !alreadyApplied {
+		if err := ctx.Err(); err != nil {
+			// The caller gave up before anything that can mutate was sent.
+			return domain.RollbackExecution{}, fmt.Errorf("before prepare rollback: %w", err)
+		}
 		prepare := PrepareRollbackInput{Proposal: ProposalFromDomain(proposal)}
 		prepared, err := callTool[PrepareRollbackInput, PrepareRollbackOutput](ctx, a.rollback, ToolPrepareRollback, prepare)
 		if err != nil {
+			// With a failed inspection, "not applied" was never
+			// established: a revision-drift answer may mean an earlier
+			// attempt already applied this rollback. Only a request that
+			// never left stays a plain (retryable) failure.
+			if inspectErr != nil && !resilience.RequestNotSent(err) {
+				return domain.RollbackExecution{}, fmt.Errorf("prepare rollback after failed inspection: %w", ports.ErrRollbackOutcomeUnknown)
+			}
 			return domain.RollbackExecution{}, err
 		}
 		if prepared.ProposalHash != string(proposal.Hash()) || prepared.TargetRevision != string(proposal.TargetRevision()) {
@@ -44,8 +56,10 @@ func (a *RollbackExecutor) ExecuteApprovedRollback(ctx context.Context, approved
 	mutation, err := a.executeMutation(ctx, input, proposal)
 	waitCtx := ctx
 	if err != nil {
-		if !ambiguousToolError(err) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		switch mutationFailure(err) {
+		case mutationNotSent, mutationRejected:
 			return domain.RollbackExecution{}, err
+		case mutationAmbiguous:
 		}
 		reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.timeout)
 		defer cancel()
@@ -60,6 +74,48 @@ func (a *RollbackExecutor) ExecuteApprovedRollback(ctx context.Context, approved
 		waitCtx = reconcileCtx
 	}
 	return a.waitAndBuild(waitCtx, approved, key, mutation.StartedAt, mutation.CompletedAt)
+}
+
+// mutationFailureKind classifies a failed execute_approved_rollback call by
+// what it proves about the server.
+type mutationFailureKind uint8
+
+const (
+	// mutationAmbiguous: the request may have reached the server and the
+	// server may have applied the rollback. Only reconciliation can tell.
+	mutationAmbiguous mutationFailureKind = iota + 1
+	// mutationNotSent: the TCP dial failed, so the request never left this
+	// process. Returned unchanged so the resilience decorator may repeat it.
+	mutationNotSent
+	// mutationRejected: the server answered with a definitive rejection
+	// (validation, approval, policy, expiry, idempotency, not found) and did
+	// not mutate.
+	mutationRejected
+)
+
+// mutationRejections are the outcomes the server reports only after deciding
+// not to mutate. errorFromTool produces them from the server's structured
+// tool error; no transport failure wraps them.
+var mutationRejections = []error{
+	domain.ErrValidation, domain.ErrNotFound, domain.ErrApprovalMismatch, domain.ErrNonHumanApproval,
+	domain.ErrPolicyDenied, domain.ErrExpired, domain.ErrIdempotencyConflict,
+}
+
+// mutationFailure is fail-safe: anything that is neither a provable pre-send
+// dial failure nor a definitive server rejection is ambiguous. That covers
+// EOF, connection resets, timeouts and cancellation, HTTP 5xx, a lost or
+// expired session, internal and unknown tool error codes, and responses that
+// cannot be decoded or do not match the request.
+func mutationFailure(err error) mutationFailureKind {
+	if resilience.RequestNotSent(err) {
+		return mutationNotSent
+	}
+	for _, rejection := range mutationRejections {
+		if errors.Is(err, rejection) {
+			return mutationRejected
+		}
+	}
+	return mutationAmbiguous
 }
 
 func (a *RollbackExecutor) executeMutation(ctx context.Context, input ExecuteRollbackInput, proposal domain.RollbackProposal) (ExecuteRollbackOutput, error) {

@@ -26,12 +26,47 @@ case "${1:-help}" in
     init
     if [ "${2:-}" = "llm" ]; then compose+=(--profile llm); fi
     "${compose[@]}" up -d --build
+    # Separate database for the rollback mutation guard integration tests.
+    "${compose[@]}" exec -T postgres sh -c \
+      'psql -U rollback_guard -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '"'"'rollback_guard_test'"'"'" | grep -q 1 ||
+       psql -U rollback_guard -d postgres -c "CREATE DATABASE rollback_guard_test"'
     if [ "${2:-}" = "llm" ]; then
       "${compose[@]}" exec ollama ollama pull "${SANDBOX_LLM_MODEL:-qwen2.5:3b}"
     fi
     ;;
   shell) "${compose[@]}" exec dev bash ;;
   claude) shift; "${compose[@]}" exec dev claude "$@" ;;
+  ask)
+    # Delegate a task to Claude Code inside the sandbox, non-interactively.
+    #   sandbox.sh ask "<prompt>" [extra claude args, e.g. --resume <session-id>]
+    # Edits are auto-accepted and only the allow-listed commands below may run;
+    # anything else is refused, since nobody is there to approve it.
+    #   sandbox.sh ask [--tier light|standard|heavy] "<prompt>" [extra claude args]
+    # The tier picks model and effort (see .devcontainer/README.md, "Model routing").
+    shift
+    tier="${SANDBOX_TIER:-standard}"
+    if [ "${1:-}" = "--tier" ]; then tier="${2:?--tier needs a value}"; shift 2; fi
+    case "$tier" in
+      light)    tier_args=(--model haiku  --effort low) ;;
+      standard) tier_args=(--model sonnet --effort medium) ;;
+      heavy)    tier_args=(--model opus   --effort high) ;;
+      *) echo "unknown tier: $tier (light|standard|heavy)" >&2; exit 2 ;;
+    esac
+    prompt="${1:?usage: sandbox.sh ask [--tier light|standard|heavy] \"<prompt>\" [--resume <session-id>]}"
+    shift
+    allowed="Read,Edit,Write,Glob,Grep,Skill,Agent,TodoWrite"
+    for c in go gofmt make git golangci-lint govulncheck gopls migrate psql \
+             docker kind kubectl curl jq ls cat head tail wc grep rg find sed awk \
+             sort uniq diff mkdir cp mv touch echo printf printenv env test true \
+             sleep timeout which date basename dirname xargs tee; do
+      allowed+=",Bash($c:*)"
+    done
+    echo "tier: $tier (${tier_args[*]})" >&2
+    "${compose[@]}" exec -T dev claude -p "$prompt" "${tier_args[@]}" \
+      --permission-mode acceptEdits --allowedTools "$allowed" \
+      --output-format json "$@" </dev/null |
+      jq -r '"session: \(.session_id)\nerror: \(.is_error)\n\n\(.result)"'
+    ;;
   exec) shift; "${compose[@]}" exec -T dev "$@" ;;
   migrate) "${compose[@]}" exec -T dev sh -c 'migrate -path migrations -database "$DATABASE_URL" up' ;;
   kind-up)
@@ -52,6 +87,12 @@ case "${1:-help}" in
     git -C "$repo" fetch "$SANDBOX_DIR" "$branch:sandbox/$branch"
     echo "Fetched as local branch sandbox/$branch - review with: git diff HEAD...sandbox/$branch"
     ;;
+  push)
+    # Mirror a branch of the real repo into the sandbox copy as host/<branch>.
+    branch="${2:?usage: sandbox.sh push <branch>}"
+    git -C "$SANDBOX_DIR" fetch "$repo" "+$branch:refs/heads/host/$branch"
+    echo "Available in the sandbox as host/$branch"
+    ;;
   down) "${compose[@]}" --profile llm down ;;
   destroy)
     "${compose[@]}" --profile llm down -v
@@ -63,12 +104,14 @@ usage: sandbox.sh <command>
   up [llm]     build and start the sandbox (llm: also start Ollama and pull a model)
   shell        open a shell in the dev container
   claude ...   run Claude Code inside the sandbox
+  ask [--tier T] PROMPT  delegate a task to the sandbox Claude (allow-listed commands); T = light|standard|heavy
   exec CMD...  run a command inside the sandbox
   migrate      apply migrations to the sandbox PostgreSQL
   kind-up      create the kind cluster inside the sandbox Docker daemon
   kind-down    delete it
   sync         copy the real working tree (without .git) into the sandbox
   pull BRANCH  fetch a sandbox branch into the real repo as sandbox/BRANCH
+  push BRANCH  mirror a branch of the real repo into the sandbox as host/BRANCH
   down         stop containers (state kept)
   destroy      stop and delete all sandbox volumes
 USAGE

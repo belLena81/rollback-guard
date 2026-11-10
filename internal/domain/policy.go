@@ -100,13 +100,23 @@ func (p EligibilityPolicy) Evaluate(candidate EligibilityCandidate) (PolicyDecis
 			break
 		}
 	}
-	deploymentMatches, unhealthy, correlated, stable := false, false, false, false
+	// Rollout health is deliberately not a rule. A build that serves errors
+	// but passes readiness completes its rollout, so requiring an unhealthy
+	// rollout made exactly that regression ineligible. Eligibility rests on
+	// the breached metric evidence, the rollout correlation, and a distinct
+	// stable target; a stalled rollout without a breached metric is declined.
+	//
+	// The correlation is checked twice: against the reported symptom start
+	// (client-supplied) and against the policy's own clock (rollout_recent),
+	// so an old rollout cannot be made to look correlated by reporting a
+	// symptom start right after it.
+	deploymentMatches, correlated, recent, stable := false, false, false, false
 	if deployment != nil {
 		deploymentMatches = deployment.Target.Equal(candidate.Incident.Target())
-		unhealthy = !deployment.Healthy
 		stable = deployment.PreviousStableRevision != "" && deployment.PreviousStableRevision != deployment.CurrentRevision
 		delta := candidate.Incident.Symptom().StartedAt().Sub(deployment.RolloutAt)
 		correlated = delta >= 0 && delta <= p.correlationWindow
+		recent = RolloutRecent(deployment.RolloutAt, candidate.Now, p.correlationWindow)
 	}
 	metricMatches, metricBreached := false, false
 	if metric != nil {
@@ -125,11 +135,24 @@ func (p EligibilityPolicy) Evaluate(candidate EligibilityCandidate) (PolicyDecis
 		{Name: "metric_matches_symptom", Passed: metricMatches},
 		{Name: "current_metric_threshold_breached", Passed: metricBreached},
 		{Name: "symptom_threshold_breached", Passed: candidate.Incident.Symptom().Breached()},
-		{Name: "current_rollout_unhealthy", Passed: unhealthy},
 		{Name: "rollout_temporally_correlated", Passed: correlated},
+		{Name: "rollout_recent", Passed: recent},
 		{Name: "previous_stable_revision_distinct", Passed: stable},
 	}
 	return NewPolicyDecision(candidate.DecisionID, candidate.Incident.ID(), rules, candidate.Now)
+}
+
+// RolloutClockSkew is how far a rollout time (from the Kubernetes API
+// server's clock) may lie ahead of the evaluator's clock and still count as
+// "now" rather than as a rollout in the future.
+const RolloutClockSkew = 30 * time.Second
+
+// RolloutRecent reports whether a rollout at rolloutAt happened at most window
+// before now and not after it (up to RolloutClockSkew). now is the
+// evaluator's own clock, never a client-reported time.
+func RolloutRecent(rolloutAt, now time.Time, window time.Duration) bool {
+	age := now.Sub(rolloutAt)
+	return !rolloutAt.IsZero() && age >= -RolloutClockSkew && age <= window
 }
 
 func EvaluateRecovery(target DeploymentTarget, targetRevision Revision, deployment DeploymentEvidence, metric MetricEvidence, symptom Symptom, incidentID IncidentID, executionID ExecutionID, now time.Time) (RecoveryVerification, error) {

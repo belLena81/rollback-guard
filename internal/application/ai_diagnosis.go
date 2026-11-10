@@ -172,6 +172,8 @@ func sanitizedReasonerError(reason domain.DiagnosisFallbackReason) error {
 		return ports.ErrReasonerRefused
 	case domain.FallbackInvalidOutput:
 		return ports.ErrReasonerInvalidResponse
+	case domain.FallbackProviderError:
+		return ports.ErrReasonerUnavailable
 	default:
 		return ports.ErrReasonerUnavailable
 	}
