@@ -207,6 +207,42 @@ func TestResultWireAcceptsLegacyRuleConclusionWithoutProvenance(t *testing.T) {
 	}
 }
 
+func TestResultWireRejectsUnknownRecommendation(t *testing.T) {
+	tests := []struct {
+		name           string
+		recommendation string
+		legacy         bool
+		wantErr        bool
+	}{
+		{name: "rollback", recommendation: domain.RecommendRollback.String()},
+		{name: "no action", recommendation: domain.RecommendNoAction.String()},
+		{name: "unknown value", recommendation: "restart_pods", wantErr: true},
+		{name: "empty value", recommendation: "", wantErr: true},
+		{name: "wrong case", recommendation: "Rollback", wantErr: true},
+		{name: "zero value spelling", recommendation: domain.Recommendation(0).String(), wantErr: true},
+		{name: "legacy result with unknown value", recommendation: "restart_pods", legacy: true, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := modelWireResult(t)
+			wire := encodeResult(result.Conclusion.IncidentID(), result)
+			if test.legacy {
+				wire.Conclusion.Strategy = domain.StrategyRules.String()
+				wire.Conclusion.Provenance = nil
+			}
+			wire.Conclusion.Recommendation = test.recommendation
+
+			decoded, err := decodeResult(wire)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("decodeResult() with recommendation %q error = %v, wantErr %t", test.recommendation, err, test.wantErr)
+			}
+			if err == nil && decoded.Conclusion.Recommendation().String() != test.recommendation {
+				t.Fatalf("decoded recommendation = %s, want %s", decoded.Conclusion.Recommendation(), test.recommendation)
+			}
+		})
+	}
+}
+
 func TestResultFromArtifactsRequiresExactlyOneResultArtifact(t *testing.T) {
 	valid := validResultArtifact(t)
 	unexpected := &a2a.Artifact{Name: "debug-log", Parts: a2a.ContentParts{a2a.NewTextPart("ignored")}}
