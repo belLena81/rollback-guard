@@ -20,6 +20,11 @@ on:
 permissions:
   contents: read
 
+# Explicit bash adds -o pipefail, so `make ... | tee log` fails when make fails.
+defaults:
+  run:
+    shell: bash
+
 # A newer push to the same ref makes the older run obsolete.
 concurrency:
   # A branch push and its pull request share a group, so only one runs.
