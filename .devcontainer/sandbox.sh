@@ -70,7 +70,7 @@ case "${1:-help}" in
       --permission-mode acceptEdits --allowedTools "$allowed" \
       --output-format json "$@" </dev/null > "$out"
     mkdir -p "$repo/.demo"
-    jq -r --arg tier "$tier" '[now|todate, $tier, .session_id, (.total_cost_usd // 0), (.num_turns // 0), .is_error] | @tsv' "$out" >> "$repo/.demo/ask-costs.tsv"
+    jq -r --arg tier "$tier" '[(now|todate), $tier, .session_id, (.total_cost_usd // 0), (.num_turns // 0), .is_error] | @tsv' "$out" >> "$repo/.demo/ask-costs.tsv"
     jq -r '"session: \(.session_id)\nerror: \(.is_error)\ncost_usd: \(.total_cost_usd // "n/a")  turns: \(.num_turns // "n/a")\n\n\(.result)"' "$out"
     rm -f "$out"
     ;;
