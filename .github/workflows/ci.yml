@@ -1,0 +1,318 @@
+# Continuous integration (docs/ci.md). Jobs fail fast: cheap static checks
+# first, then unit, contract, vulnerability and manifest checks, then the
+# Docker-backed suites, and the kind end-to-end run (the Phase 6 exit gate) last.
+#
+#   lint -> unit, contract, vuln, manifests -> integration, images
+#                         unit, contract, manifests -> e2e (beside integration, images)
+#
+# Every third-party action is pinned to a full commit SHA with its version in a
+# comment. Tool versions that are not actions are pinned in this file.
+name: ci
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master, "phase*/**"]
+  workflow_dispatch:
+
+# Least privilege: no job writes to the repository, issues, or packages.
+permissions:
+  contents: read
+
+# A newer push to the same ref makes the older run obsolete.
+concurrency:
+  # A branch push and its pull request share a group, so only one runs.
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  # Never cancel a run on master: every commit there keeps its result.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  # Must equal LINT_TAGS in the Makefile (checked in the lint job).
+  LINT_TAGS: integration,kind,e2e
+  GOLANGCI_LINT_VERSION: v2.10.1 # the version the agent sandbox pins
+  ACTIONLINT_VERSION: v1.7.12
+  GOVULNCHECK_VERSION: v1.9.0
+  KUBECONFORM_VERSION: v0.8.0
+  MIGRATE_VERSION: v4.20.1
+  KUBECTL_VERSION: v1.37.2
+  KUBECTL_SHA256: c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
+  KUBERNETES_SCHEMA_VERSION: 1.37.0
+  # kind and its node image move together; the sandbox runs the same pair.
+  KIND_VERSION: v0.33.0
+  KIND_NODE_IMAGE: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+      - name: Build tags match the Makefile
+        run: grep -qx "LINT_TAGS ?= ${LINT_TAGS}" Makefile
+      - name: gofmt
+        run: make fmt-check
+      - name: go vet (integration, kind and e2e files included)
+        run: make vet
+      - name: go mod tidy leaves no diff
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --build-tags=${{ env.LINT_TAGS }} ./...
+      - name: actionlint (workflows)
+        run: go run "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+
+  unit:
+    name: unit (race, coverage)
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+      - name: make test-race with a coverage profile
+        run: make test-race GOFLAGS="-coverprofile=coverage.out -covermode=atomic"
+      - name: Coverage report
+        run: |
+          go tool cover -func=coverage.out > coverage-func.txt
+          go tool cover -html=coverage.out -o coverage.html
+          {
+            echo '### Unit test coverage'
+            echo
+            echo "Total: $(tail -n 1 coverage-func.txt | awk '{print $NF}')"
+          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Upload coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: |
+            coverage.out
+            coverage-func.txt
+            coverage.html
+          if-no-files-found: error
+          retention-days: 14
+
+  contract:
+    name: contract
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+      - run: make contract-test
+
+  vuln:
+    name: govulncheck
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+      - name: govulncheck
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
+
+  manifests:
+    name: manifests
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+      - name: Install kubectl ${{ env.KUBECTL_VERSION }}
+        run: |
+          curl -fsSLo "${RUNNER_TEMP}/kubectl" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  ${RUNNER_TEMP}/kubectl" | sha256sum --check -
+          sudo install -m 0755 "${RUNNER_TEMP}/kubectl" /usr/local/bin/kubectl
+      - name: Install kubeconform ${{ env.KUBECONFORM_VERSION }}
+        run: |
+          go install "github.com/yannh/kubeconform/cmd/kubeconform@${KUBECONFORM_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+      - name: Kustomize builds and validates (deploy/kubernetes, deploy/rbac)
+        run: |
+          for dir in deploy/kubernetes deploy/rbac; do
+            echo "==> ${dir}"
+            kubectl kustomize "${dir}" \
+              | kubeconform -strict -summary \
+                  -kubernetes-version "${KUBERNETES_SCHEMA_VERSION}" -
+          done
+      - name: Compose file is valid
+        run: docker compose -f deploy/compose/compose.yaml config --quiet
+
+  integration:
+    name: integration
+    needs: [unit, contract]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      # postgres-integration needs an empty database whose name contains "test";
+      # the tests create and drop their own schemas in it.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rollback_guard
+          POSTGRES_PASSWORD: rollback_guard
+          POSTGRES_DB: rollback_guard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rollback_guard -d rollback_guard_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      ROLLBACK_GUARD_POSTGRES_TEST_DSN: postgres://rollback_guard:rollback_guard@127.0.0.1:5432/rollback_guard_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+      # phase3-5 start PostgreSQL with testcontainers on the runner's Docker.
+      # postgres-integration fails on any skipped test (scripts/ci/test-no-skips.sh).
+      - run: make integration
+
+  images:
+    name: image (${{ matrix.name }})
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: orchestrator, file: deploy/docker/service.Dockerfile, args: "SERVICE=orchestrator" }
+          - { name: investigator, file: deploy/docker/service.Dockerfile, args: "SERVICE=investigator" }
+          - { name: kubernetes-mcp, file: deploy/docker/service.Dockerfile, args: "SERVICE=kubernetes-mcp" }
+          - { name: observability-mcp, file: deploy/docker/service.Dockerfile, args: "SERVICE=observability-mcp" }
+          # <image tag>:<DEMO_MODE>:<DEMO_VERSION> as DEMO_VARIANTS in the Makefile.
+          - { name: demo-api-v1-healthy, file: deploy/docker/demo-api.Dockerfile, args: "DEMO_MODE=healthy\nDEMO_VERSION=v1" }
+          - { name: demo-api-v2-bad-crashloop, file: deploy/docker/demo-api.Dockerfile, args: "DEMO_MODE=crashloop\nDEMO_VERSION=v2" }
+          - { name: demo-api-v2-bad-error-storm, file: deploy/docker/demo-api.Dockerfile, args: "DEMO_MODE=error-storm\nDEMO_VERSION=v2" }
+          - { name: demo-api-v2-bad-high-latency, file: deploy/docker/demo-api.Dockerfile, args: "DEMO_MODE=high-latency\nDEMO_VERSION=v2" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build (no push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          build-args: ${{ matrix.args }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max
+
+  e2e:
+    name: e2e (kind)
+    # Cheap gates first; runs beside integration and images. Triggers are the
+    # workflow's: pull requests to master, pushes to master and phase branches.
+    needs: [unit, contract, manifests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Throwaway values for the compose stack (deploy/compose/compose.yaml).
+      DATABASE_URL: postgres://rollback_guard:rollback_guard@127.0.0.1:5432/rollback_guard?sslmode=disable
+      PROMETHEUS_URL: http://127.0.0.1:9090
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
+      TRACE_QUERY_URL: http://127.0.0.1:16686
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+      - name: Install migrate ${{ env.MIGRATE_VERSION }}
+        run: |
+          go install -tags postgres "github.com/golang-migrate/migrate/v4/cmd/migrate@${MIGRATE_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+      - name: psql is available (verify.sh reads policy rules with it)
+        run: |
+          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client; }
+          psql --version
+      # The cluster must be named rollback-guard on kind's default Docker
+      # network: the Makefile pins the context kind-rollback-guard and
+      # Prometheus scrapes rollback-guard-control-plane:30080.
+      - name: Create the kind cluster
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          version: ${{ env.KIND_VERSION }}
+          kubectl_version: ${{ env.KUBECTL_VERSION }}
+          node_image: ${{ env.KIND_NODE_IMAGE }}
+          cluster_name: rollback-guard
+          config: deploy/kind/cluster.yaml
+          wait: 120s
+      # The four services run as host processes, so only the demo-api images
+      # are needed in the cluster (the images job builds the service images).
+      - name: Build and load the demo-api images
+        run: make images-demo-api kind-load
+      - name: Deploy the demo workload and RBAC
+        run: make deploy
+      - name: RBAC and live-cluster adapter checks
+        run: make rbac-check phase6-kind-check
+      - name: Start PostgreSQL, Prometheus and Jaeger
+        run: make compose-up COMPOSE_PROFILES="--profile tracing"
+      # Jaeger has no healthcheck, so compose --wait returns once it is running.
+      - name: Wait for Jaeger
+        run: |
+          for _ in $(seq 1 60); do
+            curl -fs -o /dev/null "${TRACE_QUERY_URL}/" && exit 0
+            sleep 1
+          done
+          echo "Jaeger query API did not become ready" >&2
+          exit 1
+      # verify.sh reports a skipped trace check as a pass with a note, so the
+      # job requires the line that only a passed trace check prints.
+      - name: make e2e
+        run: |
+          make e2e 2>&1 | tee e2e-rollback.log
+          grep -q 'including the trace check' e2e-rollback.log
+      - name: make e2e-decline
+        run: |
+          make e2e-decline 2>&1 | tee e2e-decline.log
+          grep -q 'including the trace check' e2e-decline.log
+      - name: Collect diagnostics
+        if: failure() || cancelled()
+        run: |
+          mkdir -p ci-diagnostics
+          make services-status > ci-diagnostics/services-status.txt 2>&1 || true
+          docker compose -f deploy/compose/compose.yaml --profile tracing logs --no-color > ci-diagnostics/compose.log 2>&1 || true
+          kubectl --context kind-rollback-guard -n rollback-demo get all,replicasets -o wide > ci-diagnostics/cluster.txt 2>&1 || true
+          kubectl --context kind-rollback-guard -n rollback-demo get events --sort-by=.lastTimestamp >> ci-diagnostics/cluster.txt 2>&1 || true
+      - name: Stop services
+        if: always()
+        run: make services-down
+      # Only logs: .demo also holds service-account kubeconfigs with bearer tokens.
+      - name: Upload e2e logs
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-logs
+          # .demo is a hidden directory; the explicit paths keep kubeconfig-* out.
+          include-hidden-files: true
+          path: |
+            .demo/logs/
+            .demo/last-incident
+            e2e-rollback.log
+            e2e-decline.log
+            ci-diagnostics/
+          if-no-files-found: error
+          retention-days: 14

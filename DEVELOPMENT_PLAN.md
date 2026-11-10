@@ -18,7 +18,7 @@ Build the system in phases so every phase ends runnable, testable, and demoable.
 
 ## Current Status
 
-Phases 1-5 are complete. Phase 6 is in progress:
+Phases 1-5 are complete. Phase 6 has every task built and its exit gate automated locally (`make e2e`, `make e2e-decline`) and in CI (the `e2e` job), but it stays open until the workflow has had its first green run on a GitHub-hosted runner:
 
 | Phase 6 task | State |
 |---|---|
@@ -27,7 +27,7 @@ Phases 1-5 are complete. Phase 6 is in progress:
 | Prometheus metrics, log correlation, OpenTelemetry tracing (`docs/phase6-telemetry.md`) | done |
 | Retry/circuit-breaker decorators (`docs/phase6-resilience.md`) | done |
 | Unattended E2E flow (`make e2e`, `e2e-decline`, `e2e-test`; `docs/local-demo-env.md`) | done |
-| CI checks | not started |
+| CI checks (`.github/workflows/ci.yml`, `docs/ci.md`) | done: lint, unit, contract, vuln, manifests, integration, images, and the kind e2e job (`make e2e`, `make e2e-decline`); written and validated locally, first hosted-runner run pending |
 
 Code-quality refactoring is interleaved with the remaining tasks in the order given in `docs/refactoring-plan.md`.
 

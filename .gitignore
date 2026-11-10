@@ -14,6 +14,11 @@ _log/
 bin/
 dist/
 coverage.out
+coverage-func.txt
+coverage.html
+ci-diagnostics/
+e2e-rollback.log
+e2e-decline.log
 *.test
 
 # Local demo state (service-account kubeconfigs hold bearer tokens)

@@ -36,6 +36,7 @@ This rule is the main project invariant. The AI layer may diagnose and recommend
 - [docs/design.md](./docs/design.md): design notes and differentiators.
 - [docs/feature-plan.md](./docs/feature-plan.md): feature backlog and product framing.
 - [docs/local-demo-env.md](./docs/local-demo-env.md): local `kind` demo environment.
+- [docs/ci.md](./docs/ci.md): GitHub Actions jobs, what each gates, and how to reproduce them locally.
 - [docs/tech-stack.md](./docs/tech-stack.md): selected libraries and alternatives.
 - [.agents/00-INDEX.md](./.agents/00-INDEX.md): role briefs for agentic development.
 - [docs/phase3-mcp.md](./docs/phase3-mcp.md), [docs/phase4-a2a.md](./docs/phase4-a2a.md), [docs/phase5-ai-diagnosis.md](./docs/phase5-ai-diagnosis.md), [docs/phase6-kind.md](./docs/phase6-kind.md), [docs/phase6-telemetry.md](./docs/phase6-telemetry.md): per-phase runtime configuration and verification.
@@ -63,7 +64,7 @@ test/
 docs/
 ```
 
-Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is in progress: the `demo-api` workload, container images, kind manifests, the local demo flow, telemetry (metrics, correlated logs, tracing), retry/circuit-breaker decorators (`docs/phase6-resilience.md`), and the unattended end-to-end run (`make e2e`, `docs/local-demo-env.md`) exist; CI does not yet. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
+Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is in progress: the `demo-api` workload, container images, kind manifests, the local demo flow, telemetry (metrics, correlated logs, tracing), retry/circuit-breaker decorators (`docs/phase6-resilience.md`), the unattended end-to-end run (`make e2e`, `docs/local-demo-env.md`), and GitHub Actions CI (`docs/ci.md`) exist. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
 
 ## Canonical Choices
 
@@ -112,5 +113,7 @@ make e2e                 # unattended exit gate: healthy -> broken -> incident -
 make e2e-decline         # policy declines a crashloop rollout; nothing is mutated
 make e2e-test            # the same flows as a Go test (build tag e2e) against a running stack
 ```
+
+`.github/workflows/ci.yml` runs these gates on pull requests to `master` and on pushes to `master` and `phase*/**` branches ([docs/ci.md](./docs/ci.md)).
 
 The kind targets are described in [docs/phase6-kind.md](./docs/phase6-kind.md), the stack, the scripted REST steps, and the end-to-end runs in [docs/local-demo-env.md](./docs/local-demo-env.md).
