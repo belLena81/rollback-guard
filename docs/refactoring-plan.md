@@ -20,7 +20,7 @@ Source: a code-quality audit of the `phase6` branch (production code under `cmd/
 | 4 | Phase 6 resilience decorators (done) | |
 | 5 | R3 Approve-and-execute use case (done) | The E2E flow drives exactly this path; fix its shape first. |
 | 6 | Phase 6 E2E flow and CI | CI enforces the ratcheted lint config from here on. |
-| 7 | R4-R8 (R4-R7 done) | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
+| 7 | R4-R8 (R4-R7 done; R8 except item 5) | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
 
 ## R1. Correctness defects (done)
 
@@ -142,7 +142,9 @@ Behaviour notes (equivalent, not byte-identical):
 
 Gates on the final tree: `make lint`, `make test-race`, `make contract-test`, phase3-5 integration (uncached, 0 skips), postgres integration (39 passed, 0 skipped), and `govulncheck` (no vulnerabilities).
 
-## R8. Readability and error context
+## R8. Readability and error context (items 1-4, 6, 7 done; item 5 remains)
+
+Done on `refactor/r8-readability`: `lll` (160), `wrapcheck` (domain and ports ignored), `contextcheck` and `gosec` are on in `.golangci.yml`. `_test.go` files are excluded from those four. Item 3 is decided in `docs/adr-repository-context.md` (stray `NextSequence` ctx removed, transaction-scoped context documented in `ports.go`). Item 4: `a2a/server.go:64` no longer uses `context.Background()`, so nothing changed there. Item 6 had two real hits, not four; `DB_MAX_CONNS` is now capped (`maxDBMaxConns`). Item 7: `sqlc.yaml` deleted. No pinned error text changed. Item 5 is still open.
 
 1. **Line length.** 75 production lines exceed 200 characters; several exceed 350. Break struct literals and call chains one field per line. Enable `lll` at 160.
 2. **Error wrapping.** 295 returns pass through an error from another package with no context (113 in `internal/application`). Wrap at package boundaries with `%w` and an operation name; do not wrap domain errors that callers match with `errors.As` in a way that changes their identity. Enable `wrapcheck` with the domain and ports packages ignored.
