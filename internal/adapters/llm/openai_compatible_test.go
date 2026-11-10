@@ -128,6 +128,8 @@ func TestOpenAICompatibleReasonerClassifiesUnsafeResponses(t *testing.T) {
 
 func TestOpenAICompatibleReasonerStripsAmbientProviderHeaders(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "ambient-key")
+	t.Setenv("OPENAI_ADMIN_KEY", "ambient-admin-key")
+	t.Setenv("OPENAI_CUSTOM_HEADERS", "Authorization: Bearer ambient-custom")
 	t.Setenv("OPENAI_ORG_ID", "ambient-org")
 	t.Setenv("OPENAI_PROJECT_ID", "ambient-project")
 	transport := &recordingTransport{response: `{

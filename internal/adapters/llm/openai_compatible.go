@@ -55,13 +55,22 @@ func NewOpenAICompatibleReasoner(config OpenAICompatibleConfig) (*OpenAICompatib
 		transport = http.DefaultTransport
 	}
 	sanitizedClient := *httpClient
-	sanitizedClient.Transport = &providerHeaderTransport{next: transport, includeAuthorization: config.APIKey != ""}
-	client := openai.NewClient(
+	sanitizedClient.Transport = &boundedResponseTransport{next: transport}
+	// The SDK reads OPENAI_* variables from the ambient environment. These
+	// options apply after those defaults and remove every credential or
+	// account header that the caller did not configure explicitly.
+	options := []option.RequestOption{
 		option.WithBaseURL(strings.TrimRight(config.BaseURL, "/")),
 		option.WithAPIKey(config.APIKey),
 		option.WithHTTPClient(&sanitizedClient),
 		option.WithMaxRetries(0),
-	)
+		option.WithHeaderDel("OpenAI-Organization"),
+		option.WithHeaderDel("OpenAI-Project"),
+	}
+	if config.APIKey == "" {
+		options = append(options, option.WithHeaderDel("Authorization"))
+	}
+	client := openai.NewClient(options...)
 	return &OpenAICompatibleReasoner{client: client, model: config.Model, maxOutputTokens: int64(config.MaxOutputTokens)}, nil
 }
 
@@ -250,20 +259,14 @@ func strictDecodeCandidate(content string, target *reasoningCandidateDTO) error 
 	return nil
 }
 
-type providerHeaderTransport struct {
-	next                 http.RoundTripper
-	includeAuthorization bool
+// boundedResponseTransport caps provider response bodies. The SDK has no
+// option for this, so it stays a RoundTripper.
+type boundedResponseTransport struct {
+	next http.RoundTripper
 }
 
-func (t *providerHeaderTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	clean := request.Clone(request.Context())
-	clean.Header = request.Header.Clone()
-	clean.Header.Del("OpenAI-Organization")
-	clean.Header.Del("OpenAI-Project")
-	if !t.includeAuthorization {
-		clean.Header.Del("Authorization")
-	}
-	response, err := t.next.RoundTrip(clean)
+func (t *boundedResponseTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := t.next.RoundTrip(request)
 	if response != nil && response.Body != nil {
 		response.Body = http.MaxBytesReader(nil, response.Body, maxProviderResponseBytes)
 	}
