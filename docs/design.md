@@ -14,7 +14,7 @@ Keep other features lightweight so these are complete and demonstrable.
 
 1. Incident is created from a deployment regression symptom.
 2. Orchestrator persists the incident and delegates investigation through A2A.
-3. Investigator gathers deployment, pod, event, log, and metric evidence through MCP.
+3. Investigator gathers deployment and metric evidence through MCP. Pod and event tools exist in the read-only catalog, but the investigation does not collect them as evidence yet; there is no log tool.
 4. Diagnoser returns a structured, evidence-linked conclusion.
 5. Orchestrator validates schema and evidence references.
 6. Policy decides whether a rollback proposal may be presented.
@@ -38,7 +38,8 @@ Use ports and adapters:
 - `internal/application`: use cases and orchestration over ports.
 - `internal/ports`: small interfaces owned by callers.
 - `internal/adapters`: A2A, MCP, Kubernetes, Prometheus, PostgreSQL, LLM, memory.
-- `internal/platform`: config, logging, telemetry, HTTP server concerns.
+- `internal/platform`: config, local auth middleware, clock and ID generation. Telemetry is planned for Phase 6.
+- `internal/demoapi`: the demo workload behind `cmd/demo-api`.
 
 ## Timeline Data
 
@@ -58,7 +59,7 @@ Capture enough data to reconstruct decisions:
 The demo should be repeatable:
 
 - Deploy healthy `demo-api` image.
-- Generate baseline traffic or synthetic metrics.
+- Generate baseline traffic (`make generate-load`); Prometheus scrapes real `demo-api` metrics.
 - Deploy broken image tag.
 - Trigger incident.
 - Approve rollback.

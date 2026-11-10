@@ -4,15 +4,17 @@ Status: accepted for v1 unless marked superseded.
 
 ## ADR-01: Use Official A2A Go SDK
 
-Use the official `github.com/a2aproject/a2a-go` SDK for inter-agent communication. Model human approval waits as protocol task state where possible instead of inventing a separate agent protocol.
+Use the official `github.com/a2aproject/a2a-go/v2` SDK for inter-agent communication.
+
+Amended: A2A carries only the investigation task. Human approval is not modeled as A2A task state; it is an Orchestrator REST command bound to the proposal hash, because the Investigator must never take part in approval or execution.
 
 ## ADR-02: Use MCP as a Capability Boundary
 
 Expose infrastructure access through narrow MCP servers:
 
-- `k8s-readonly-mcp`: read deployment, pods, events, rollout state.
-- `metrics-mcp`: read typed service metrics and recovery signals.
-- `k8s-rollback-mcp`: execute only approved rollback operations.
+- Kubernetes read-only MCP (`cmd/kubernetes-mcp`, `KUBERNETES_MCP_MODE=readonly`): read deployment, ReplicaSets, pods, events, rollout state.
+- Observability MCP (`cmd/observability-mcp`): read typed service metrics and recovery signals.
+- Kubernetes rollback MCP (`cmd/kubernetes-mcp`, `KUBERNETES_MCP_MODE=rollback`): prepare and execute only approved rollback operations.
 
 Do not expose generic shell, `kubectl`, arbitrary patch, arbitrary YAML, or delete tools.
 
@@ -34,7 +36,7 @@ Domain packages are pure. Application services depend on ports. Protocol, Kubern
 
 ## ADR-07: Events and Audit
 
-Emit immutable, past-tense domain events and persist every state-changing step to the audit timeline. The audit timeline is both operational evidence and the source for the flagship transparency UI.
+Emit immutable, past-tense domain events and persist every state-changing step to the audit timeline. The audit timeline is both operational evidence and the source for the transparency view. Today it is exposed as `GET /v1/incidents/{incidentId}/events`; no UI exists.
 
 ## ADR-08: PostgreSQL Persistence
 
@@ -61,3 +63,11 @@ Use fast unit tests by default, then contract tests for protocol shape, integrat
 ## ADR-13: Explicit Non-Goals
 
 Do not build multi-tenant production incident management, autonomous rollback without approval, generic notification integrations, high availability, or production secrets management in v1.
+
+## ADR-14: Demo Services Run Beside the Cluster
+
+For the local demo only `demo-api` runs inside `kind`. The Orchestrator, Investigator, and MCP servers run as local processes next to PostgreSQL and Prometheus. Each Kubernetes MCP process authenticates with a short-lived token for its own ServiceAccount, so the API server still enforces the least-privilege RBAC. In-cluster deployment of the services is not required for v1.
+
+## ADR-15: Stable Revision Is an Operator Mark on the ReplicaSet
+
+The rollback target is the single ReplicaSet annotated `rollback-guardian.io/stable: "true"`. The mark is an explicit operator action after a release is verified good. It is never placed on the Deployment or its Pod template, because Deployment annotations are copied to every new ReplicaSet and template annotations change the revision digest. Zero or several stable ReplicaSets make rollback fail closed.

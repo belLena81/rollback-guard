@@ -11,22 +11,24 @@ Use modern Go with standard library defaults where practical:
 
 ## Protocols
 
-- A2A: official `github.com/a2aproject/a2a-go` SDK.
-- MCP: official `github.com/modelcontextprotocol/go-sdk` where practical.
+- A2A: official `github.com/a2aproject/a2a-go/v2` SDK, HTTP+JSON REST binding.
+- MCP: official `github.com/modelcontextprotocol/go-sdk`, Streamable HTTP transport.
 - JSON schema: prefer typed Go structs and generated/derived schemas over unstructured `map[string]any`.
 
 ## Kubernetes and Metrics
 
 - Kubernetes API: `k8s.io/client-go`.
-- Local cluster: `kind`.
-- Metrics: start with direct/synthetic app metrics for repeatability; add Prometheus when the rest of the workflow is stable.
+- Local cluster: `kind`, manifests applied with kustomize.
+- Metrics: Prometheus, queried by the Observability MCP through `prometheus/client_golang`. `demo-api` exposes the request counter and latency histogram those queries select.
+- Images: multi-stage builds onto distroless, non-root.
 
 ## Persistence
 
 - PostgreSQL is canonical for v1.
 - Use `pgx`/`pgxpool`.
 - Use migrations.
-- Use `sqlc` if query volume grows enough to justify generated typed access.
+- `sqlc.yaml` is present, but nothing is generated; repositories use `pgx` directly. Generate only if query volume grows enough to justify it.
+- Migrations are applied with `golang-migrate`.
 - Use Testcontainers for integration tests.
 
 SQLite appeared in earlier source notes as a zero-friction alternative, but it conflicts with the technical specification and development plan. Do not choose SQLite unless a future ADR explicitly supersedes the PostgreSQL decision.
@@ -35,10 +37,9 @@ SQLite appeared in earlier source notes as a zero-friction alternative, but it c
 
 Keep model access behind one port. Reasonable implementations:
 
-- Rule-based fallback: required first.
-- Groq or OpenRouter: OpenAI-compatible hosted APIs.
-- Ollama: offline local demo path.
-- Gemini: optional provider-specific path.
+- Rule-based diagnosis: the default and the fallback for every other strategy.
+- One implemented transport: the official OpenAI Go SDK against any OpenAI-compatible `/v1/chat/completions` API (`LLM_PROVIDER=openai_compatible`). That covers hosted APIs such as Groq or OpenRouter and a local Ollama.
+- Provider-specific adapters (for example Gemini) are not implemented.
 
 The LLM may only produce structured diagnosis data. It may not call tools, approve, execute, or bypass validation.
 
@@ -47,13 +48,16 @@ The LLM may only produce structured diagnosis data. It may not call tools, appro
 - Unit: pure domain and application logic.
 - Contract: REST/OpenAPI, A2A Agent Card/tasks, MCP tool schemas.
 - Integration: PostgreSQL, MCP server/client, A2A server/client.
-- E2E: gated `kind` workflow.
+- E2E: gated `kind` workflow. The live-cluster adapter check exists (`make phase6-kind-check`, build tag `kind`); the full unattended flow is still to be built.
 
 Default `go test ./...` must not require Kubernetes, network access, real LLM calls, or long-running services.
 
 ## Operations
 
-- Health endpoints on every service.
+- Health endpoints on every service (implemented).
+
+Planned for the rest of Phase 6:
+
 - Prometheus metrics for incidents, investigation duration, MCP calls, rollbacks, approval latency, and failures.
 - OpenTelemetry traces across REST, A2A, MCP, and Kubernetes calls.
 - Retry/circuit-breaker decorators around transient external ports.

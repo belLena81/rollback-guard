@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Rollback Guardian is a Go demo of a safe agentic DevOps workflow: detect a bad Kubernetes rollout, investigate evidence, propose a rollback, require human approval bound to an exact proposal hash, execute through narrow MCP tools, and verify recovery. `AGENTS.md` (local, gitignored) holds the full agent rules. Read `SPEC.md`, `DEVELOPMENT_PLAN.md`, and the matching role brief in `.agents/` before working on a phase. Work proceeds strictly in phase order. Phases 1–5 are implemented. Phase 6 (kind, demo-api, OTel, CI) and Phase 7 (OAuth/users) are not.
+Rollback Guardian is a Go demo of a safe agentic DevOps workflow: detect a bad Kubernetes rollout, investigate evidence, propose a rollback, require human approval bound to an exact proposal hash, execute through narrow MCP tools, and verify recovery. `AGENTS.md` (local, gitignored) holds the full agent rules. Read `SPEC.md`, `DEVELOPMENT_PLAN.md`, and the matching role brief in `.agents/` before working on a phase. Work proceeds strictly in phase order. Phases 1–5 are implemented. Phase 6 is in progress (`DEVELOPMENT_PLAN.md`, Current Status, tracks its tasks). Phase 7 (OAuth/users) has not started.
 
 ## Commands
 

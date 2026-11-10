@@ -16,6 +16,21 @@ Build the system in phases so every phase ends runnable, testable, and demoable.
 | 6. Real Kubernetes & Production Qualities | `kind`, demo workload, telemetry, CI | kind, Helm/Compose, OTel |
 | 7. Auth & Users | GitHub OAuth, sessions, role policy | OAuth |
 
+## Current Status
+
+Phases 1-5 are complete. Phase 6 is in progress:
+
+| Phase 6 task | State |
+|---|---|
+| `cmd/demo-api` and container images | done |
+| kind manifests, RBAC ordering, local demo make targets (`docs/phase6-kind.md`) | done |
+| Prometheus metrics, log correlation, OpenTelemetry tracing | in progress |
+| Retry/circuit-breaker decorators | not started |
+| Unattended E2E flow (`create-incident`, `approve-latest-action`, `verify`) | not started |
+| CI checks | not started |
+
+Phase 7 has not started.
+
 ## Phase 1: Domain Core
 
 Goal: prove the full lifecycle in process, against fakes.
@@ -91,7 +106,7 @@ Goal: add LLM and hybrid strategies without making correctness depend on a model
 
 Build:
 
-- `ReasonerPort`/LLM adapter behind the existing diagnoser boundary.
+- `ports.Reasoner` and an LLM adapter behind the existing diagnoser boundary.
 - Rule-based, LLM-based, and hybrid strategies selected by config.
 - Structured output validation outside the LLM adapter.
 - Deterministic fallback when the LLM is unavailable or invalid.
@@ -108,7 +123,7 @@ Goal: make the local demo and operational baseline complete.
 Build:
 
 - `cmd/demo-api` with healthy and broken image tags.
-- `deploy/kubernetes`, `deploy/helm` or equivalent manifests, and local `kind` setup.
+- `deploy/kubernetes` kustomize manifests and local `kind` setup. The four services run as local processes against the cluster (see `docs/phase6-kind.md`).
 - Prometheus metrics, structured logging, OpenTelemetry tracing.
 - Retry/circuit-breaker decorators around transient external ports.
 - Make targets and CI checks.

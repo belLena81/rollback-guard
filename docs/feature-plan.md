@@ -28,6 +28,7 @@ Teams are increasingly asked to trust autonomous operational agents, but most de
 - Approval-bound rollback proposal.
 - PostgreSQL-backed audit timeline.
 - Local `kind` demo with healthy and broken rollout.
+- Prometheus-backed error-rate and latency evidence.
 - Tests proving state machine, policy, approval binding, idempotency, and tool restrictions.
 
 ## Should Have
@@ -39,8 +40,7 @@ Teams are increasingly asked to trust autonomous operational agents, but most de
 
 ## Could Have
 
-- Multiple LLM providers.
-- Prometheus-backed metrics instead of synthetic/direct scrape metrics.
+- LLM providers beyond the OpenAI-compatible transport.
 - TUI approval prompt.
 
 ## Won't Have in v1
@@ -52,6 +52,8 @@ Teams are increasingly asked to trust autonomous operational agents, but most de
 - Production-grade secrets platform.
 
 ## Demo Milestones
+
+Milestones 1-4 are complete. Milestone 5 is in progress (see `DEVELOPMENT_PLAN.md`, Current Status).
 
 1. Domain and HTTP workflow works against fakes.
 2. Real MCP tools execute against a disposable Kubernetes target.

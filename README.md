@@ -38,7 +38,11 @@ This rule is the main project invariant. The AI layer may diagnose and recommend
 - [docs/local-demo-env.md](./docs/local-demo-env.md): local `kind` demo environment.
 - [docs/tech-stack.md](./docs/tech-stack.md): selected libraries and alternatives.
 - [.agents/00-INDEX.md](./.agents/00-INDEX.md): role briefs for agentic development.
-- [.codex/README.md](./.codex/README.md): Codex-specific workflow and local skills.
+- [docs/phase3-mcp.md](./docs/phase3-mcp.md), [docs/phase4-a2a.md](./docs/phase4-a2a.md), [docs/phase5-ai-diagnosis.md](./docs/phase5-ai-diagnosis.md), [docs/phase6-kind.md](./docs/phase6-kind.md): per-phase runtime configuration and verification.
+- [CLAUDE.md](./CLAUDE.md): Claude Code guidance.
+- [.devcontainer/README.md](./.devcontainer/README.md): containerised agent sandbox.
+
+`AGENTS.md` and `.agents/` are local agent files and are not committed.
 
 ## Repository Shape
 
@@ -54,13 +58,12 @@ internal/
 api/
 migrations/
 deploy/
-demo/
+scripts/
 test/
 docs/
-.agents/
 ```
 
-Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. See [docs/phase3-mcp.md](./docs/phase3-mcp.md), [docs/phase4-a2a.md](./docs/phase4-a2a.md), and [docs/phase5-ai-diagnosis.md](./docs/phase5-ai-diagnosis.md) for runtime configuration and verification.
+Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is in progress: the `demo-api` workload, container images, kind manifests, and the local demo flow exist; telemetry, retry/circuit-breaker decorators, the unattended end-to-end run, and CI do not yet. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
 
 ## Canonical Choices
 
@@ -68,30 +71,30 @@ Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface.
 - Architecture: ports and adapters with pure domain packages.
 - Kubernetes access: `client-go` behind MCP servers, not generic shell access.
 - A2A/MCP: official Go SDKs where practical.
-- Diagnosis: rule-based first, LLM/hybrid later behind the same port.
+- Diagnosis: rule-based by default; LLM and hybrid strategies behind the same port, always with rule fallback.
 - Demo runtime: local `kind` cluster and purpose-built breakable `demo-api`.
 
 ## Development Commands
 
-The final project should provide:
-
 ```bash
-make test
+make test                # unit, contract, and in-process lifecycle tests
 make test-race
-make lint
-make compose-up
-make compose-down
+make lint                # gofmt check, go vet, golangci-lint
+make contract-test
+make phase3-integration  # integration suites need Docker (testcontainers)
+make phase4-integration
+make phase5-integration
+make images              # service images and the four demo-api tags
 make kind-create
-make kind-delete
-make images
 make kind-load
 make deploy
 make demo-v1
-make demo-v2-broken
 make generate-load
-make create-incident
-make approve-latest-action
-make verify
+make demo-v2-broken
+make rbac-check
+make kubeconfigs
+make phase6-kind-check
+make kind-delete
 ```
 
-Until those targets exist, use the phase-specific tests described in `DEVELOPMENT_PLAN.md`.
+The kind targets are described in [docs/phase6-kind.md](./docs/phase6-kind.md). Still planned for Phase 6 and not implemented: `compose-up`, `compose-down`, `create-incident`, `approve-latest-action`, and `verify`.

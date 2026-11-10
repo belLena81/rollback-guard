@@ -45,5 +45,4 @@ All processes expose `/health/live` and `/health/ready`. Rollback-mode Kubernete
 ```bash
 GOCACHE=/tmp/rollback-guard-go-cache make contract-test
 GOCACHE=/tmp/rollback-guard-go-cache make phase3-integration
-GOCACHE=/tmp/rollback-guard-go-cache ./.codex/checks.sh
 ```
