@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -15,9 +16,16 @@ const DefaultMaxRequestBytes int64 = 1 << 20
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
-	metrics    http.Handler
-	serverName string
-	observer   ToolObserver
+	metrics      http.Handler
+	serverName   string
+	observer     ToolObserver
+	readyTimeout time.Duration
+}
+
+// WithReadyTimeout bounds each readiness check. Without it the shared
+// default (httpserver.DefaultReadyTimeout) applies.
+func WithReadyTimeout(timeout time.Duration) HandlerOption {
+	return func(o *handlerOptions) { o.readyTimeout = timeout }
 }
 
 // WithMetricsHandler serves handler at GET /metrics.
@@ -51,32 +59,11 @@ func HTTPHandler(server *mcpsdk.Server, ready func(context.Context) error, maxBy
 	mcpHandler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, &mcpsdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true, Logger: logger, SessionTimeout: sessionTimeout})
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(limitBody(mcpHandler, maxBytes)))
-	mux.HandleFunc("GET /health/live", func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", "application/json")
-		response.WriteHeader(http.StatusOK)
-		writeHealth(response, `{"status":"ok"}`, logger)
-	})
-	mux.HandleFunc("GET /health/ready", func(response http.ResponseWriter, request *http.Request) {
-		if ready != nil && ready(request.Context()) != nil {
-			response.Header().Set("Content-Type", "application/json")
-			response.WriteHeader(http.StatusServiceUnavailable)
-			writeHealth(response, `{"status":"unavailable"}`, logger)
-			return
-		}
-		response.Header().Set("Content-Type", "application/json")
-		response.WriteHeader(http.StatusOK)
-		writeHealth(response, `{"status":"ok"}`, logger)
-	})
+	httpserver.NewHealth(ready, o.readyTimeout, logger).Register(mux)
 	if o.metrics != nil {
 		mux.Handle("GET /metrics", o.metrics)
 	}
 	return mux
-}
-
-func writeHealth(response http.ResponseWriter, body string, logger *slog.Logger) {
-	if _, err := response.Write([]byte(body)); err != nil {
-		logger.Debug("write health response", "error", err)
-	}
 }
 
 func limitBody(next http.Handler, maxBytes int64) http.Handler {
