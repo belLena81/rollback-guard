@@ -27,7 +27,7 @@ const diagnosisInstructions = "Analyze only the supplied normalized incident evi
 
 type OpenAICompatibleConfig struct {
 	BaseURL         string
-	APIKey          string
+	APIKey          string //nolint:gosec // G117: credential held in memory only; never logged or marshalled
 	Model           string
 	MaxOutputTokens int
 	HTTPClient      *http.Client

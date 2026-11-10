@@ -41,7 +41,9 @@ const (
 
 // Database.
 const (
-	defaultDBMaxConns    = 4
+	defaultDBMaxConns = 4
+	// maxDBMaxConns bounds DB_MAX_CONNS so the value always fits pgx's int32.
+	maxDBMaxConns        = 1000
 	defaultDBPingTimeout = 2 * time.Second
 )
 

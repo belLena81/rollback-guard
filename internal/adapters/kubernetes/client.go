@@ -534,7 +534,10 @@ func desiredReplicas(deployment *appsv1.Deployment) int {
 }
 
 func rolloutComplete(deployment *appsv1.Deployment) bool {
-	desired := int32(desiredReplicas(deployment))
+	desired := int32(1) // an unset spec.replicas means one replica
+	if deployment.Spec.Replicas != nil {
+		desired = *deployment.Spec.Replicas
+	}
 	if deployment.Spec.Paused || deployment.Status.ObservedGeneration < deployment.Generation || deployment.Status.Replicas != desired || deployment.Status.UpdatedReplicas != desired || deployment.Status.ReadyReplicas != desired || deployment.Status.AvailableReplicas != desired || deployment.Status.UnavailableReplicas != 0 {
 		return false
 	}

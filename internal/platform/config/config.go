@@ -361,7 +361,10 @@ func loadDB(requiredFor string) (dbSettings, error) {
 	if err != nil {
 		return dbSettings{}, err
 	}
-	return dbSettings{url: databaseURL, maxConns: int32(maxConns), pingTimeout: pingTimeout}, nil
+	if maxConns > maxDBMaxConns {
+		return dbSettings{}, fmt.Errorf("DB_MAX_CONNS must be at most %d, got %d", maxDBMaxConns, maxConns)
+	}
+	return dbSettings{url: databaseURL, maxConns: int32(maxConns), pingTimeout: pingTimeout}, nil //nolint:gosec // G115: bounded by maxDBMaxConns above
 }
 
 type mcpClientSettings struct {

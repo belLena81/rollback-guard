@@ -12,6 +12,7 @@ linters:
     - gocognit
     - gocritic
     - gocyclo
+    - gosec
     - govet
     - ineffassign
     - intrange
@@ -42,6 +43,11 @@ linters:
       - linters:
           - mnd
         path-except: ^(cmd|internal/platform)/
+      # Test fixtures carry fake credentials, loopback requests and repo-local
+      # files on purpose (G101, G304, G704).
+      - linters:
+          - gosec
+        path: _test\.go$
       # The R4 ratchet (complexity, duplication, unused parameters) holds
       # production code. Table-driven tests and scenario fixtures are long
       # and repetitive by design.

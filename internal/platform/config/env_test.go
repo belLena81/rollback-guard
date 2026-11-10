@@ -169,6 +169,8 @@ func TestSharedVariablesFailTheSameWayInEveryLoader(t *testing.T) {
 	}{
 		{key: "DB_MAX_CONNS", value: "many", want: `DB_MAX_CONNS must be a positive integer: strconv.Atoi: parsing "many": invalid syntax`},
 		{key: "DB_MAX_CONNS", value: "0", want: "DB_MAX_CONNS must be a positive integer, got 0"},
+		{key: "DB_MAX_CONNS", value: "1001", want: "DB_MAX_CONNS must be at most 1000, got 1001"},
+		{key: "DB_MAX_CONNS", value: "2147483648", want: "DB_MAX_CONNS must be at most 1000, got 2147483648"},
 		{key: "DB_PING_TIMEOUT", value: "fast", want: `DB_PING_TIMEOUT must be a positive duration: time: invalid duration "fast"`},
 		{key: "MCP_CONNECT_TIMEOUT", value: "31s", want: "MCP_CONNECT_TIMEOUT must be positive and no greater than 30s, got 31s", skip: "kubernetes MCP rollback"},
 		{key: "MCP_CALL_TIMEOUT", value: "1m", want: "MCP_CALL_TIMEOUT must be positive and no greater than 30s, got 1m", skip: "kubernetes MCP rollback"},
