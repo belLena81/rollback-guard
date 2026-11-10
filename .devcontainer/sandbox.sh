@@ -76,6 +76,12 @@ case "${1:-help}" in
     git -C "$repo" fetch "$SANDBOX_DIR" "$branch:sandbox/$branch"
     echo "Fetched as local branch sandbox/$branch - review with: git diff HEAD...sandbox/$branch"
     ;;
+  push)
+    # Mirror a branch of the real repo into the sandbox copy as host/<branch>.
+    branch="${2:?usage: sandbox.sh push <branch>}"
+    git -C "$SANDBOX_DIR" fetch "$repo" "+$branch:refs/heads/host/$branch"
+    echo "Available in the sandbox as host/$branch"
+    ;;
   down) "${compose[@]}" --profile llm down ;;
   destroy)
     "${compose[@]}" --profile llm down -v
@@ -94,6 +100,7 @@ usage: sandbox.sh <command>
   kind-down    delete it
   sync         copy the real working tree (without .git) into the sandbox
   pull BRANCH  fetch a sandbox branch into the real repo as sandbox/BRANCH
+  push BRANCH  mirror a branch of the real repo into the sandbox as host/BRANCH
   down         stop containers (state kept)
   destroy      stop and delete all sandbox volumes
 USAGE
