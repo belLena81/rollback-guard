@@ -144,6 +144,40 @@ func TestRollbackMutationGuardAuthorizesFirstUseAtRecordStart(t *testing.T) {
 	}
 }
 
+func TestRollbackMutationLockReleaseClosesConnectionWhenUnlockFails(t *testing.T) {
+	pool := isolatedRollbackGuardPool(t)
+	guard, err := NewRollbackMutationGuard(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := domain.IdempotencyKey("key-unlock-failure")
+	lock, err := guard.acquireRollbackMutationLock(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := lock.conn.Conn()
+	failingCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := lock.release(failingCtx); err == nil {
+		t.Fatal("release() error = nil, want unlock failure")
+	}
+
+	if !session.IsClosed() {
+		t.Fatal("connection still holding the advisory lock was returned to the pool open")
+	}
+	var acquired bool
+	if err := pool.QueryRow(context.Background(), `SELECT pg_try_advisory_lock(hashtextextended($1, 0))`, key).Scan(&acquired); err != nil {
+		t.Fatal(err)
+	}
+	if !acquired {
+		t.Fatal("advisory lock is still held after a failed unlock")
+	}
+	if _, err := pool.Exec(context.Background(), `SELECT pg_advisory_unlock_all()`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func isolatedRollbackGuardPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("ROLLBACK_GUARD_POSTGRES_TEST_DSN"))

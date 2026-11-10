@@ -199,6 +199,10 @@ func (g *RollbackMutationGuard) Release(_ context.Context, pending domain.Rollba
 	return lock.release(context.Background())
 }
 
+// rollbackMutationLockCloseTimeout bounds closing a connection whose advisory
+// unlock failed; the underlying network connection is closed even if it elapses.
+const rollbackMutationLockCloseTimeout = 5 * time.Second
+
 type rollbackMutationLock struct {
 	key         domain.IdempotencyKey
 	conn        *pgxpool.Conn
@@ -224,8 +228,8 @@ func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.Idempotenc
 	g.mu.Unlock()
 	if previous != nil {
 		// Begin has already committed by the time a lock is retained, so a failure to
-		// unlock the stale, replaced lock must not fail the new attempt. release still
-		// returns the connection to the pool even when the unlock fails.
+		// unlock the stale, replaced lock must not fail the new attempt. On unlock
+		// failure release closes the session, which drops its advisory lock.
 		_ = previous.release(context.Background()) //nolint:errcheck // intentional: see comment above; covered by TestRetainRollbackMutationLockIgnoresReplacedLockReleaseFailure
 	}
 }
@@ -255,7 +259,16 @@ func (l *rollbackMutationLock) release(ctx context.Context) error {
 	}
 	defer l.conn.Release()
 	if _, err := l.conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, l.key); err != nil {
-		return fmt.Errorf("unlock rollback mutation key: %w", err)
+		// The session may still hold the advisory lock. Close it so the pool destroys
+		// the connection on Release instead of handing a lock-holding session to
+		// another caller; ending the session releases the lock server-side.
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackMutationLockCloseTimeout)
+		defer cancel()
+		unlockErr := fmt.Errorf("unlock rollback mutation key: %w", err)
+		if closeErr := l.conn.Conn().Close(closeCtx); closeErr != nil {
+			return errors.Join(unlockErr, fmt.Errorf("close rollback mutation lock connection: %w", closeErr))
+		}
+		return unlockErr
 	}
 	return nil
 }
