@@ -16,7 +16,7 @@ Source: a code-quality audit of the `phase6` branch (production code under `cmd/
 |---|---|---|
 | 1 | Phase 6 telemetry (in progress) | Touches the same `main.go` files and adapters; merge it first. |
 | 2 | R1 Correctness defects (done) | Real bugs in persistence; cheap; must not ship into the E2E run. |
-| 3 | R2 Process bootstrap and config | Removes four-way duplication before the resilience decorators add more wiring. |
+| 3 | R2 Process bootstrap and config (done) | Removes four-way duplication before the resilience decorators add more wiring. |
 | 4 | Phase 6 resilience decorators | |
 | 5 | R3 Approve-and-execute use case | The E2E flow drives exactly this path; fix its shape first. |
 | 6 | Phase 6 E2E flow and CI | CI enforces the ratcheted lint config from here on. |
@@ -38,7 +38,11 @@ Merged. Eight of nine items were confirmed and fixed test-first. Item 8 was not 
 | 8 | `internal/adapters/a2a/wire.go:221` | An unknown recommendation string silently becomes the zero value. | Reject unknown values. |
 | 9 | Six non-exhaustive enum switches (`mcp/client.go:139`, `a2a/client.go:234`, `application/ai_diagnosis.go:168`, `cmd/investigator/main.go:154`, `domain/incident.go:31`) | New enum values fall through silently. | Add the missing cases or an explicit failing default; enable `exhaustive`. |
 
-## R2. Process bootstrap and configuration
+## R2. Process bootstrap and configuration (done)
+
+Merged. Shared `httpserver.Serve` and health handler, `internal/platform/bootstrap`, config sub-loaders with named defaults and bounds, loopback default binding, `A2A_CONNECT_TIMEOUT`, tagged-file linting, and `postgres-integration` / `integration` make targets. Left for later: `DB_MAX_CONNS` int32 bound (R8.5), a 10s shutdown that is shorter than a 2m rollout watch, and widening `mnd` beyond `cmd/` and `internal/platform/` (seven literals remain).
+
+Found while doing R2 (pre-existing, fixed separately before R3): the Investigator required an MCP catalog of exactly one tool per server, so it could never connect to the real servers. No end-to-end run had exercised that connection.
 
 Findings: the HTTP server lifecycle is written four times (`cmd/*/main.go`), each setting only `ReadHeaderTimeout`; `connectMCP` twice; the pgx pool block three times; `run()` in the orchestrator is 163 lines with a 452-character statement. `config.go` parses `METRICS_WINDOW`, `DB_MAX_CONNS`, `DB_PING_TIMEOUT`, and `ALLOWED_TARGETS` three times each and discards the parse error in `err != nil || x > max` checks. 31 of the 50 magic numbers are inline defaults in `config.go`.
 
