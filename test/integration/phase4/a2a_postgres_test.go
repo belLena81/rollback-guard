@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/adapters/a2a"
+	"github.com/belLena81/rollback-guard/internal/adapters/postgres"
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	rgruntime "github.com/belLena81/rollback-guard/internal/platform/runtime"
@@ -26,6 +27,24 @@ import (
 // taskTimeout is the investigation deadline shared by the A2A server and the
 // idempotent investigator, as in cmd/investigator.
 const taskTimeout = 10 * time.Second
+
+func mustLedger(t *testing.T, pool *pgxpool.Pool) *postgres.InvestigationRequestLedger {
+	t.Helper()
+	ledger, err := postgres.NewInvestigationRequestLedger(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ledger
+}
+
+func mustTaskRecords(t *testing.T, pool *pgxpool.Pool) *postgres.A2ATaskRecords {
+	t.Helper()
+	records, err := postgres.NewA2ATaskRecords(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
 
 func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -84,11 +103,11 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 		calls.Add(1)
 		return ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}, nil
 	})
-	idempotent, err := a2aadapter.NewIdempotentInvestigator(pool, runner, taskTimeout, rgruntime.Clock{})
+	idempotent, err := a2aadapter.NewIdempotentInvestigator(mustLedger(t, pool), runner, taskTimeout, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := a2aadapter.NewPostgresTaskStore(pool, rgruntime.Clock{})
+	store, err := a2aadapter.NewDurableTaskStore(mustTaskRecords(t, pool), rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +178,7 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 		cancelRequest()
 		return ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}, nil
 	})
-	cancelingInvestigator, err := a2aadapter.NewIdempotentInvestigator(pool, cancelingRunner, taskTimeout, rgruntime.Clock{})
+	cancelingInvestigator, err := a2aadapter.NewIdempotentInvestigator(mustLedger(t, pool), cancelingRunner, taskTimeout, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +209,7 @@ func TestA2ARESTTasksAndIdempotencySurviveInPostgres(t *testing.T) {
 		reclaimCalls.Add(1)
 		return ports.InvestigationResult{Deployment: deployment, Evidence: []domain.Evidence{evidence}, Conclusion: conclusion}, nil
 	})
-	shortTask, err := a2aadapter.NewIdempotentInvestigator(pool, reclaimRunner, time.Second, rgruntime.Clock{})
+	shortTask, err := a2aadapter.NewIdempotentInvestigator(mustLedger(t, pool), reclaimRunner, time.Second, rgruntime.Clock{})
 	if err != nil {
 		t.Fatal(err)
 	}

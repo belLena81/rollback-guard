@@ -13,6 +13,7 @@ import (
 	"github.com/belLena81/rollback-guard/internal/adapters/diagnosis"
 	llmadapter "github.com/belLena81/rollback-guard/internal/adapters/llm"
 	mcpadapter "github.com/belLena81/rollback-guard/internal/adapters/mcp"
+	"github.com/belLena81/rollback-guard/internal/adapters/postgres"
 	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/bootstrap"
@@ -175,12 +176,20 @@ func buildServices(cfg config.InvestigatorConfig, pool *pgxpool.Pool, clients mc
 	if err != nil {
 		return nil, err
 	}
-	return a2aadapter.NewIdempotentInvestigator(pool, runner, cfg.TaskTimeout, runtime.Clock{})
+	ledger, err := postgres.NewInvestigationRequestLedger(pool)
+	if err != nil {
+		return nil, err
+	}
+	return a2aadapter.NewIdempotentInvestigator(ledger, runner, cfg.TaskTimeout, runtime.Clock{})
 }
 
 // buildHTTP assembles the A2A server with durable task storage.
 func buildHTTP(cfg config.InvestigatorConfig, investigator ports.Investigator, pool *pgxpool.Pool, ready httpserver.ReadyCheck, tel *telemetry.Provider, logger *slog.Logger) (http.Handler, error) {
-	store, err := a2aadapter.NewPostgresTaskStore(pool, runtime.Clock{})
+	records, err := postgres.NewA2ATaskRecords(pool)
+	if err != nil {
+		return nil, err
+	}
+	store, err := a2aadapter.NewDurableTaskStore(records, runtime.Clock{})
 	if err != nil {
 		return nil, err
 	}

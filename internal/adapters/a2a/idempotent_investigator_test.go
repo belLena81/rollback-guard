@@ -7,7 +7,6 @@ import (
 
 	rgruntime "github.com/belLena81/rollback-guard/internal/platform/runtime"
 	"github.com/belLena81/rollback-guard/internal/ports"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestIdempotencyTimingsFollowTheTaskTimeout(t *testing.T) {
@@ -39,26 +38,25 @@ func TestIdempotencyTimingsFollowTheTaskTimeout(t *testing.T) {
 	}
 }
 
+// unusedLedger satisfies RequestLedger for constructor validation; no
+// method is reached.
+type unusedLedger struct{ RequestLedger }
+
 func TestNewIdempotentInvestigatorValidatesDependencies(t *testing.T) {
-	// The pool connects lazily, so no database is needed.
-	pool, err := pgxpool.New(context.Background(), "postgres://rollback@127.0.0.1:1/rollback_guard")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
+	var pool RequestLedger = unusedLedger{}
 	next := investigatorFunc(func(context.Context, ports.InvestigationRequest) (ports.InvestigationResult, error) {
 		return ports.InvestigationResult{}, nil
 	})
 	tests := []struct {
 		name        string
-		pool        *pgxpool.Pool
+		pool        RequestLedger
 		next        ports.Investigator
 		taskTimeout time.Duration
 		noClock     bool
 		wantErr     bool
 	}{
 		{name: "valid", pool: pool, next: next, taskTimeout: 45 * time.Second},
-		{name: "missing pool", next: next, taskTimeout: 45 * time.Second, wantErr: true},
+		{name: "missing ledger", next: next, taskTimeout: 45 * time.Second, wantErr: true},
 		{name: "missing investigator", pool: pool, taskTimeout: 45 * time.Second, wantErr: true},
 		{name: "missing clock", pool: pool, next: next, taskTimeout: 45 * time.Second, noClock: true, wantErr: true},
 		{name: "zero task timeout", pool: pool, next: next, wantErr: true},

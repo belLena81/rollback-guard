@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/ports"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -23,8 +21,24 @@ const (
 	maxResultPollInterval = 100 * time.Millisecond
 )
 
+// RequestLedger is the durable record that deduplicates investigations by
+// idempotency key. Every write is fenced by the owning task ID and reports
+// false when the caller no longer owns the record.
+type RequestLedger interface {
+	// Claim records a new working request. It reports false when the key exists.
+	Claim(ctx context.Context, key, requestHash, taskID string, now time.Time) (claimed bool, err error)
+	// Reclaim takes over a working request last updated before staleBefore.
+	Reclaim(ctx context.Context, key, requestHash, taskID string, now, staleBefore time.Time) (reclaimed bool, err error)
+	// Fail moves an owned request to a terminal failed or canceled state.
+	Fail(ctx context.Context, key, requestHash, taskID, state, failureCode string, now time.Time) (owned bool, err error)
+	// Complete stores the result of an owned request.
+	Complete(ctx context.Context, key, requestHash, taskID string, result []byte, now time.Time) (owned bool, err error)
+	// Lookup reads the record for key; found is false when none exists.
+	Lookup(ctx context.Context, key string) (requestHash, state, failureCode string, result []byte, found bool, err error)
+}
+
 type IdempotentInvestigator struct {
-	pool         *pgxpool.Pool
+	ledger       RequestLedger
 	next         ports.Investigator
 	pollInterval time.Duration
 	staleAfter   time.Duration
@@ -34,15 +48,15 @@ type IdempotentInvestigator struct {
 // NewIdempotentInvestigator deduplicates investigations by idempotency key.
 // taskTimeout is the deadline the caller puts on every Investigate call
 // (A2A_TASK_TIMEOUT); the reclaim and polling intervals follow from it.
-func NewIdempotentInvestigator(pool *pgxpool.Pool, next ports.Investigator, taskTimeout time.Duration, clock ports.Clock) (*IdempotentInvestigator, error) {
-	if pool == nil || next == nil || clock == nil {
-		return nil, fmt.Errorf("PostgreSQL pool, investigator, and clock are required")
+func NewIdempotentInvestigator(ledger RequestLedger, next ports.Investigator, taskTimeout time.Duration, clock ports.Clock) (*IdempotentInvestigator, error) {
+	if ledger == nil || next == nil || clock == nil {
+		return nil, fmt.Errorf("request ledger, investigator, and clock are required")
 	}
 	if taskTimeout <= 0 {
 		return nil, fmt.Errorf("investigation task timeout must be positive")
 	}
 	pollInterval, staleAfter := idempotencyTimings(taskTimeout)
-	return &IdempotentInvestigator{pool: pool, next: next, pollInterval: pollInterval, staleAfter: staleAfter, clock: clock}, nil
+	return &IdempotentInvestigator{ledger: ledger, next: next, pollInterval: pollInterval, staleAfter: staleAfter, clock: clock}, nil
 }
 
 // idempotencyTimings derives both intervals from the task timeout.
@@ -65,16 +79,16 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 	if request.IdempotencyKey == "" || request.RequestHash == "" {
 		return ports.InvestigationResult{}, fmt.Errorf("idempotency key and request hash are required")
 	}
-	command, err := i.pool.Exec(ctx, `INSERT INTO a2a_investigation_requests(idempotency_key,request_hash,task_id,state,created_at,updated_at) VALUES($1,$2,$3,'working',$4,$4) ON CONFLICT DO NOTHING`, request.IdempotencyKey, request.RequestHash, request.TaskID, i.clock.Now().UTC())
+	claimed, err := i.ledger.Claim(ctx, request.IdempotencyKey, request.RequestHash, request.TaskID, i.clock.Now().UTC())
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("claim investigation request: %w", err)
 	}
-	if command.RowsAffected() == 0 {
-		reclaimed, reclaimErr := i.pool.Exec(ctx, `UPDATE a2a_investigation_requests SET task_id=$5,updated_at=$3 WHERE idempotency_key=$1 AND request_hash=$2 AND state='working' AND updated_at<$4`, request.IdempotencyKey, request.RequestHash, i.clock.Now().UTC(), i.clock.Now().UTC().Add(-i.staleAfter), request.TaskID)
+	if !claimed {
+		reclaimed, reclaimErr := i.ledger.Reclaim(ctx, request.IdempotencyKey, request.RequestHash, request.TaskID, i.clock.Now().UTC(), i.clock.Now().UTC().Add(-i.staleAfter))
 		if reclaimErr != nil {
 			return ports.InvestigationResult{}, reclaimErr
 		}
-		if reclaimed.RowsAffected() == 0 {
+		if !reclaimed {
 			return i.waitForResult(ctx, request)
 		}
 	}
@@ -86,8 +100,8 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 		}
 		recordCtx, cancel := terminalPersistenceContext(ctx)
 		defer cancel()
-		completed, recordErr := i.pool.Exec(recordCtx, `UPDATE a2a_investigation_requests SET state=$2,failure_code=$3,updated_at=$4 WHERE idempotency_key=$1 AND request_hash=$5 AND task_id=$6 AND state='working'`, request.IdempotencyKey, state, failure, i.clock.Now().UTC(), request.RequestHash, request.TaskID)
-		if recordErr == nil && completed.RowsAffected() != 1 {
+		owned, recordErr := i.ledger.Fail(recordCtx, request.IdempotencyKey, request.RequestHash, request.TaskID, state, failure, i.clock.Now().UTC())
+		if recordErr == nil && !owned {
 			recordErr = fmt.Errorf("investigation request ownership was lost before recording %s", state)
 		}
 		return ports.InvestigationResult{}, errors.Join(err, recordErr)
@@ -98,11 +112,11 @@ func (i *IdempotentInvestigator) Investigate(ctx context.Context, request ports.
 	}
 	recordCtx, cancel := terminalPersistenceContext(ctx)
 	defer cancel()
-	completed, err := i.pool.Exec(recordCtx, `UPDATE a2a_investigation_requests SET state='completed',result=$2,updated_at=$3 WHERE idempotency_key=$1 AND request_hash=$4 AND task_id=$5 AND state='working'`, request.IdempotencyKey, snapshot, i.clock.Now().UTC(), request.RequestHash, request.TaskID)
+	owned, err := i.ledger.Complete(recordCtx, request.IdempotencyKey, request.RequestHash, request.TaskID, snapshot, i.clock.Now().UTC())
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("complete investigation request: %w", err)
 	}
-	if completed.RowsAffected() != 1 {
+	if !owned {
 		return ports.InvestigationResult{}, fmt.Errorf("investigation request ownership was lost before completion")
 	}
 	return result, nil
@@ -116,14 +130,12 @@ func (i *IdempotentInvestigator) waitForResult(ctx context.Context, request port
 	ticker := time.NewTicker(i.pollInterval)
 	defer ticker.Stop()
 	for {
-		var hash, state, failure string
-		var result []byte
-		err := i.pool.QueryRow(ctx, `SELECT request_hash,state::text,failure_code,result FROM a2a_investigation_requests WHERE idempotency_key=$1`, request.IdempotencyKey).Scan(&hash, &state, &failure, &result)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ports.InvestigationResult{}, fmt.Errorf("investigation idempotency record disappeared")
-		}
+		hash, state, failure, result, found, err := i.ledger.Lookup(ctx, request.IdempotencyKey)
 		if err != nil {
 			return ports.InvestigationResult{}, err
+		}
+		if !found {
+			return ports.InvestigationResult{}, fmt.Errorf("investigation idempotency record disappeared")
 		}
 		if hash != request.RequestHash {
 			return ports.InvestigationResult{}, fmt.Errorf("idempotency key reused with a different request")
