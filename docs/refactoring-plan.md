@@ -20,7 +20,7 @@ Source: a code-quality audit of the `phase6` branch (production code under `cmd/
 | 4 | Phase 6 resilience decorators (done) | |
 | 5 | R3 Approve-and-execute use case (done) | The E2E flow drives exactly this path; fix its shape first. |
 | 6 | Phase 6 E2E flow and CI | CI enforces the ratcheted lint config from here on. |
-| 7 | R4-R8 | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
+| 7 | R4-R8 (R4, R5 done) | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
 
 ## R1. Correctness defects (done)
 
@@ -106,7 +106,9 @@ Leftovers:
 6. **Dead code.** `InvestigationService.Investigate`, `IncidentService.CreateIncident`, `QueryService.GetProposal`, `InvestigationGateway.Get` with `InvestigationTaskSnapshot`, unread `InvestigatorConfig.LLMProvider`, unused `cause` parameter in `newFailedExecution`. The orchestrator builds a rule diagnoser only to satisfy `NewServices`. Delete, or move to test helpers where tests need them.
 7. **Clock and IDs.** Seven direct `time.Now()` calls in adapters bypass `ports.Clock`; the execution ID is derived twice with different prefixes (`execution-`, `mcp-mutation-`). Inject the clock; one ID function.
 
-## R5. Domain vocabulary
+## R5. Domain vocabulary (done)
+
+Status: implemented on `refactor/r5-domain-vocabulary`, one commit per item. Domain `ParseX` functions (via one generic `parseEnum`) replaced the Postgres, A2A and config copies; `DIAGNOSIS_STRATEGY` spellings are mapped in config and documented in `docs/phase5-ai-diagnosis.md`. `domain.SymptomKind` is a closed set (`http_error_rate`, `request_latency`, `pod_cpu_usage`, `pod_memory_usage`) and `NewSymptom` rejects anything else, so the REST API now answers `400` instead of failing late. The Prometheus adapter owns the series names and `internal/demoapi` re-exports them. R5 added no lint ratchet entry.
 
 1. **Enum parsing.** 15 parse functions in `postgres/codecs.go`, `investigation_tasks.go`, `rollback_mutation_guard.go`, re-implemented in `a2a/wire.go`, `a2a/client.go`, and `config.go`. Add a pure `ParseX` beside each domain `String()` and delete the copies. Adapters keep their own wire spellings only where they differ on purpose. Note `DIAGNOSIS_STRATEGY=rule_based` is stored as `rules`; document or unify.
 2. **Symptom kind.** 15 bare string literals across the Prometheus adapter, MCP metrics adapter, and observability server; `domain.NewSymptom` accepts any non-empty kind, so an unsupported one fails late. Introduce a validated `domain.SymptomKind`.
