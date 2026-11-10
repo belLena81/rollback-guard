@@ -214,6 +214,8 @@ func modelDiagnosisFactory(strategy domain.DiagnosisStrategy, reasonerErr error,
 			diagnoser, err = application.NewLLMDiagnoser(reasoner, rules, ids, config)
 		case domain.StrategyHybrid:
 			diagnoser, err = application.NewHybridDiagnoser(reasoner, rules, ids, config)
+		case domain.StrategyRules:
+			t.Fatalf("rule strategy has no model diagnoser")
 		default:
 			t.Fatalf("unsupported test strategy %s", strategy)
 		}

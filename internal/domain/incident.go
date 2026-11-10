@@ -31,8 +31,11 @@ func (s Status) Terminal() bool {
 	switch s {
 	case StatusResolved, StatusCanceled, StatusDeclined, StatusRejected, StatusExpired, StatusFailed:
 		return true
+	case StatusCreated, StatusInvestigating, StatusAwaitingApproval, StatusApproved, StatusExecuting, StatusVerifying:
+		return false
+	default:
+		return false
 	}
-	return false
 }
 
 func (s Status) Valid() bool { return s >= StatusCreated && s <= StatusFailed }

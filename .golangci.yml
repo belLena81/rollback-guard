@@ -3,11 +3,14 @@ version: "2"
 linters:
   default: none
   enable:
+    - bodyclose
     - errcheck
     - errorlint
+    - exhaustive
     - gocritic
     - govet
     - ineffassign
+    - nilerr
     - staticcheck
     - unused
   settings:

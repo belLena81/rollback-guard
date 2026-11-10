@@ -52,6 +52,30 @@ func TestCallToolMapsTargetForbiddenToDomainClientError(t *testing.T) {
 	}
 }
 
+func TestErrorFromToolKeepsUnknownOutcomesAmbiguous(t *testing.T) {
+	tests := []struct {
+		code          ErrorCode
+		retryable     bool
+		wantAmbiguous bool
+	}{
+		{code: CodeInternal, wantAmbiguous: true},
+		{code: CodeDependencyUnavailable, wantAmbiguous: true},
+		{code: ErrorCode("code_from_a_newer_server"), retryable: true, wantAmbiguous: true},
+		{code: ErrorCode("code_from_a_newer_server"), wantAmbiguous: false},
+		{code: CodeRevisionDrift, wantAmbiguous: false},
+		{code: CodeIdempotencyConflict, wantAmbiguous: false},
+	}
+	for _, test := range tests {
+		err := errorFromTool(ToolError{Code: test.code, Message: "tool failed", Retryable: test.retryable})
+		if err == nil {
+			t.Fatalf("errorFromTool(%s) = nil", test.code)
+		}
+		if got := ambiguousToolError(err); got != test.wantAmbiguous {
+			t.Errorf("ambiguousToolError(errorFromTool(%s, retryable=%t)) = %t, want %t", test.code, test.retryable, got, test.wantAmbiguous)
+		}
+	}
+}
+
 func TestRequireToolCatalogComparesExactNames(t *testing.T) {
 	t.Parallel()
 

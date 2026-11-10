@@ -160,7 +160,12 @@ func errorFromTool(toolError ToolError) error {
 		return context.Canceled
 	case CodeTimeout:
 		return context.DeadlineExceeded
+	case CodeDependencyUnavailable, CodeInternal:
+		// Outcome unknown: kept as a tool error so ambiguousToolError sees the code.
+		return &toolCallError{code: toolError.Code, message: toolError.Message, retryable: toolError.Retryable}
 	default:
+		// Codes this client does not know stay tool errors and are never
+		// mapped to a domain outcome.
 		return &toolCallError{code: toolError.Code, message: toolError.Message, retryable: toolError.Retryable}
 	}
 }

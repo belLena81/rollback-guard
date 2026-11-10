@@ -154,7 +154,10 @@ func TestTelemetryLinksRESTThroughA2AAndMCP(t *testing.T) {
 		} `json:"incident"`
 	}
 	decodeErr := json.NewDecoder(response.Body).Decode(&created)
-	closeOrFail(t, response.Body)
+	// Closed inline: the bodyclose linter cannot see through closeOrFail.
+	if closeErr := response.Body.Close(); closeErr != nil {
+		t.Errorf("close: %v", closeErr)
+	}
 	if response.StatusCode != http.StatusAccepted || decodeErr != nil {
 		t.Fatalf("create incident = %d, %v", response.StatusCode, decodeErr)
 	}

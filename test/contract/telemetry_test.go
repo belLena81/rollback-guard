@@ -133,7 +133,10 @@ func TestMCPTelemetryOptionsKeepToolCatalogs(t *testing.T) {
 				t.Fatal(err)
 			}
 			data, err := io.ReadAll(response.Body)
-			closeOrFail(t, response.Body)
+			// Closed inline: the bodyclose linter cannot see through closeOrFail.
+			if closeErr := response.Body.Close(); closeErr != nil {
+				t.Errorf("close: %v", closeErr)
+			}
 			if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(data), "rollback_guardian_http_server_requests_total") {
 				t.Fatalf("GET /metrics = %d, %v", response.StatusCode, err)
 			}
@@ -141,7 +144,9 @@ func TestMCPTelemetryOptionsKeepToolCatalogs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			closeOrFail(t, post.Body)
+			if closeErr := post.Body.Close(); closeErr != nil {
+				t.Errorf("close: %v", closeErr)
+			}
 			if post.StatusCode != http.StatusMethodNotAllowed {
 				t.Fatalf("POST /metrics = %d, want 405", post.StatusCode)
 			}

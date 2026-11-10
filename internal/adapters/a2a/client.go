@@ -166,7 +166,11 @@ func (g *Gateway) Get(ctx context.Context, ref ports.InvestigationTaskRef) (port
 	if err != nil {
 		return ports.InvestigationTaskSnapshot{}, err
 	}
-	snapshot := ports.InvestigationTaskSnapshot{Ref: ref, State: mapTaskState(task.Status.State)}
+	state, err := mapTaskState(task.Status.State)
+	if err != nil {
+		return ports.InvestigationTaskSnapshot{}, err
+	}
+	snapshot := ports.InvestigationTaskSnapshot{Ref: ref, State: state}
 	if result, err := resultFromArtifacts(task.Artifacts); err == nil {
 		snapshot.Result = &result
 	}
@@ -230,20 +234,25 @@ func resultFromParts(parts a2a.ContentParts) (ports.InvestigationResult, error) 
 	}
 	return decodeResult(parts[0].Data())
 }
-func mapTaskState(state a2a.TaskState) ports.InvestigationTaskState {
+
+// mapTaskState fails closed on states the Investigator never reports
+// (interactive or unspecified) instead of treating them as still submitted.
+func mapTaskState(state a2a.TaskState) (ports.InvestigationTaskState, error) {
 	switch state {
 	case a2a.TaskStateSubmitted:
-		return ports.InvestigationTaskSubmitted
+		return ports.InvestigationTaskSubmitted, nil
 	case a2a.TaskStateWorking:
-		return ports.InvestigationTaskWorking
+		return ports.InvestigationTaskWorking, nil
 	case a2a.TaskStateCompleted:
-		return ports.InvestigationTaskCompleted
+		return ports.InvestigationTaskCompleted, nil
 	case a2a.TaskStateCanceled:
-		return ports.InvestigationTaskCanceled
+		return ports.InvestigationTaskCanceled, nil
 	case a2a.TaskStateFailed, a2a.TaskStateRejected:
-		return ports.InvestigationTaskFailed
+		return ports.InvestigationTaskFailed, nil
+	case a2a.TaskStateUnspecified, a2a.TaskStateAuthRequired, a2a.TaskStateInputRequired:
+		return 0, fmt.Errorf("unsupported investigation task state %q", state)
 	default:
-		return ports.InvestigationTaskSubmitted
+		return 0, fmt.Errorf("unknown investigation task state %q", state)
 	}
 }
 

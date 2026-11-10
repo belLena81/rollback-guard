@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -78,10 +77,14 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(value); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = io.WriteString(w, encodeFailureBody)
-		return
+		status = http.StatusInternalServerError
+		body.Reset()
+		body.WriteString(encodeFailureBody)
 	}
 	w.WriteHeader(status)
-	_, _ = w.Write(body.Bytes())
+	if _, err := w.Write(body.Bytes()); err != nil {
+		// The status line is already sent and the connection is broken or
+		// the client is gone; there is nothing left to report to it.
+		return
+	}
 }

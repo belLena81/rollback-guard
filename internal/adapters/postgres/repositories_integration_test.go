@@ -173,12 +173,13 @@ func TestWithinTransactionPanicLeavesPoolUsable(t *testing.T) {
 				t.Fatal("callback panic was swallowed")
 			}
 		}()
-		_ = uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
+		err := uow.WithinTransaction(context.Background(), func(repositories ports.Repositories) error {
 			if err := repositories.Events().Append(testStatusEvent(t, "event-panic", "incident-panic", 1, now)); err != nil {
 				t.Fatal(err)
 			}
 			panic("callback failed")
 		})
+		t.Errorf("WithinTransaction returned %v instead of propagating the panic", err)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

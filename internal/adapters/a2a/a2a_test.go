@@ -243,6 +243,36 @@ func TestResultWireRejectsUnknownRecommendation(t *testing.T) {
 	}
 }
 
+func TestMapTaskStateRejectsStatesTheInvestigatorNeverUses(t *testing.T) {
+	tests := []struct {
+		state   a2a.TaskState
+		want    ports.InvestigationTaskState
+		wantErr bool
+	}{
+		{state: a2a.TaskStateSubmitted, want: ports.InvestigationTaskSubmitted},
+		{state: a2a.TaskStateWorking, want: ports.InvestigationTaskWorking},
+		{state: a2a.TaskStateCompleted, want: ports.InvestigationTaskCompleted},
+		{state: a2a.TaskStateCanceled, want: ports.InvestigationTaskCanceled},
+		{state: a2a.TaskStateFailed, want: ports.InvestigationTaskFailed},
+		{state: a2a.TaskStateRejected, want: ports.InvestigationTaskFailed},
+		{state: a2a.TaskStateUnspecified, wantErr: true},
+		{state: a2a.TaskStateAuthRequired, wantErr: true},
+		{state: a2a.TaskStateInputRequired, wantErr: true},
+		{state: a2a.TaskState("TASK_STATE_FROM_A_NEWER_PROTOCOL"), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(string(test.state), func(t *testing.T) {
+			got, err := mapTaskState(test.state)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("mapTaskState(%q) error = %v, wantErr %t", test.state, err, test.wantErr)
+			}
+			if err == nil && got != test.want {
+				t.Fatalf("mapTaskState(%q) = %v, want %v", test.state, got, test.want)
+			}
+		})
+	}
+}
+
 func TestResultFromArtifactsRequiresExactlyOneResultArtifact(t *testing.T) {
 	valid := validResultArtifact(t)
 	unexpected := &a2a.Artifact{Name: "debug-log", Parts: a2a.ContentParts{a2a.NewTextPart("ignored")}}

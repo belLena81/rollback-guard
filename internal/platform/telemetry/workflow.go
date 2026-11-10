@@ -84,6 +84,12 @@ func (o *transactionObservations) recordEvent(event domain.OperationEvent) {
 			o.recordTerminal(event.IncidentID(), domain.StatusExpired)
 		case domain.EventIncidentCanceled:
 			o.recordTerminal(event.IncidentID(), domain.StatusCanceled)
+		case domain.EventIncidentCreated, domain.EventStatusChanged, domain.EventEvidenceCollected,
+			domain.EventDiagnosisCompleted, domain.EventPolicyEvaluated, domain.EventProposalCreated,
+			domain.EventApprovalRecorded, domain.EventRejectionRecorded, domain.EventExecutionCompleted,
+			domain.EventVerificationCompleted:
+			// The domain only pairs TerminalDetail with the three terminal
+			// kinds above; any other kind is not a terminal transition.
 		}
 	}
 }

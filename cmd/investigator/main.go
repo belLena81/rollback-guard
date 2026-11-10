@@ -170,6 +170,8 @@ func newDiagnoser(cfg config.InvestigatorConfig, ids ports.IDGenerator, provider
 		Model: cfg.LLMModel, PromptVersion: application.DiagnosisPromptVersion, Timeout: cfg.LLMTimeout,
 	}
 	switch cfg.DiagnosisStrategy {
+	case domain.StrategyRules:
+		return rules, nil
 	case domain.StrategyLLM:
 		return application.NewLLMDiagnoser(reasoner, rules, ids, modelConfig)
 	case domain.StrategyHybrid:
