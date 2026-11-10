@@ -18,7 +18,7 @@ Source: a code-quality audit of the `phase6` branch (production code under `cmd/
 | 2 | R1 Correctness defects (done) | Real bugs in persistence; cheap; must not ship into the E2E run. |
 | 3 | R2 Process bootstrap and config (done) | Removes four-way duplication before the resilience decorators add more wiring. |
 | 4 | Phase 6 resilience decorators (done) | |
-| 5 | R3 Approve-and-execute use case | The E2E flow drives exactly this path; fix its shape first. |
+| 5 | R3 Approve-and-execute use case (done) | The E2E flow drives exactly this path; fix its shape first. |
 | 6 | Phase 6 E2E flow and CI | CI enforces the ratcheted lint config from here on. |
 | 7 | R4-R8 | After the Phase 6 exit gate, before Phase 7 starts changing auth and policy. |
 
@@ -64,7 +64,15 @@ Item 5 continued:
 
    - The investigator identifies to MCP servers as `rollback-guardian-orchestrator` (`mcp/client.go:56`, **verified**); pass the client name in. Declare the version string once (it appears three times).
 
-## R3. Approve-and-execute use case
+## R3. Approve-and-execute use case (done)
+
+Merged. `ApproveAndExecuteService` owns approve, execute, verify, compensation, and the idempotency key; the handler only decodes and encodes. Rollback mutation locks are owned by a per-attempt lease, so only the attempt that acquired a lock can complete or release it. Every failure after the rollback request may have reached the server is reconciled by re-inspecting the deployment, or reported as `ErrRollbackOutcomeUnknown`; it is never recorded as a plain failed execution. API error bodies use fixed messages. A stale duplicate request can no longer mark an incident failed after its rollback was applied.
+
+Follow-ups from the R3 reviews, assigned to later work:
+
+- `ErrRollbackOutcomeUnknown` still surfaces as a plain 500, and `api/openapi.yaml` documents no error responses. Handled with the E2E task, because `make verify` must tell an operator to retry the same approval: add an `Error` schema and a distinct `rollback_outcome_unknown` code.
+- Both repository adapters report a duplicate insert as `ValidationError` (R4).
+- `pg_advisory_unlock` returning `false` is ignored; `Complete` can return a value together with an error when the unlock fails after commit; `tx.Rollback` runs on the request context (R8).
 
 Finding (**verified**): `internal/adapters/httpapi/server.go:169-240` orchestrates approve, execute, verify, and failure compensation, and mints the idempotency key `"approval:"+id`. That is application logic in a handler, against the "thin handlers" rule.
 
@@ -85,8 +93,9 @@ Status: implemented on `refactor/r3-approve-execute`, pending merge. `applicatio
 2. **Incident transition + audit event.** 12 `Incidents().Update` sites and 24 calls to a 7-parameter `appendEvent`, with `From` hardcoded in some and captured in others. One `transition(ctx, repos, id, actor, fn)` helper that derives From/To and appends the event.
 3. **`workflow` struct.** Eleven dependencies shared by six empty service wrappers. Give each service its own dependency struct plus the shared transition helper, and one file per service (today `ApprovalService` lives in `investigation_service.go`, `Verify` and `Cancel` in `execution_service.go`, `appendEvent` in `query_service.go`).
 4. **Complexity.** Split the functions over the threshold: `Gateway.Watch` (cognitive 65), coordinator `ProcessNext` (53, with a duplicated retry block), `recordDecision` (51), `complete` (47), `Execute` (33). Then enable `gocognit` at 30.
-5. **Dead code.** `InvestigationService.Investigate`, `IncidentService.CreateIncident`, `QueryService.GetProposal`, `InvestigationGateway.Get` with `InvestigationTaskSnapshot`, unread `InvestigatorConfig.LLMProvider`, unused `cause` parameter in `newFailedExecution`. The orchestrator builds a rule diagnoser only to satisfy `NewServices`. Delete, or move to test helpers where tests need them.
-6. **Clock and IDs.** Seven direct `time.Now()` calls in adapters bypass `ports.Clock`; the execution ID is derived twice with different prefixes (`execution-`, `mcp-mutation-`). Inject the clock; one ID function.
+5. **Duplicate inserts.** Both repository adapters report a unique-key violation on insert as `ValidationError`; R3 worked around it by ordering writes. Map it to a conflict error in every repository.
+6. **Dead code.** `InvestigationService.Investigate`, `IncidentService.CreateIncident`, `QueryService.GetProposal`, `InvestigationGateway.Get` with `InvestigationTaskSnapshot`, unread `InvestigatorConfig.LLMProvider`, unused `cause` parameter in `newFailedExecution`. The orchestrator builds a rule diagnoser only to satisfy `NewServices`. Delete, or move to test helpers where tests need them.
+7. **Clock and IDs.** Seven direct `time.Now()` calls in adapters bypass `ports.Clock`; the execution ID is derived twice with different prefixes (`execution-`, `mcp-mutation-`). Inject the clock; one ID function.
 
 ## R5. Domain vocabulary
 
@@ -112,8 +121,9 @@ Mechanical, no behaviour change: `slices.Clone` (10 places), `slices.SortFunc` (
 2. **Error wrapping.** 295 returns pass through an error from another package with no context (113 in `internal/application`). Wrap at package boundaries with `%w` and an operation name; do not wrap domain errors that callers match with `errors.As` in a way that changes their identity. Enable `wrapcheck` with the domain and ports packages ignored.
 3. **Repository context.** 27 of 28 repository methods take no `context.Context`; the Postgres adapter carries the transaction's context in the struct, and `NextSequence` takes one and ignores it. Cancellation works, so this is an inconsistency. Decide once: remove the stray parameter and document the transaction-scoped context in `ports.go`, or thread `ctx` through every method. Record the decision in an ADR.
 4. **Detached contexts.** Seven `contextcheck` hits. The lock-release and cleanup paths detach on purpose; give each a comment and `context.WithoutCancel` plus a timeout. `a2a/server.go:64` logs with `context.Background()` inside a handler; use the request context.
-5. **Integer narrowing.** Four `int -> int32` conversions from config (`gosec` G115); bound the value in config validation.
-6. **`sqlc.yaml`.** Configured, nothing generated. Remove it, or generate. Do not leave it as dead configuration.
+5. **Advisory lock edge cases.** Treat `pg_advisory_unlock` returning `false` as an error; make `Complete` return either a value or an error, not both; run `tx.Rollback` on a detached context with a timeout.
+6. **Integer narrowing.** Four `int -> int32` conversions from config (`gosec` G115); bound the value in config validation.
+7. **`sqlc.yaml`.** Configured, nothing generated. Remove it, or generate. Do not leave it as dead configuration.
 
 ## Lint ratchet
 
