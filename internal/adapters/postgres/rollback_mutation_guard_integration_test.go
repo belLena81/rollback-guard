@@ -242,7 +242,7 @@ func seedTrustedRollbackWithExpiry(t *testing.T, pool *pgxpool.Pool, incidentID 
 	`, incidentID, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), `INSERT INTO policy_decisions (id, incident_id, allowed, rules, decided_at) VALUES ($1,$2,true,$3,$4)`, decision.ID(), incidentID, rules, now); err != nil {
+	if _, err := tx.Exec(context.Background(), `INSERT INTO policy_decisions (id, incident_id, allowed, rules, decided_at) VALUES ($1,$2,true,$3,$4)`, decision.ID(), incidentID, string(rules), now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(context.Background(), `

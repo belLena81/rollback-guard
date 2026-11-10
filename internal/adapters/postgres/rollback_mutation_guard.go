@@ -223,7 +223,10 @@ func (g *RollbackMutationGuard) retainRollbackMutationLock(key domain.Idempotenc
 	g.locks[key] = lock
 	g.mu.Unlock()
 	if previous != nil {
-		_ = previous.release(context.Background())
+		// Begin has already committed by the time a lock is retained, so a failure to
+		// unlock the stale, replaced lock must not fail the new attempt. release still
+		// returns the connection to the pool even when the unlock fails.
+		_ = previous.release(context.Background()) //nolint:errcheck // intentional: see comment above; covered by TestRetainRollbackMutationLockIgnoresReplacedLockReleaseFailure
 	}
 }
 
