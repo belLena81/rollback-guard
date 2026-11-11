@@ -2,7 +2,9 @@
 
 // Package e2e drives the Phase 6 exit gate against a running stack: the kind
 // demo cluster (make kind-create images kind-load deploy), PostgreSQL,
-// Prometheus, and the five services (make services-up). Run it with
+// Prometheus, and the five services started with real GitHub login against a
+// fake GitHub (make services-up DEMO_AUTH=github; make e2e-test forces it).
+// Every request carries a real session (auth_test.go). Run it with
 // `make e2e-test`. It uses the same operator steps as `make e2e` (make
 // demo-reset, make demo-v2-broken) and asserts the outcome from the REST API,
 // the cluster, and, when tracing is configured, the trace backend.
@@ -48,6 +50,7 @@ const (
 type env struct {
 	orchestrator, prometheus, demo, kubeContext, namespace, deployment, window string
 	otlp, traceQuery, repoRoot, makeCmd, kubectl, cluster, databaseURL         string
+	tokens                                                                     map[string]string
 }
 
 func loadEnv(t *testing.T) env {
@@ -81,6 +84,7 @@ func loadEnv(t *testing.T) env {
 	if e.prometheus == "" || e.demo == "" || e.databaseURL == "" {
 		t.Fatal("PROMETHEUS_URL, DEMO_URL, and DATABASE_URL are required (run through make e2e-test)")
 	}
+	e.tokens = loadTokens(t, root)
 	return e
 }
 
@@ -92,6 +96,7 @@ func TestE2ERollback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	e.requireServicesReady(ctx, t)
+	e.requireIdentities(ctx, t)
 
 	e.run(ctx, t, e.makeCmd, "-C", e.repoRoot, "--no-print-directory", "-s", "demo-reset")
 	stopLoad := e.startLoad(ctx, t)
@@ -107,8 +112,10 @@ func TestE2ERollback(t *testing.T) {
 	proposal := object(t, summary, "proposal")
 	actionID, proposalHash := str(t, proposal, "actionId"), str(t, proposal, "proposalHash")
 
+	e.requireApprovalRefused(ctx, t, id, actionID, proposalHash)
+
 	approveTrace := newTraceID(t)
-	status, body := e.call(ctx, t, http.MethodPost, "/v1/incidents/"+id+"/approve",
+	status, body := e.callAs(ctx, t, sessionAdministrator, http.MethodPost, "/v1/incidents/"+id+"/approve",
 		map[string]string{"actionId": actionID, "proposalHash": proposalHash}, approveTrace, approveTimeout)
 	if status != http.StatusOK {
 		t.Fatalf("approve: status %d body %s", status, body)
@@ -151,6 +158,7 @@ func TestE2ERollback(t *testing.T) {
 	if approved := events.ofKind("rollback.approved")[0]; approved.Actor.Kind != "human" {
 		t.Fatalf("approval event actor kind %q, want human", approved.Actor.Kind)
 	}
+	requireActors(t, events, actorOperator, actorAdministrator)
 	requireEvidenceCollected(t, object(t, summary, "conclusion"), events)
 	e.requireDeploymentOnStable(ctx, t)
 	e.checkTrace(ctx, t, createTrace, []string{
@@ -169,6 +177,7 @@ func TestE2EDecline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	e.requireServicesReady(ctx, t)
+	e.requireIdentities(ctx, t)
 
 	e.run(ctx, t, e.makeCmd, "-C", e.repoRoot, "--no-print-directory", "-s", "demo-reset")
 	stopLoad := e.startLoad(ctx, t)
@@ -207,6 +216,7 @@ func TestE2EDecline(t *testing.T) {
 		}
 	}
 	requireEvidenceCollected(t, conclusion, events)
+	requireActors(t, events, actorOperator, "")
 	// The decline must come from the missing metric breach, not from a stale
 	// rollout timestamp (docs/local-demo-env.md, "Reset and repeatability").
 	decisions := events.ofKind("policy.evaluated")
@@ -403,11 +413,7 @@ func (e env) waitFor(ctx context.Context, t *testing.T, description string, done
 
 func (e env) createIncident(ctx context.Context, t *testing.T, observed float64, traceID string) string {
 	t.Helper()
-	request := map[string]any{
-		"target":  map[string]string{"cluster": e.cluster, "namespace": e.namespace, "deployment": e.deployment, "service": e.deployment},
-		"symptom": map[string]any{"kind": "http_error_rate", "observed": observed, "threshold": threshold, "unit": "ratio", "startedAt": time.Now().UTC().Format(time.RFC3339)},
-	}
-	status, body := e.call(ctx, t, http.MethodPost, "/v1/incidents", request, traceID, 30*time.Second)
+	status, body := e.callAs(ctx, t, sessionOperator, http.MethodPost, "/v1/incidents", e.incidentRequest(observed), traceID, 30*time.Second)
 	if status != http.StatusAccepted {
 		t.Fatalf("create incident: status %d body %s", status, body)
 	}
@@ -437,11 +443,11 @@ func (e env) waitForStatus(ctx context.Context, t *testing.T, id, want string) m
 }
 
 type auditEvent struct {
-	Sequence   int                   `json:"sequence"`
-	Kind       string                `json:"kind"`
-	OccurredAt time.Time             `json:"occurredAt"`
-	Actor      struct{ Kind string } `json:"actor"`
-	Detail     map[string]any        `json:"detail"`
+	Sequence   int                       `json:"sequence"`
+	Kind       string                    `json:"kind"`
+	OccurredAt time.Time                 `json:"occurredAt"`
+	Actor      struct{ Kind, ID string } `json:"actor"`
+	Detail     map[string]any            `json:"detail"`
 }
 
 type timeline struct {
@@ -660,6 +666,12 @@ func (e env) fetchTrace(ctx context.Context, t *testing.T, traceID string) ([]st
 // call sends one API request, with a sampled traceparent when traceID is set.
 func (e env) call(ctx context.Context, t *testing.T, method, path string, body any, traceID string, timeout time.Duration) (int, []byte) {
 	t.Helper()
+	return e.callAs(ctx, t, sessionViewer, method, path, body, traceID, timeout)
+}
+
+// callAs is call with the session token named by as (anonymous sends none).
+func (e env) callAs(ctx context.Context, t *testing.T, as, method, path string, body any, traceID string, timeout time.Duration) (int, []byte) {
+	t.Helper()
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -679,6 +691,13 @@ func (e env) call(ctx context.Context, t *testing.T, method, path string, body a
 	}
 	if traceID != "" {
 		request.Header.Set("traceparent", "00-"+traceID+"-"+randomHex(t, 8)+"-01")
+	}
+	if as != anonymous {
+		token := e.tokens[as]
+		if token == "" {
+			t.Fatalf("no session token for %q", as)
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
