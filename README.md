@@ -12,8 +12,8 @@ An agent recommendation never directly mutates infrastructure. Every rollback mu
 A2A recommendation
 deterministic validation
 policy evaluation
-human approval
-MCP mutation
+human approval (an authenticated administrator, bound to the exact proposal hash)
+MCP mutation (re-checks that the approver is still an active administrator)
 deterministic recovery verification
 ```
 
@@ -21,7 +21,7 @@ This rule is the main project invariant. The AI layer may diagnose and recommend
 
 ## Services
 
-- `cmd/orchestrator`: public REST API, incident lifecycle, approvals, audit timeline, and MCP client composition.
+- `cmd/orchestrator`: public REST API, GitHub OAuth login and server-side sessions, role enforcement (`viewer` < `operator` < `administrator`), incident lifecycle, approvals, audit timeline, and MCP client composition.
 - `cmd/investigator`: A2A agent that gathers evidence and returns a structured diagnosis.
 - `cmd/kubernetes-mcp`: separately deployed read-only and rollback MCP tool catalogs backed by `client-go`.
 - `cmd/observability-mcp`: metrics and recovery-evaluation MCP tools.
@@ -36,6 +36,8 @@ This rule is the main project invariant. The AI layer may diagnose and recommend
 - [docs/design.md](./docs/design.md): design notes and differentiators.
 - [docs/feature-plan.md](./docs/feature-plan.md): feature backlog and product framing.
 - [docs/local-demo-env.md](./docs/local-demo-env.md): local `kind` demo environment.
+- [docs/phase7-auth.md](./docs/phase7-auth.md): authentication, sessions, roles, audit, runtime configuration, exit-gate evidence, and the known gaps; [docs/adr-auth-sessions.md](./docs/adr-auth-sessions.md) records the session and role decisions.
+- [docs/refactoring-plan.md](./docs/refactoring-plan.md): code-quality stages R1-R9 and the lint ratchet.
 - [docs/ci.md](./docs/ci.md): GitHub Actions jobs, what each gates, and how to reproduce them locally.
 - [docs/tech-stack.md](./docs/tech-stack.md): selected libraries and alternatives.
 - [.agents/00-INDEX.md](./.agents/00-INDEX.md): role briefs for agentic development.
@@ -64,7 +66,7 @@ test/
 docs/
 ```
 
-Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is complete: the `demo-api` workload, container images, kind manifests, the local demo flow, telemetry (metrics, correlated logs, tracing), retry/circuit-breaker decorators (`docs/phase6-resilience.md`), the unattended end-to-end run (`make e2e`, `docs/local-demo-env.md`), and GitHub Actions CI (`docs/ci.md`) exist, and CI runs the full demo on a fresh kind cluster. Phase 7 (authentication and users, `docs/phase7-auth.md`) is implemented: `AUTH_MODE=github` gives real GitHub OAuth sessions and roles, and `make e2e` / `make e2e-decline` run through such sessions against a fake GitHub (`DEMO_AUTH`). `AUTH_MODE` defaults to `github` and fails closed at startup without the GitHub settings; `AUTH_MODE=local` (set explicitly by the dev/demo scripts) injects a fixed local actor and must stay on a trusted network.
+Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is complete: the `demo-api` workload, container images, kind manifests, the local demo flow, telemetry (metrics, correlated logs, tracing), retry/circuit-breaker decorators (`docs/phase6-resilience.md`), the unattended end-to-end run (`make e2e`, `docs/local-demo-env.md`), and GitHub Actions CI (`docs/ci.md`) exist, and CI runs the full demo on a fresh kind cluster. Phase 7 (authentication and users, `docs/phase7-auth.md`) is implemented: `AUTH_MODE=github` gives real GitHub OAuth sessions and roles, and `make e2e` / `make e2e-decline` run through such sessions against a fake GitHub (`DEMO_AUTH`). `AUTH_MODE` defaults to `github` and fails closed at startup without the GitHub settings; `AUTH_MODE=local` (set explicitly by the dev/demo scripts) injects a fixed local actor, binds loopback only unless `ALLOW_INSECURE_LOCAL_AUTH=true`, and must stay on a trusted network. Only an administrator can approve a rollback, and the rollback MCP re-checks the approver at execution. Role changes, user disable/enable and session revocation take effect on the next request and are written to an append-only auth audit log (`GET /v1/auth/audit`). Accepted deployment gaps (proxy `Host` handling, `/metrics` exposure) are listed in `docs/phase7-auth.md`.
 
 ## Canonical Choices
 
@@ -111,8 +113,10 @@ make approve-latest-action
 make verify              # VERIFY_EXPECT=declined for the decline scenario
 make e2e                 # unattended exit gate: healthy -> broken -> incident -> approve -> verify
 make e2e-decline         # policy declines a crashloop rollout; nothing is mutated
-make e2e-test            # the same flows as a Go test (build tag e2e) against a running stack
+make e2e-test            # the same flows as a Go test (build tag e2e); start the stack first: make services-up DEMO_AUTH=github
 ```
+
+The e2e targets log in through a fake GitHub (`DEMO_AUTH=github`); stop any stack started in `local` mode first (`make services-down`), because running services are left alone. `go.mod` pins `toolchain go1.26.11`, so local gates fetch the patched Go automatically.
 
 `.github/workflows/ci.yml` runs these gates on pull requests to `master` and on pushes to `master` and `phase*/**` branches ([docs/ci.md](./docs/ci.md)).
 
