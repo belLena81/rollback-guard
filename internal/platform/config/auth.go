@@ -84,6 +84,10 @@ type AuthConfig struct {
 	Mode AuthMode
 	// GitHub is set only in github mode.
 	GitHub GitHubAuthConfig
+	// InsecureLocalBind is true when local mode listens on a non-loopback
+	// HTTP_ADDR because ALLOW_INSECURE_LOCAL_AUTH=true; the orchestrator logs
+	// a warning at startup.
+	InsecureLocalBind bool
 }
 
 // GitHubAuthConfig configures the GitHub OAuth login (AUTH_GITHUB_*).
@@ -242,6 +246,30 @@ func authURLEnv(name, fallback string, isRedirect bool) (string, error) {
 		return value, nil
 	}
 	return strings.TrimSuffix(value, "/"), nil
+}
+
+// localAuthBind refuses AUTH_MODE=local on a non-loopback HTTP_ADDR: local
+// mode makes every request the fixed local administrator, so it must not be
+// reachable from another host. ALLOW_INSECURE_LOCAL_AUTH=true overrides the
+// refusal; the returned flag tells the caller to warn loudly at startup. An
+// empty host (":8080") binds every interface and a hostname is not resolved,
+// so both count as non-loopback.
+func localAuthBind(auth AuthConfig, httpAddr string) (insecure bool, err error) {
+	if auth.Mode != AuthModeLocal {
+		return false, nil
+	}
+	host, _, splitErr := net.SplitHostPort(httpAddr)
+	if splitErr == nil && loopbackHost(host) {
+		return false, nil
+	}
+	allow, err := boolEnv("ALLOW_INSECURE_LOCAL_AUTH", false)
+	if err != nil {
+		return false, err
+	}
+	if !allow {
+		return false, errors.New("AUTH_MODE=local requires a loopback HTTP_ADDR (127.0.0.1, ::1 or localhost); set ALLOW_INSECURE_LOCAL_AUTH=true to override")
+	}
+	return true, nil
 }
 
 func loopbackHost(host string) bool {

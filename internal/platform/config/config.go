@@ -154,8 +154,13 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	httpAddr := stringEnv("HTTP_ADDR", DefaultOrchestratorAddr)
+	auth.InsecureLocalBind, err = localAuthBind(auth, httpAddr)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
-		HTTPAddr:              stringEnv("HTTP_ADDR", DefaultOrchestratorAddr),
+		HTTPAddr:              httpAddr,
 		DatabaseURL:           db.url,
 		DBMaxConns:            db.maxConns,
 		DBPingTimeout:         db.pingTimeout,

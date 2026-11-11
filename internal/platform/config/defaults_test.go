@@ -23,7 +23,7 @@ var everyVariable = []string{
 	"DIAGNOSIS_STRATEGY", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "LLM_TIMEOUT", "LLM_MAX_OUTPUT_TOKENS",
 	"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME", "OTEL_TRACES_SAMPLE_RATIO", "TELEMETRY_SHUTDOWN_TIMEOUT", "LOG_LEVEL",
 	"SESSION_TTL", "SESSION_COOKIE_SECURE",
-	"AUTH_MODE", "AUTH_GITHUB_CLIENT_ID", "AUTH_GITHUB_CLIENT_SECRET", "AUTH_GITHUB_REDIRECT_URL", "AUTH_GITHUB_ALLOWED_ORG",
+	"AUTH_MODE", "ALLOW_INSECURE_LOCAL_AUTH", "AUTH_GITHUB_CLIENT_ID", "AUTH_GITHUB_CLIENT_SECRET", "AUTH_GITHUB_REDIRECT_URL", "AUTH_GITHUB_ALLOWED_ORG",
 	"AUTH_BOOTSTRAP_ADMINS", "AUTH_STATE_SECRET", "AUTH_GITHUB_BASE_URL", "AUTH_GITHUB_API_URL",
 }
 
@@ -231,6 +231,9 @@ func TestEveryServiceBindsLoopbackByDefault(t *testing.T) {
 			seen[addr] = name
 
 			t.Setenv("HTTP_ADDR", "0.0.0.0:9999")
+			// The orchestrator runs local mode here, which refuses a
+			// non-loopback bind without the override (TestLoadRefusesLocalAuthOffLoopback).
+			t.Setenv("ALLOW_INSECURE_LOCAL_AUTH", "true")
 			if addr, err = load(t); err != nil || addr != "0.0.0.0:9999" {
 				t.Fatalf("explicit HTTP_ADDR = %q, %v; want it honoured", addr, err)
 			}

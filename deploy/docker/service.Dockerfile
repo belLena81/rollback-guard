@@ -10,7 +10,9 @@
 # deliberately (for example `docker run -p 127.0.0.1:8091:8080`, never a bare
 # `-p 8080:8080` or `--network host`); it must stay on a trusted network, and
 # the service logs a warning at start-up because it listens beyond loopback. Override with `-e HTTP_ADDR=...` or the HTTP_ADDR
-# build arg. Everything else (DATABASE_URL, peer URLs, ...) is supplied by the
+# build arg. The image sets no AUTH_MODE, so the orchestrator runs github
+# mode; it refuses AUTH_MODE=local on this non-loopback bind unless
+# ALLOW_INSECURE_LOCAL_AUTH=true is also set (docs/phase7-auth.md). Everything else (DATABASE_URL, peer URLs, ...) is supplied by the
 # deployment, never baked into the image.
 
 ARG GO_VERSION=1.26.11
