@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -74,20 +75,50 @@ type Server struct {
 
 // New starts a fake GitHub that accepts one OAuth client.
 func New(clientID, clientSecret string) *Server {
-	s := &Server{
+	s := newServer(clientID, clientSecret)
+	s.server = httptest.NewServer(s.handler())
+	return s
+}
+
+// Listen is New on a chosen loopback address (for example "127.0.0.1:9100";
+// port 0 picks a free one). A non-loopback address is refused, so the fake
+// can never be exposed to a network.
+func Listen(addr, clientID, clientSecret string) (*Server, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("githubfake: address: %w", err)
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return nil, fmt.Errorf("githubfake: %q is not a loopback IP address", host)
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("githubfake: listen: %w", err)
+	}
+	s := newServer(clientID, clientSecret)
+	s.server = httptest.NewUnstartedServer(s.handler())
+	s.server.Listener = listener
+	s.server.Start()
+	return s, nil
+}
+
+func newServer(clientID, clientSecret string) *Server {
+	return &Server{
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		users:        map[string]User{},
 		codes:        map[string]grant{},
 		tokens:       map[string]string{},
 	}
+}
+
+func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+AuthorizePath, s.authorize)
 	mux.HandleFunc("POST "+TokenPath, s.token)
 	mux.HandleFunc("GET "+UserPath, s.user)
 	mux.HandleFunc("GET "+OrgsPath, s.orgs)
-	s.server = httptest.NewServer(s.delayed(mux))
-	return s
+	return s.delayed(mux)
 }
 
 // URL is both the OAuth base URL and the REST API URL.
@@ -194,6 +225,9 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.lastAuthorize = query
 	login := s.signedIn
+	if hint := strings.ToLower(query.Get("login")); hint != "" {
+		login = hint // GitHub's login parameter suggests the account to use
+	}
 	_, known := s.users[login]
 	s.mu.Unlock()
 	if query.Get("client_id") != s.clientID || query.Get("code_challenge_method") != "S256" ||
