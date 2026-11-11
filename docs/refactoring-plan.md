@@ -154,6 +154,22 @@ Done on `refactor/r8-readability`: `lll` (160), `wrapcheck` (domain and ports ig
 6. **Integer narrowing.** Four `int -> int32` conversions from config (`gosec` G115); bound the value in config validation.
 7. **`sqlc.yaml`.** Configured, nothing generated. Remove it, or generate. Do not leave it as dead configuration.
 
+## R9. Phase 7 consolidation (done)
+
+Done on `refactor/r9-phase7-consolidation`. Strictly behaviour-preserving: no change to auth, authorization or audit semantics, status codes, error bodies, OpenAPI, migrations, MCP catalogs, RBAC or env vars. Ranked by value.
+
+| # | Finding (evidence) | Status |
+|---|---|---|
+| 1 | Pre-Phase 7 "no authentication" text left in `SPEC.md:69`, `docs/phase3-mcp.md:9`, `config/defaults.go:5`, `config/defaults_test.go:200`. | done |
+| 2 | The error-body literal `errorDTO{Error, Message, RequestID: requestID(r)}` was written out seven times across `errors.go`, `server.go`, `github_login.go`, `user_admin.go`, `login_ratelimit.go`. Now `errorBody(r, code, message)`. | done |
+| 3 | `authHash` and `authSession` were copied between `memory/auth_test.go` and `postgres/auth_integration_test.go`. Now `domaintest.SessionTokenHash` and `domaintest.Session`; the local names stay as thin wrappers. | done |
+| 4 | Memory and Postgres auth stores repeat revoke/resolve rules. | declined: two implementations of one port, each in its store's mechanism (map under lock vs SQL). Sharing logic would couple them; the integration suite pins both to the same behaviour. |
+| 5 | `SessionAuthMiddleware` and `LocalAuthMiddleware`. | declined: different mechanisms; they share only the context-key idiom. Merging touches the auth path. |
+| 6 | `httpserver/session_auth.go` repeats error codes and messages from `httpapi/errors.go`. | declined: `httpapi` imports `httpserver`, so the constants cannot be shared without a new package or a moved file. Follow-up: a test that pins the two sets equal. |
+| 7 | `loginErrorResponse` beside `errorResponse`. | declined: the login callback deliberately uses fixed per-class messages and a logged cause; folding them would risk changing bodies. |
+| 8 | Size: `cmd/orchestrator/main.go` (527 lines, `buildGitHubAuth` about 70), `config.go` (635), `postgres/repositories.go` (732). | declined: all functions pass the gocognit/gocyclo ratchet; they are wiring or one-repository-per-block files. Splitting is churn without a defect. |
+| 9 | Shell `fail`/`die` helpers repeated across `scripts/demo/*.sh`. | declined: messages and exit paths differ per script and only `make e2e` exercises them. |
+
 ## Lint ratchet
 
 Add to `.golangci.yml` as each stage lands, so CI holds the line:
