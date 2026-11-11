@@ -236,8 +236,16 @@ e2e-decline: services-up
 
 # The same flow as an automated Go test against a running stack (make
 # services-up first). The e2e build tag keeps it out of `go test ./...`.
+# The test output is captured and scanned for every session token: the ones
+# in the auth-tokens file and the ones the test itself minted.
+E2E_TEST_LOG = $(DEMO_STATE_DIR)/e2e-test.log
+E2E_MINTED_TOKENS = $(DEMO_STATE_DIR)/e2e-minted-tokens
 e2e-test:
-	$(DEMO_API_ENV) MAKE="$(MAKE)" go test -tags=e2e -count=1 -timeout=40m -v ./test/e2e/...
+	@mkdir -p $(DEMO_STATE_DIR) && rm -f $(E2E_MINTED_TOKENS)
+	$(DEMO_API_ENV) MAKE="$(MAKE)" E2E_MINTED_TOKENS_FILE=$(E2E_MINTED_TOKENS) bash -o pipefail -c \
+		'go test -tags=e2e -count=1 -timeout=40m -v ./test/e2e/... 2>&1 | tee $(E2E_TEST_LOG)'
+	$(DEMO_API_ENV) bash scripts/demo/check-no-tokens.sh $(E2E_TEST_LOG)
+	$(DEMO_API_ENV) AUTH_TOKENS_FILE=$(E2E_MINTED_TOKENS) bash scripts/demo/check-no-tokens.sh $(E2E_TEST_LOG)
 
 # Signs the fake GitHub users in again (fresh session tokens in .demo/auth-tokens)
 # on a stack started with DEMO_AUTH=github.
