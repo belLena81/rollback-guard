@@ -296,6 +296,20 @@ jobs:
         run: |
           make e2e-decline 2>&1 | tee e2e-decline.log
           grep -q 'including the trace check' e2e-decline.log
+      # Both runs above use real sessions: the e2e targets start the stack
+      # with DEMO_AUTH=github (orchestrator AUTH_MODE=github against the
+      # loopback fake GitHub, throwaway secrets generated in the job), so the
+      # job requires the line that only the authentication steps print.
+      - name: Both runs used real sessions
+        run: |
+          grep -q 'ok: demo-outsider .* is refused and gets no session (HTTP 403)' e2e-rollback.log
+          grep -q 'ok: rollback.approved is attributed to the human github:1001' e2e-rollback.log
+          grep -q 'ok: the logged-out session is rejected on the next request (HTTP 401)' e2e-decline.log
+          grep -q 'ok: incident.created is attributed to github:1002' e2e-decline.log
+      # No session token may reach a log that the failure artifact uploads.
+      - name: No session token in logs
+        if: always()
+        run: bash scripts/demo/check-no-tokens.sh .demo/logs e2e-rollback.log e2e-decline.log ci-diagnostics
       - name: Collect diagnostics
         if: failure() || cancelled()
         run: |
