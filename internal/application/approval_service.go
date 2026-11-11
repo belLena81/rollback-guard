@@ -36,6 +36,14 @@ type RejectionCommand struct {
 
 // Approve authorizes command.Actor for ActionApproveRollback before the
 // approval transaction; that same actor is the one recorded.
+// Approve authorizes and then records in two transactions on two separate
+// ports (ports.AuthUnitOfWork, ports.UnitOfWork). A demotion or disable that
+// commits between them is not re-checked here: re-reading users inside the
+// incident transaction would merge the auth and incident stores, and holding
+// the auth transaction open around the record step would take two pool
+// connections per approve. The approval such a race records cannot execute:
+// the rollback MCP re-checks the approver's current role in the transaction
+// that re-loads the approval (docs/phase7-auth.md, Known gaps).
 func (s *ApprovalService) Approve(ctx context.Context, command ApprovalCommand) (domain.Approval, error) {
 	if err := s.access.Authorize(ctx, command.Actor, domain.ActionApproveRollback); err != nil {
 		return domain.Approval{}, fmt.Errorf("authorize approve rollback: %w", err)

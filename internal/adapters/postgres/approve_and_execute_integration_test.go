@@ -33,8 +33,21 @@ type approvePostgresHarness struct {
 }
 
 func newApprovePostgresHarness(t *testing.T, unitOfWork func(*UnitOfWork) ports.UnitOfWork) *approvePostgresHarness {
+	return newApprovePostgresHarnessWith(t, approveHarnessOptions{unitOfWork: unitOfWork})
+}
+
+// approveHarnessOptions overrides parts of the harness; zero values keep the
+// defaults (AllowAll access, human actor "alice", the fake executor).
+type approveHarnessOptions struct {
+	unitOfWork func(*UnitOfWork) ports.UnitOfWork
+	access     func(*pgxpool.Pool) application.AccessPolicy
+	executor   func(*pgxpool.Pool) ports.RollbackExecutor
+	human      domain.ActorID
+}
+
+func newApprovePostgresHarnessWith(t *testing.T, options approveHarnessOptions) *approvePostgresHarness {
 	t.Helper()
-	migrated := isolatedSchemaPool(t, "000001_initial_schema.up.sql", "000002_rollback_mutation_ledger.up.sql", "000003_a2a_investigation.up.sql", "000004_ai_diagnosis.up.sql")
+	migrated := isolatedSchemaPool(t, allUpMigrations...)
 	// The migration pool uses the simple protocol for multi-statement
 	// files; the application runs on the default extended protocol, as in
 	// production, against the same isolated schema.
@@ -78,17 +91,29 @@ func newApprovePostgresHarness(t *testing.T, unitOfWork func(*UnitOfWork) ports.
 	if err != nil {
 		t.Fatal(err)
 	}
-	human, err := domain.NewActor("alice", domain.ActorHuman)
+	humanID := options.human
+	if humanID == "" {
+		humanID = "alice"
+	}
+	human, err := domain.NewActor(humanID, domain.ActorHuman)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var uow ports.UnitOfWork = store
-	if unitOfWork != nil {
-		uow = unitOfWork(store)
+	if options.unitOfWork != nil {
+		uow = options.unitOfWork(store)
+	}
+	var access application.AccessPolicy = applicationtest.AllowAll{}
+	if options.access != nil {
+		access = options.access(pool)
+	}
+	var executor ports.RollbackExecutor = infra
+	if options.executor != nil {
+		executor = options.executor(pool)
 	}
 	services, err := application.NewServices(application.Dependencies{
-		UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: infra,
-		RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: applicationtest.AllowAll{}, Clock: clock, IDGenerator: ids,
+		UnitOfWork: uow, Inspector: infra, Metrics: infra, Executor: executor,
+		RollbackPolicy: policy, ApprovalPolicy: domain.ApprovalAuthorizer{}, Access: access, Clock: clock, IDGenerator: ids,
 	}, application.WorkflowConfig{ProposalTTL: 15 * time.Minute, ApprovalTTL: 5 * time.Minute, CleanupTimeout: 5 * time.Second, SystemActor: system})
 	if err != nil {
 		t.Fatal(err)
