@@ -160,6 +160,7 @@ check_authentication() {
   expect_api "a second viewer session is valid" 200 viewer-logout GET /v1/me
   expect_api "logout revokes the session" 204 viewer-logout POST /v1/auth/logout
   expect_api "the logged-out session is rejected on the next request" 401 viewer-logout GET /v1/me
+  expect_api "a logged-out session cannot create an incident" 401 viewer-logout POST /v1/incidents "$body"
   expect_api "logging out one session leaves the other valid" 200 viewer GET /v1/me
 }
 
@@ -173,6 +174,8 @@ check_approval_refused() {
   valid_id "$action" && valid_id "$hash" || die "incident $id has no usable proposal"
   body="$(jq -nc --arg a "$action" --arg h "$hash" '{actionId: $a, proposalHash: $h}')"
   expect_api "an operator cannot approve the rollback" 403 operator POST "/v1/incidents/$id/approve" "$body"
+  expect_api "a viewer cannot approve the rollback" 403 viewer POST "/v1/incidents/$id/approve" "$body"
+  expect_api "an anonymous approval is rejected" 401 "" POST "/v1/incidents/$id/approve" "$body"
   body="$(jq -nc --arg a "$action" --arg h "$hash" '{actionId: $a, proposalHash: $h, reason: "e2e: viewer must not reject"}')"
   expect_api "a viewer cannot reject" 403 viewer POST "/v1/incidents/$id/reject" "$body"
   [[ "$(jq -r '.incident.status' <<<"$(get_incident "$id")")" == awaiting_approval ]] ||

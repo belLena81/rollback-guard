@@ -292,6 +292,9 @@ jobs:
         run: |
           make e2e 2>&1 | tee e2e-rollback.log
           grep -q 'including the trace check' e2e-rollback.log
+          # The next services-up logs in again and replaces the tokens, so
+          # scan this run's output against its own sessions now.
+          bash scripts/demo/check-no-tokens.sh .demo/logs e2e-rollback.log
       - name: make e2e-decline
         run: |
           make e2e-decline 2>&1 | tee e2e-decline.log
