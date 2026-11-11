@@ -2,6 +2,8 @@ module github.com/belLena81/rollback-guard
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	github.com/a2aproject/a2a-go/v2 v2.4.0
 	github.com/jackc/pgx/v5 v5.10.0

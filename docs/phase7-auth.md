@@ -174,4 +174,4 @@ Open or accepted at Phase 7 exit. Numbers are stable references; gaps 4, 5 and 1
 8. **`AUTH_MODE=local` on a non-loopback bind: closed.** With `AUTH_MODE=local`, the orchestrator refuses to start unless `HTTP_ADDR` is a loopback address (`127.0.0.0/8`, `::1` or `localhost`). It refuses `:8080`, `0.0.0.0`, any other IP, and hostnames, which it does not resolve. Setting `ALLOW_INSECURE_LOCAL_AUTH=true` overrides the refusal, and the orchestrator then logs an `INSECURE` warning at startup. The service image sets `HTTP_ADDR=:8080` and no `AUTH_MODE`, so it runs `github` mode.
 9. **Open `/metrics`.** It is a public path so Prometheus can scrape it without a session.
 11. **Leaving the organization** is noticed only at the user's next login; an administrator disables the user (or revokes their sessions) to cut access earlier.
-12. **`govulncheck`** fails on the sandbox toolchain (GO-2026-6859, fixed in go1.26.11); not a Phase 7 change.
+12. **`govulncheck`** was failing on older toolchains (GO-2026-6859); `go.mod` now pins `toolchain go1.26.11`, and the scan is clean.
