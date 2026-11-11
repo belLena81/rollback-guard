@@ -117,6 +117,8 @@ make e2e-test            # the same flows as a Go test (build tag e2e); start th
 
 The e2e targets log in through a fake GitHub (`DEMO_AUTH=github`); stop any stack started in `local` mode first (`make services-down`), because running services are left alone. `go.mod` pins `toolchain go1.26.11`, so local gates fetch the patched Go automatically.
 
+A step-by-step local demo (setup, live script, variants) is in [DEMO.md](DEMO.md).
+
 `.github/workflows/ci.yml` runs these gates on pull requests to `master` and on pushes to `master` and `phase*/**` branches ([docs/ci.md](./docs/ci.md)).
 
 The kind targets are described in [docs/phase6-kind.md](./docs/phase6-kind.md), the stack, the scripted REST steps, and the end-to-end runs in [docs/local-demo-env.md](./docs/local-demo-env.md).
