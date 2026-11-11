@@ -286,16 +286,19 @@ type headerAllowListTransport struct {
 
 func (t *headerAllowListTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	clone := request.Clone(request.Context())
-	for name := range clone.Header {
+	// Rebuild the header set instead of filtering it: a non-canonical key or
+	// a second Authorization value cannot ride along with a valid one.
+	kept := make(http.Header, len(allowedRequestHeaders)+1)
+	for name, values := range clone.Header {
 		canonical := http.CanonicalHeaderKey(name)
 		if _, ok := allowedRequestHeaders[canonical]; ok {
-			continue
+			kept[canonical] = append(kept[canonical], values...)
 		}
-		if canonical == "Authorization" && t.apiKey != "" && clone.Header.Get(name) == "Bearer "+t.apiKey {
-			continue
-		}
-		delete(clone.Header, name)
 	}
+	if values := clone.Header["Authorization"]; t.apiKey != "" && len(values) == 1 && values[0] == "Bearer "+t.apiKey {
+		kept["Authorization"] = []string{values[0]}
+	}
+	clone.Header = kept
 	response, err := t.next.RoundTrip(clone)
 	return response, err //nolint:wrapcheck // RoundTripper decorator: the transport error passes through unchanged
 }

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -140,6 +141,8 @@ func TestAuditRejectsBadQueries(t *testing.T) {
 		{"non-numeric limit", "?limit=abc"},
 		{"garbage cursor", "?cursor=%21%21%21"},
 		{"well-formed base64 of the wrong shape", "?cursor=" + url.QueryEscape("bm9wZQ")},
+		{"cursor id with a NUL byte", "?cursor=" + base64.RawURLEncoding.EncodeToString([]byte("1|a\x00b"))},
+		{"cursor id with invalid UTF-8", "?cursor=" + base64.RawURLEncoding.EncodeToString([]byte("1|a\xffb"))},
 		{"oversized cursor", "?cursor=" + strings.Repeat("a", 300)},
 	}
 	for _, tt := range tests {

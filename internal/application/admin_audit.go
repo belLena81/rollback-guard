@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
@@ -18,6 +19,9 @@ const (
 	DefaultAuditPageSize = 50
 	MaxAuditPageSize     = 200
 )
+
+// maxAuditCursorIDBytes bounds the event ID inside a cursor.
+const maxAuditCursorIDBytes = 128
 
 // AuditPage is one newest-first page of the auth audit log. NextCursor is
 // empty on the last page.
@@ -78,7 +82,9 @@ func decodeAuditCursor(cursor string) (ports.AuthAuditCursor, error) {
 		return ports.AuthAuditCursor{}, invalid
 	}
 	nanos, id, ok := strings.Cut(string(raw), "|")
-	if !ok || id == "" {
+	// The ID is bound as a PostgreSQL text parameter, which rejects NUL bytes
+	// and invalid UTF-8; refuse them here so the caller gets 400, not 500.
+	if !ok || id == "" || len(id) > maxAuditCursorIDBytes || !utf8.ValidString(id) || strings.ContainsRune(id, 0) {
 		return ports.AuthAuditCursor{}, invalid
 	}
 	n, err := strconv.ParseInt(nanos, 10, 64)
