@@ -14,6 +14,13 @@
 #                     no breached metric -> policy declines -> verify declined
 #                     and the Deployment unmutated
 #
+# With DEMO_AUTH=github (set by make e2e / e2e-decline) the whole run goes
+# through real sessions against the fake GitHub: the operator creates the
+# incident, the operator and a viewer are refused (403) on an awaiting
+# proposal, the administrator approves, a viewer cannot create, a non-member
+# gets no session, logout ends a session, and the audit timeline shows the
+# github:<id> actors. With DEMO_AUTH=local the auth steps are skipped.
+#
 # Exits non-zero with a FAIL line naming the step on any failure. Load runs
 # for the whole scenario so detection and recovery see real traffic.
 set -euo pipefail
@@ -108,7 +115,91 @@ wait_for_status() {
   done
 }
 
-echo "$SCRIPT_NAME: mode $mode, threshold $threshold, metrics window $METRICS_WINDOW, orchestrator $ORCHESTRATOR_URL"
+auth_mode="${DEMO_AUTH:-local}"
+[[ "$auth_mode" == local || "$auth_mode" == github ]] || die "DEMO_AUTH must be local or github"
+if [[ "$auth_mode" == github ]]; then
+  [[ -f "$AUTH_TOKENS_FILE" ]] || die "no session tokens in $AUTH_TOKENS_FILE; start the stack with make services-up DEMO_AUTH=github"
+fi
+
+# expect_api DESCRIPTION WANT_STATUS AS METHOD PATH [BODY]: one request as the
+# session AS ("" sends no credentials) that must answer WANT_STATUS.
+expect_api() {
+  local description="$1" want="$2" as="$3"
+  shift 3
+  API_AS="$as" api "$@"
+  [[ "$API_STATUS" == "$want" ]] || die "$description: got HTTP $API_STATUS, want $want ($(error_summary))"
+  echo "    ok: $description (HTTP $API_STATUS)"
+}
+
+# check_actor NAME ROLE ID: GET /v1/me for the session NAME names ROLE and the
+# actor github:ID, so the login and the role path were real.
+check_actor() {
+  expect_api "demo-$1 session is valid" 200 "$1" GET /v1/me
+  [[ "$(jq -r '"\(.role) \(.actorId)"' <<<"$API_BODY")" == "$2 github:$3" ]] ||
+    die "demo-$1 should be $2 as github:$3, the API says $(jq -r '"\(.role) \(.actorId)"' <<<"$API_BODY")"
+}
+
+# check_authentication runs the identity and access checks that need no
+# incident: anonymous 401, each role's identity, a non-member's refused login,
+# a viewer's refused create, and logout ending a session.
+check_authentication() {
+  local probe body
+  expect_api "no credentials is rejected" 401 "" GET /v1/me
+  check_actor administrator administrator 1001
+  check_actor operator operator 1002
+  check_actor viewer viewer 1003
+  probe="$(bash "$script_dir/auth-login.sh" probe outsider)"
+  [[ "$probe" == "403 nosession" ]] || die "a non-member's login should be 403 without a session, got '$probe'"
+  echo "    ok: demo-outsider (not in the allowed organization) is refused and gets no session (HTTP 403)"
+  body="$(jq -nc --arg c "$TARGET_CLUSTER" --arg n "$DEMO_NAMESPACE" --arg d "$DEMO_DEPLOYMENT" --arg s "$TARGET_SERVICE" \
+    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{target: {cluster: $c, namespace: $n, deployment: $d, service: $s},
+      symptom: {kind: "http_error_rate", observed: 0.5, threshold: 0.1, unit: "ratio", startedAt: $at}}')"
+  expect_api "a viewer cannot create an incident" 403 viewer POST /v1/incidents "$body"
+  bash "$script_dir/auth-login.sh" login viewer viewer-logout >/dev/null
+  expect_api "a second viewer session is valid" 200 viewer-logout GET /v1/me
+  expect_api "logout revokes the session" 204 viewer-logout POST /v1/auth/logout
+  expect_api "the logged-out session is rejected on the next request" 401 viewer-logout GET /v1/me
+  expect_api "logging out one session leaves the other valid" 200 viewer GET /v1/me
+}
+
+# check_operator_cannot_approve ID: the operator and the viewer are refused on
+# an incident that awaits approval, and it stays awaiting_approval.
+check_approval_refused() {
+  local id="$1" summary action hash body
+  summary="$(get_incident "$id")"
+  action="$(jq -r '.proposal.actionId // empty' <<<"$summary")"
+  hash="$(jq -r '.proposal.proposalHash // empty' <<<"$summary")"
+  valid_id "$action" && valid_id "$hash" || die "incident $id has no usable proposal"
+  body="$(jq -nc --arg a "$action" --arg h "$hash" '{actionId: $a, proposalHash: $h}')"
+  expect_api "an operator cannot approve the rollback" 403 operator POST "/v1/incidents/$id/approve" "$body"
+  body="$(jq -nc --arg a "$action" --arg h "$hash" '{actionId: $a, proposalHash: $h, reason: "e2e: viewer must not reject"}')"
+  expect_api "a viewer cannot reject" 403 viewer POST "/v1/incidents/$id/reject" "$body"
+  [[ "$(jq -r '.incident.status' <<<"$(get_incident "$id")")" == awaiting_approval ]] ||
+    die "incident $id left awaiting_approval after refused requests"
+}
+
+# check_audit_actors ID CREATOR [APPROVER]: the audit timeline names the real
+# GitHub actors (github:<id>), not the local actor.
+check_audit_actors() {
+  local id="$1" creator="$2" approver="${3:-}" events
+  API_AS=viewer api GET "/v1/incidents/$id/events"
+  [[ "$API_STATUS" == 200 ]] || die "events returned $API_STATUS"
+  events="$API_BODY"
+  [[ "$(jq -r '[.events[] | select(.kind == "incident.created") | .actor.id] | join(",")' <<<"$events")" == "$creator" ]] ||
+    die "incident.created should be attributed to $creator"
+  echo "    ok: incident.created is attributed to $creator"
+  if [[ -n "$approver" ]]; then
+    [[ "$(jq -r '[.events[] | select(.kind == "rollback.approved") | "\(.actor.kind) \(.actor.id)"] | join(",")' <<<"$events")" == "human $approver" ]] ||
+      die "rollback.approved should be attributed to the human $approver"
+    echo "    ok: rollback.approved is attributed to the human $approver"
+  else
+    [[ "$(jq -r '[.events[] | select(.kind | startswith("rollback.approved") or startswith("rollback.execution")) | .kind] | length' <<<"$events")" == 0 ]] ||
+      die "a declined incident must have no approval or execution events"
+  fi
+}
+
+echo "$SCRIPT_NAME: mode $mode, auth $auth_mode, threshold $threshold, metrics window $METRICS_WINDOW, orchestrator $ORCHESTRATOR_URL"
 
 step "check services"
 for port in 8091 8092 8093 8094; do
@@ -118,6 +209,10 @@ done
 [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$ORCHESTRATOR_URL/health/ready" || true)" == 200 ]] ||
   die "orchestrator at $ORCHESTRATOR_URL is not ready; run make services-up"
 echo "    all five services ready"
+if [[ "$auth_mode" == github ]]; then
+  step "authentication and roles (real sessions, fake GitHub)"
+  check_authentication
+fi
 
 step "deploy healthy (demo-reset: v1-healthy, stable mark, prune old ReplicaSets)"
 "$make_cmd" --no-print-directory -s demo-reset
@@ -142,11 +237,20 @@ if [[ "$mode" == rollback ]]; then
   step "wait for awaiting_approval (A2A investigation, MCP evidence, policy)"
   wait_for_status "$id" awaiting_approval "$investigation_timeout"
 
-  step "approve the exact proposal (execute, watch rollout, verify recovery)"
+  if [[ "$auth_mode" == github ]]; then
+    step "approval is administrator-only (operator and viewer get 403)"
+    check_approval_refused "$id"
+  fi
+
+  step "approve the exact proposal as the administrator (execute, watch rollout, verify recovery)"
   bash "$script_dir/approve-latest-action.sh"
 
   step "verify"
   VERIFY_REQUIRE_TRAFFIC=1 bash "$script_dir/verify.sh" resolved
+  if [[ "$auth_mode" == github ]]; then
+    step "audit names the real GitHub actors"
+    check_audit_actors "$id" github:1002 github:1001
+  fi
 else
   step "deploy broken (v2-bad-crashloop; rollout stalls, v1 keeps serving)"
   "$make_cmd" --no-print-directory -s demo-v2-broken DEMO_BROKEN=crashloop
@@ -174,6 +278,10 @@ else
 
   step "verify"
   VERIFY_REQUIRE_POLICY_RULES=1 bash "$script_dir/verify.sh" declined
+  if [[ "$auth_mode" == github ]]; then
+    step "audit names the real GitHub actor"
+    check_audit_actors "$id" github:1002
+  fi
 fi
 
 step "done"
