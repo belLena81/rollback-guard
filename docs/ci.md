@@ -14,7 +14,7 @@ lint -> unit, contract, vuln, manifests -> integration, images -> e2e
 | `lint` | `LINT_TAGS` equals the Makefile's; `make fmt-check vet`; `go mod tidy` leaves no diff; golangci-lint v2.10.1 (the sandbox version) with `--build-tags=integration,kind,e2e`; actionlint on the workflows | Formatting, vet and lint on every file including the tagged suites that `go test ./...` skips; a tidy module; valid workflows |
 | `unit` | `make test-race` with a coverage profile; uploads the `coverage` artifact (profile, per-function report, HTML) and prints the total in the job summary | Unit, contract and in-process lifecycle tests under the race detector |
 | `contract` | `make contract-test` | MCP tool catalogs, OpenAPI, RBAC manifest: the protocol shapes and the narrow-tool invariant |
-| `vuln` | `govulncheck ./...` | Known vulnerabilities reachable from the code, on the newest patch of the Go version in `go.mod` |
+| `vuln` | `govulncheck ./...` | Known vulnerabilities reachable from the code, on the Go toolchain pinned in `go.mod` |
 | `manifests` | `kubectl kustomize` of `deploy/kubernetes` and `deploy/rbac` piped to `kubeconform -strict` (Kubernetes 1.37.0 schemas); `docker compose config` | The deployed manifests are schema-valid |
 | `integration` | `make integration` with a PostgreSQL 16 service container (database `rollback_guard_test`) exposed as `ROLLBACK_GUARD_POSTGRES_TEST_DSN` | Phase 3-5 suites on testcontainers and the Postgres adapter suite. `postgres-integration` fails on any skipped test and requires named tests, so an unset DSN or a dropped build tag cannot pass |
 | `images` | `docker buildx` of the four service images and four demo-api tags (matrix, no push, GitHub Actions cache) | Every Dockerfile builds. The matrix mirrors `images-services` and `DEMO_VARIANTS` in the Makefile |
@@ -25,7 +25,7 @@ The e2e artifact never includes `.demo/kubeconfig-*`, which hold service-account
 ## Pinning
 
 - Every third-party action is pinned to a full commit SHA with its version in a comment. Dependabot is not configured; bump a pin by resolving the new tag's commit and editing the comment with it.
-- `.github/actions/setup-go` reads `major.minor` from `go.mod` and installs the newest patch release of it with module and build caches. Plain `go-version-file` would install `1.26.0` exactly, whose standard library `govulncheck` can flag.
+- `.github/actions/setup-go` installs the exact version from the `toolchain` directive in `go.mod` (`go-version-file`), with module and build caches. Resolving only `major.minor` picked a stale patch (go1.26.10) that `govulncheck` flagged (GO-2026-6859), so bump the `toolchain` line to take a new Go patch.
 - Tool versions are in the workflow's top-level `env`: golangci-lint, actionlint, govulncheck, kubeconform, migrate, kubectl (with its SHA-256), kind and the kind node image (with its digest).
 
 ## Reproduce locally
