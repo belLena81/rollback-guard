@@ -37,7 +37,6 @@ This rule is the main project invariant. The AI layer may diagnose and recommend
 - [docs/feature-plan.md](./docs/feature-plan.md): feature backlog and product framing.
 - [docs/local-demo-env.md](./docs/local-demo-env.md): local `kind` demo environment.
 - [docs/phase7-auth.md](./docs/phase7-auth.md): authentication, sessions, roles, audit, runtime configuration, exit-gate evidence, and the known gaps; [docs/adr-auth-sessions.md](./docs/adr-auth-sessions.md) records the session and role decisions.
-- [docs/refactoring-plan.md](./docs/refactoring-plan.md): code-quality stages R1-R9 and the lint ratchet.
 - [docs/ci.md](./docs/ci.md): GitHub Actions jobs, what each gates, and how to reproduce them locally.
 - [docs/tech-stack.md](./docs/tech-stack.md): selected libraries and alternatives.
 - [.agents/00-INDEX.md](./.agents/00-INDEX.md): role briefs for agentic development.

@@ -29,7 +29,7 @@ Phases 1-7 are implemented. Phase 7 (GitHub OAuth, server-side sessions, roles) 
 | Unattended E2E flow (`make e2e`, `e2e-decline`, `e2e-test`; `docs/local-demo-env.md`) | done |
 | CI checks (`.github/workflows/ci.yml`, `docs/ci.md`) | done: lint, unit, contract, vuln, manifests, integration, images, and the kind e2e job (`make e2e`, `make e2e-decline`); written and validated locally, first hosted-runner run pending |
 
-Code-quality refactoring is interleaved with the remaining tasks in the order given in `docs/refactoring-plan.md`.
+Code-quality refactoring (stages R1-R9) is complete; the lint ratchet it introduced lives in `.golangci.yml`, and the history is in git.
 
 The first real end-to-end run on kind found two defects that no earlier test could see, both fixed test-first with the E2E task:
 

@@ -1,4 +1,4 @@
-# Phase 7: Auth & Users (task breakdown)
+# Phase 7: Auth & Users
 
 Contract: `DEVELOPMENT_PLAN.md` "Phase 7", `.agents/07-auth-identity-agent.md`. Goal: real identity without changing the domain model. `Actor`, the incident state machine, the audit schema and the MCP/A2A surfaces do not change.
 
@@ -102,23 +102,6 @@ Open gaps of this area are consolidated in "Known gaps" at the end of this docum
 - **Secrets.** The client secret and `AUTH_STATE_SECRET` are random per `services-up`, passed through process environments only. Nothing is committed, written or echoed. `scripts/demo/check-no-tokens.sh` (a CI step) fails if any stored session token appears in the service logs or captured e2e output.
 - **Asserted** (`e2e.sh`, mirrored by `test/e2e/auth_test.go`, which also checks the error codes `unauthenticated` on the `401` and `forbidden` on each `403`, and that the non-member gets no token and no session cookie): anonymous `401`; each role's `GET /v1/me`; non-member login `403` and no session; viewer create `403`; logout `204` then `401` on that token while another session of the same user stays valid; operator create; operator approve and viewer reject on an awaiting proposal `403` with the incident unchanged; administrator approve; audit actors `github:1002` (creation) and `github:1001` (approval, kind `human`). The decline scenario has no proposal, so only the creation actor and the absence of approval and execution events are asserted.
 - **Default mode.** `DEMO_AUTH` stays `local` for ordinary development (`make services-up`), and `services.sh` then passes `AUTH_MODE=local` explicitly because the orchestrator defaults to `github`; the e2e targets force `github`.
-
-## Tasks
-
-Each task: one branch `phase7/7.N-name`, TDD, one commit per task, full gate at the end, one reviewer.
-
-| Task | Content | Tier | Reviewer |
-|---|---|---|---|
-| 7.0 | ADR and OpenAPI draft: `/v1/auth/github/login`, `/callback`, `/v1/auth/logout`, `/v1/me`, admin `PATCH /v1/users/{id}/role`, `POST /v1/users/{id}/sessions:revoke`, security schemes, 401/403. Contract test updated. | standard | none |
-| 7.1 | `domain.Role`, `User`, `Action`, `RolePolicy`, role-denied error. Table-driven tests. | heavy | none (7.8 covers) |
-| 7.2 | Migration `000005` (`users`, `sessions`), Postgres repositories, expiry and revocation queries, integration tests. | heavy | sql-reviewer |
-| 7.3 | Session service (issue, resolve, revoke, logout), `SessionAuthMiddleware`, hashing, TTL constants. | heavy | security-policy-reviewer |
-| 7.4 | GitHub OAuth adapter, login and callback handlers, org allow-list, bootstrap admins, config validation. | heavy | security-policy-reviewer |
-| 7.5 | `AccessPolicy` in the application services, audit events carry the real actor, `/v1/me` and admin endpoints. | heavy | security-policy-reviewer |
-| 7.6 | Fake GitHub stub, e2e and e2e-decline driven by a real session, CI job, docs (`docs/phase7-auth.md` runtime section, `local-demo-env.md`). | standard | qa-test-reviewer |
-| 7.7 | Phase exit: `invariant-review`, full gate, exit-gate evidence. | standard | none |
-
-7.1 to 7.5 are strictly sequential (each builds on the last). 7.0 can run first. Expected cost from earlier heavy runs: about $2-4 per heavy task.
 
 ## Exit gate
 
