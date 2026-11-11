@@ -93,6 +93,10 @@ make services-status     # pid, state, /health/ready code; non-zero if any is do
 make services-down       # SIGTERM in reverse order, SIGKILL after SERVICES_STOP_TIMEOUT (15s)
 ```
 
+### Authentication mode (`DEMO_AUTH`)
+
+`make services-up` defaults to `DEMO_AUTH=local`: the orchestrator runs `AUTH_MODE=local`, injects the fixed local actor, and the scripts send no credentials. `make e2e`, `make e2e-decline` and `make e2e-test` force `DEMO_AUTH=github`; start the stack by hand with `make services-up DEMO_AUTH=github`. In that mode `services.sh` starts a sixth process, the **fake GitHub** (`test/tools/fake-github`, `127.0.0.1:9180`, built into `bin/demo` by `services-build`, never into an image), and starts the orchestrator with `AUTH_MODE=github` pointing `AUTH_GITHUB_BASE_URL` and `AUTH_GITHUB_API_URL` at it, `SESSION_COOKIE_SECURE=false` (plain-HTTP loopback) and `AUTH_BOOTSTRAP_ADMINS=demo-administrator:1001`. The OAuth client secret and `AUTH_STATE_SECRET` are generated from `/dev/urandom` at each start, handed to the two processes through their environment only, and never written to a file or printed. Then `scripts/demo/auth-login.sh all` signs in the fake users through the real login (details in [phase7-auth.md](./phase7-auth.md), "End-to-end with a real session") and writes their Bearer tokens to `.demo/auth-tokens` (`0600`, gitignored). `make auth-login` issues fresh tokens. The REST scripts read that file: `create-incident` sends the operator session, `approve-latest-action` the administrator session (override with `APPROVE_AS=operator` to see the 403), everything else the viewer session. Tokens reach `curl` through a config on stdin, so they never appear in argv, output or logs. Switching modes needs `make services-down` first (`services.sh` refuses otherwise).
+
 `services-up` is idempotent: running processes are left alone. Rebuilt binaries take effect after `make services-down services-up`. The rollback MCP should use the dedicated database role described in `docs/phase3-mcp.md`; set `ROLLBACK_MCP_DATABASE_URL` to it.
 
 The demo sets `METRICS_WINDOW=30s` (the domain minimum) for every process, so a regression shows in the error rate within seconds and recovery is visible about half a minute after the rollback. With the 5-minute default the same flow works but takes minutes.
@@ -172,7 +176,9 @@ make e2e-test       # both flows as a Go test against the running stack
 
 `make e2e` (`scripts/demo/e2e.sh rollback`) runs, and times, each step: check the five services, `demo-reset`, start load for the whole scenario, wait for a healthy baseline (traffic, error rate below threshold), `demo-v2-broken` (error-storm), wait until Prometheus shows the error rate at or above `INCIDENT_THRESHOLD`, `create-incident`, wait for `awaiting_approval`, `approve-latest-action`, `verify` (with `VERIFY_REQUIRE_TRAFFIC=1`). Any failure stops the run with `e2e: FAIL during step '<step>'` and a non-zero exit. `E2E_BREACH_TIMEOUT` and `E2E_INVESTIGATION_TIMEOUT` (180s each) bound the waits.
 
-`make e2e-test` runs `test/e2e` (`-tags=e2e`): `TestE2ERollback` and `TestE2EDecline` drive the same flows (they call `make demo-reset` and `make demo-v2-broken`, generate load in-process, and assert from the API, the cluster through `kubectl`, and the trace backend). Missing configuration fails the test rather than skipping it. `make lint` covers the `e2e` tag.
+Both runs go through real sessions (`DEMO_AUTH=github`). On top of the flow above, `e2e.sh` checks: no credentials is `401`; the administrator, operator and viewer sessions resolve to their role and `github:<id>` actor; a non-member's login is `403` with no session; a viewer cannot create (`403`); a second viewer session ends with `POST /v1/auth/logout` (`204`) and then gets `401` while the first still works. In the rollback run the operator creates the incident, the operator's approve and a viewer's reject on the awaiting proposal are `403` (the incident stays `awaiting_approval`), and the administrator approves. Afterwards the audit timeline must show `incident.created` by `github:1002` and `rollback.approved` by the human `github:1001`. The decline run has no proposal to approve or reject (the policy declines on its own), so it checks the operator's creation attribution and that no approval or execution event exists. In CI, `scripts/demo/check-no-tokens.sh` then fails the job if any session token appears in the service logs or captured output.
+
+`make e2e-test` runs `test/e2e` (`-tags=e2e`): `TestE2ERollback` and `TestE2EDecline` drive the same flows (they call `make demo-reset` and `make demo-v2-broken`, generate load in-process, and assert from the API, the cluster through `kubectl`, and the trace backend). It performs the same authentication checks as `e2e.sh` (`auth_test.go`, including its own OAuth login for the non-member and the logout session) and sends every request with a session from `.demo/auth-tokens`, so start the stack with `make services-up DEMO_AUTH=github` first (`e2e-test` does not start services). Missing configuration or tokens fails the test rather than skipping it. `make lint` covers the `e2e` tag.
 
 ### Decline scenario
 
@@ -198,6 +204,10 @@ The final verification proves the incident resolved, the rollback succeeded, rec
 | `PROMETHEUS_URL` | environment | create-incident, e2e, verify, services |
 | `DATABASE_URL`, `ROLLBACK_MCP_DATABASE_URL` | environment; the latter defaults to the former | services-up, migrate-up |
 | `METRICS_WINDOW` | `30s` | services and the scripts' Prometheus queries |
+| `DEMO_AUTH` | `local` (`github` for the e2e targets) | services-up, REST scripts, e2e |
+| `FAKE_GITHUB_PORT` | `9180` | services-up (fake GitHub, `DEMO_AUTH=github`) |
+| `AUTH_TOKENS_FILE` | `.demo/auth-tokens` | REST scripts, e2e-test |
+| `APPROVE_AS` | `administrator` | approve-latest-action (session name) |
 | `INCIDENT_THRESHOLD` | `0.1` | create-incident, e2e |
 | `INCIDENT_ID` | last created (`.demo/last-incident`) | approve-latest-action, verify |
 | `VERIFY_EXPECT` | `resolved` | verify (`resolved` or `declined`) |

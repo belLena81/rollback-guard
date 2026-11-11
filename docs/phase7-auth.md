@@ -6,7 +6,7 @@ Contract: `DEVELOPMENT_PLAN.md` "Phase 7", `.agents/07-auth-identity-agent.md`. 
 
 1. **Roles are DB-assigned.** `users.role` is `viewer`, `operator` or `administrator`. A user in the allowed GitHub organization is created as `viewer`. Accounts in `AUTH_BOOTSTRAP_ADMINS` (matched by numeric GitHub ID) become `administrator` on first login. Administrators change roles afterwards.
 2. **One session, two carriers.** After the OAuth callback the server issues an opaque session token. It is accepted as an `HttpOnly` cookie (browser) or `Authorization: Bearer` (curl, scripts). Only the SHA-256 of the token is stored.
-3. **E2E uses a fake GitHub.** A small in-test stub serves the token, user and org endpoints behind a configurable GitHub base URL. The real callback, org check, session and role path run; only GitHub is faked.
+3. **E2E uses a fake GitHub.** A small stub (a standalone loopback process, see "End-to-end with a real session") serves the token, user and org endpoints behind a configurable GitHub base URL. The real callback, org check, session and role path run; only GitHub is faked.
 
 ## Design
 
@@ -54,7 +54,7 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 - **Login collisions.** Users are keyed by GitHub ID. If a GitHub login was renamed and then taken by another account, the new account gets `409 conflict` until the old account signs in again (which refreshes its stored login).
 - **Accepted risks.** The email is the public profile field and is display-only; it never feeds an authorization decision. Bootstrap admins are matched by numeric GitHub ID, never by login (a renamed login can be taken by another account); the login in each entry is only a readable label. The state cookie is not bound to a browser session: an attacker able to plant cookies for the host (for example from a sibling subdomain) could perform a login CSRF into their own account. Serve the orchestrator from a host without untrusted sibling subdomains.
 - **Gap: rate limiting.** The login and callback endpoints are not rate-limited. Put them behind a proxy rate limit in any exposed deployment.
-- **Fake GitHub.** `internal/adapters/githuboauth/githubfake` serves the authorize, token, user and org endpoints for tests (7.6 reuses it).
+- **Fake GitHub.** `internal/adapters/githuboauth/githubfake` serves the authorize, token, user and org endpoints for tests; 7.6 runs it standalone for the e2e stack.
 
 | Variable | Default | Rule (github mode) |
 |---|---|---|
@@ -86,6 +86,17 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 - **Approval check and record are separate transactions.** `Approve` authorizes against the auth store, then records the approval in the incident store. An administrator demoted in the milliseconds between the two can still record one approval that the old role allowed. The two stores cannot share a lock today; closing this needs the same approver-role re-check as the MCP gap above.
 - **No disable endpoint.** There is no API to disable a user. `sessions:revoke` cuts access at once, but an organization member can sign in again; to keep them out, demote them to `viewer` or remove them from the organization.
 - **Audit reads.** There is no API to list auth audit rows; read the table directly.
+
+## End-to-end with a real session (7.6)
+
+`make e2e` and `make e2e-decline` run the Phase 6 flows through the real login path. Only GitHub is faked. Commands and variables: `docs/local-demo-env.md`, "Authentication mode".
+
+- **Fake GitHub.** `test/tools/fake-github` serves `githubfake` (authorize with PKCE check, token, `/user`, `/user/orgs`) as a standalone loopback process. It reads `FAKE_GITHUB_ADDR` (non-loopback is refused), `FAKE_GITHUB_CLIENT_ID`, `FAKE_GITHUB_CLIENT_SECRET` and `FAKE_GITHUB_USERS` (`login:id:org+org;...`) from the environment, and prints only the user count and URL. No service image builds it. Its authorize endpoint honours GitHub's `login` parameter, which lets a script choose the account without a browser.
+- **Users** (allowed organization `demo-org`): `demo-administrator` (1001, the only `AUTH_BOOTSTRAP_ADMINS` entry), `demo-operator` (1002), `demo-viewer` (1003), `demo-outsider` (1004, member of `other-org` only). New members are viewers, so after logging in `auth-login.sh` has the administrator promote the operator through `PATCH /v1/users/github:1002/role`: the role path is real too.
+- **Login helper.** `scripts/demo/auth-login.sh` follows `GET /v1/auth/github/login` (302, state cookie in a private jar), requests the fake's authorize URL with `login=demo-<name>` (302 with the code) and completes `GET /v1/auth/github/callback` with the cookie. URLs carrying `state` or `code` go to `curl` on stdin; only HTTP statuses are printed. Tokens are kept in `.demo/auth-tokens` (`0600`, inside the `0700`, gitignored `.demo/`) and sent as `Authorization: Bearer` via a curl config on stdin.
+- **Secrets.** The client secret and `AUTH_STATE_SECRET` are random per `services-up`, passed through process environments only. Nothing is committed, written or echoed. `scripts/demo/check-no-tokens.sh` (a CI step) fails if any stored session token appears in the service logs or captured e2e output.
+- **Asserted** (`e2e.sh`, mirrored by `test/e2e/auth_test.go`): anonymous `401`; each role's `GET /v1/me`; non-member login `403` and no session; viewer create `403`; logout `204` then `401` on that token while another session of the same user stays valid; operator create; operator approve and viewer reject on an awaiting proposal `403` with the incident unchanged; administrator approve; audit actors `github:1002` (creation) and `github:1001` (approval, kind `human`). The decline scenario has no proposal, so only the creation actor and the absence of approval and execution events are asserted.
+- **Default mode.** `AUTH_MODE` and `DEMO_AUTH` stay `local` for ordinary development (`make services-up`); the e2e targets force `github`.
 
 ## Tasks
 

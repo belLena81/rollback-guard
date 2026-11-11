@@ -64,7 +64,7 @@ test/
 docs/
 ```
 
-Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is complete: the `demo-api` workload, container images, kind manifests, the local demo flow, telemetry (metrics, correlated logs, tracing), retry/circuit-breaker decorators (`docs/phase6-resilience.md`), the unattended end-to-end run (`make e2e`, `docs/local-demo-env.md`), and GitHub Actions CI (`docs/ci.md`) exist, and CI runs the full demo on a fresh kind cluster. Phase 7 (authentication and users) has not started, so the API injects a fixed local actor and must stay on a trusted network.
+Phases 1 and 2 provide the domain lifecycle and durable REST/PostgreSQL surface. Phase 3 adds real typed MCP boundaries for Kubernetes and Prometheus. Phase 4 adds durable asynchronous A2A delegation to the standalone Investigator. Phase 5 adds provider-neutral LLM and hybrid diagnosis with deterministic rule fallback. Phase 6 is complete: the `demo-api` workload, container images, kind manifests, the local demo flow, telemetry (metrics, correlated logs, tracing), retry/circuit-breaker decorators (`docs/phase6-resilience.md`), the unattended end-to-end run (`make e2e`, `docs/local-demo-env.md`), and GitHub Actions CI (`docs/ci.md`) exist, and CI runs the full demo on a fresh kind cluster. Phase 7 (authentication and users, `docs/phase7-auth.md`) is in progress: `AUTH_MODE=github` gives real GitHub OAuth sessions and roles, and `make e2e` / `make e2e-decline` run through such sessions against a fake GitHub (`DEMO_AUTH`). The default `AUTH_MODE=local` still injects a fixed local actor and must stay on a trusted network.
 
 ## Canonical Choices
 
@@ -102,7 +102,7 @@ make kind-delete
 # Local demo stack (docs/local-demo-env.md)
 make compose-up          # PostgreSQL + Prometheus outside the sandbox (COMPOSE_PROFILES="--profile tracing" adds Jaeger)
 make compose-down
-make services-up         # build, migrate, SA kubeconfigs, start the five services, wait for /health/ready
+make services-up         # build, migrate, SA kubeconfigs, start the five services, wait for /health/ready (DEMO_AUTH=github adds a fake GitHub and real sessions)
 make services-status
 make services-down
 make demo-reset          # v1-healthy, stable mark, prune old broken ReplicaSets
