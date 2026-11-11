@@ -448,7 +448,20 @@ func buildGitHubAuth(cfg config.Config, authStore ports.AuthUnitOfWork, logger *
 	if err != nil {
 		return nil, nil, fmt.Errorf("create admin service: %w", err)
 	}
-	return auth, []httpapi.Option{httpapi.WithGitHubLogin(login, cfg.Session.CookieSecure), httpapi.WithUserAdmin(admin)}, nil
+	limiter, err := httpserver.NewRateLimiter(httpserver.RateLimitConfig{
+		PerMinute:  github.RateLimit.PerMinute,
+		Burst:      github.RateLimit.Burst,
+		MaxClients: config.LoginRateLimitMaxClients,
+		Now:        time.Now,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("create login rate limiter: %w", err)
+	}
+	return auth, []httpapi.Option{
+		httpapi.WithGitHubLogin(login, cfg.Session.CookieSecure),
+		httpapi.WithLoginRateLimit(limiter),
+		httpapi.WithUserAdmin(admin),
+	}, nil
 }
 
 // coordinatorRunner is the background worker served next to the API.

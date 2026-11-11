@@ -172,6 +172,7 @@ paths:
             Set-Cookie:
               description: Short-lived HttpOnly OAuth state cookie.
               schema: { type: string }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '500': { $ref: '#/components/responses/InternalError' }
   /v1/auth/github/callback:
     get:
@@ -230,6 +231,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '429': { $ref: '#/components/responses/RateLimited' }
         '500': { $ref: '#/components/responses/InternalError' }
         '502':
           description: >-
@@ -463,6 +465,21 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: >-
+        Error rate_limited: this client address sent too many login requests.
+        The body is identical whatever the cause. Retry-After gives the seconds
+        to wait. Applies only to the two GitHub login routes, per client
+        address as seen by the server (RemoteAddr; X-Forwarded-For is not
+        trusted).
+      headers:
+        Retry-After:
+          description: Seconds until a request is allowed again.
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     InternalError:
       description: Unexpected server failure (error internal_error); the cause is logged with the request ID, never returned.
       content:
@@ -556,7 +573,7 @@ components:
         error:
           type: string
           description: Stable, machine-readable error code.
-          enum: [validation_failed, invalid_json, unauthenticated, forbidden, not_found, conflict, rollback_outcome_unknown, internal_error, bad_gateway]
+          enum: [validation_failed, invalid_json, unauthenticated, forbidden, not_found, conflict, rollback_outcome_unknown, internal_error, bad_gateway, rate_limited]
         message:
           type: string
           description: Human-readable message; fixed per code except for validation_failed and not_found.

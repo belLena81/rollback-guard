@@ -42,7 +42,14 @@ func validGitHubConfig() GitHubAuthConfig {
 		BaseURL:             DefaultGitHubBaseURL,
 		APIURL:              DefaultGitHubAPIURL,
 		HTTPTimeout:         GitHubHTTPTimeout,
+		RateLimit:           LoginRateLimit{PerMinute: DefaultLoginRateLimitPerMinute, Burst: DefaultLoginRateLimitBurst},
 	}
+}
+
+func rateLimited(perMinute, burst int) GitHubAuthConfig {
+	g := validGitHubConfig()
+	g.RateLimit = LoginRateLimit{PerMinute: perMinute, Burst: burst}
+	return g
 }
 
 func TestLoadAuthConfig(t *testing.T) {
@@ -101,6 +108,15 @@ func TestLoadAuthConfig(t *testing.T) {
 		{name: "admin zero id", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": "alice:0"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
 		{name: "admin id without login", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": ":5"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
 		{name: "empty admin entry", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": "alice:1,,bob:2"}, wantErr: "AUTH_BOOTSTRAP_ADMINS must be"},
+		{
+			name: "custom rate limit", env: map[string]string{"AUTH_RATE_LIMIT_PER_MINUTE": "30", "AUTH_RATE_LIMIT_BURST": "5"},
+			want: AuthConfig{Mode: AuthModeGitHub, GitHub: rateLimited(30, 5)},
+		},
+		{name: "rate limit zero", env: map[string]string{"AUTH_RATE_LIMIT_PER_MINUTE": "0"}, wantErr: "AUTH_RATE_LIMIT_PER_MINUTE must be between 1 and 600"},
+		{name: "rate limit too high", env: map[string]string{"AUTH_RATE_LIMIT_PER_MINUTE": "601"}, wantErr: "AUTH_RATE_LIMIT_PER_MINUTE must be between"},
+		{name: "burst zero", env: map[string]string{"AUTH_RATE_LIMIT_BURST": "0"}, wantErr: "AUTH_RATE_LIMIT_BURST must be between 1 and 100"},
+		{name: "burst not a number", env: map[string]string{"AUTH_RATE_LIMIT_BURST": "x"}, wantErr: "AUTH_RATE_LIMIT_BURST must be between"},
+		{name: "local ignores bad rate limit", local: true, env: map[string]string{"AUTH_MODE": "local", "AUTH_RATE_LIMIT_BURST": "x"}, want: AuthConfig{Mode: AuthModeLocal}},
 		{name: "too many admins", env: map[string]string{"AUTH_BOOTSTRAP_ADMINS": strings.Repeat("a:1,", 32) + "a:1"}, wantErr: "at most 32"},
 	}
 	for _, tt := range tests {

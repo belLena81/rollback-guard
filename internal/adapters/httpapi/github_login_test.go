@@ -43,7 +43,7 @@ type loginHarness struct {
 	secrets []string
 }
 
-func newLoginHarness(t *testing.T, cookieSecure bool, timeout time.Duration) *loginHarness {
+func newLoginHarness(t *testing.T, cookieSecure bool, timeout time.Duration, extra ...Option) *loginHarness {
 	t.Helper()
 	h := &loginHarness{
 		github: githubfake.New(loginClientID, loginClientSecret),
@@ -75,7 +75,7 @@ func newLoginHarness(t *testing.T, cookieSecure bool, timeout time.Duration) *lo
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	server, err := NewServer(*newTestServer(t, nil).services, logger, WithGitHubLogin(login, cookieSecure))
+	server, err := NewServer(*newTestServer(t, nil).services, logger, append([]Option{WithGitHubLogin(login, cookieSecure)}, extra...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

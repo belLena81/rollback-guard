@@ -29,6 +29,9 @@ type Server struct {
 	// (WithUserAdmin).
 	admin        UserAdmin
 	cookieSecure bool
+	// loginLimiter rate-limits the two login routes when set
+	// (WithLoginRateLimit).
+	loginLimiter *httpserver.RateLimiter
 }
 
 // RouteMiddleware wraps the handler registered for one route pattern (for
@@ -78,8 +81,8 @@ func (s *Server) Routes(ready func(context.Context) error, readyTimeout time.Dur
 	s.handle(apiMux, "POST /v1/incidents/{incidentId}/reject", s.reject)
 	s.handle(apiMux, "POST /v1/incidents/{incidentId}/cancel", s.cancel)
 	if s.login != nil {
-		s.handle(apiMux, http.MethodGet+" "+httpserver.GitHubLoginPath, s.githubLogin)
-		s.handle(apiMux, http.MethodGet+" "+httpserver.GitHubCallbackPath, s.githubCallback)
+		s.handle(apiMux, http.MethodGet+" "+httpserver.GitHubLoginPath, s.limitLogin(s.githubLogin))
+		s.handle(apiMux, http.MethodGet+" "+httpserver.GitHubCallbackPath, s.limitLogin(s.githubCallback))
 	}
 	if s.admin != nil {
 		s.handle(apiMux, LogoutPattern, s.logout)

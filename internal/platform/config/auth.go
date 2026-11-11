@@ -42,6 +42,14 @@ const (
 	GitHubHTTPTimeout = 10 * time.Second
 	// maxGitHubClientIDLength bounds AUTH_GITHUB_CLIENT_ID.
 	maxGitHubClientIDLength = 128
+	// Login rate limit (AUTH_RATE_LIMIT_PER_MINUTE, AUTH_RATE_LIMIT_BURST), per
+	// client address, on the two GitHub login routes only.
+	DefaultLoginRateLimitPerMinute = 10
+	DefaultLoginRateLimitBurst     = 10
+	maxLoginRateLimitPerMinute     = 600
+	maxLoginRateLimitBurst         = 100
+	// LoginRateLimitMaxClients bounds the limiter table (memory).
+	LoginRateLimitMaxClients = 10000
 	// maxBootstrapAdmins bounds AUTH_BOOTSTRAP_ADMINS.
 	maxBootstrapAdmins = 32
 )
@@ -107,6 +115,16 @@ type GitHubAuthConfig struct {
 	BaseURL     string
 	APIURL      string
 	HTTPTimeout time.Duration
+	// RateLimit limits /v1/auth/github/login and /callback per client
+	// address (RemoteAddr only; behind a proxy, limit at the proxy).
+	RateLimit LoginRateLimit
+}
+
+// LoginRateLimit is a per-client token bucket: PerMinute is the refill rate,
+// Burst the bucket size.
+type LoginRateLimit struct {
+	PerMinute int
+	Burst     int
 }
 
 func authEnv() (AuthConfig, error) {
@@ -188,6 +206,14 @@ func githubAuthEnv() (GitHubAuthConfig, error) {
 	if err != nil {
 		return GitHubAuthConfig{}, err
 	}
+	perMinute, err := boundedIntEnv("AUTH_RATE_LIMIT_PER_MINUTE", DefaultLoginRateLimitPerMinute, 1, maxLoginRateLimitPerMinute)
+	if err != nil {
+		return GitHubAuthConfig{}, err
+	}
+	burst, err := boundedIntEnv("AUTH_RATE_LIMIT_BURST", DefaultLoginRateLimitBurst, 1, maxLoginRateLimitBurst)
+	if err != nil {
+		return GitHubAuthConfig{}, err
+	}
 	return GitHubAuthConfig{
 		ClientID:            clientID,
 		ClientSecret:        NewSecret(clientSecret),
@@ -198,6 +224,7 @@ func githubAuthEnv() (GitHubAuthConfig, error) {
 		BaseURL:             baseURL,
 		APIURL:              apiURL,
 		HTTPTimeout:         GitHubHTTPTimeout,
+		RateLimit:           LoginRateLimit{PerMinute: perMinute, Burst: burst},
 	}, nil
 }
 

@@ -24,6 +24,7 @@ const (
 	codeRollbackOutcomeUnknown = "rollback_outcome_unknown"
 	codeInternal               = "internal_error"
 	codeBadGateway             = "bad_gateway"
+	codeRateLimited            = "rate_limited"
 )
 
 var errorCodes = []string{
@@ -36,6 +37,7 @@ var errorCodes = []string{
 	codeRollbackOutcomeUnknown,
 	codeInternal,
 	codeBadGateway,
+	codeRateLimited,
 }
 
 type errorDTO struct {

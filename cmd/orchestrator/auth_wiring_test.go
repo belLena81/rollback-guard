@@ -88,6 +88,7 @@ func TestBuildHTTPGitHubModeRequiresSessions(t *testing.T) {
 			BaseURL:             github.URL(),
 			APIURL:              github.URL(),
 			HTTPTimeout:         time.Second,
+			RateLimit:           config.LoginRateLimit{PerMinute: config.DefaultLoginRateLimitPerMinute, Burst: config.DefaultLoginRateLimitBurst},
 		}}
 	})
 
