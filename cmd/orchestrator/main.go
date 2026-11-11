@@ -385,7 +385,8 @@ func buildAuth(cfg config.Config, authStore ports.AuthUnitOfWork, logger *slog.L
 			return nil, nil, err
 		}
 		if cfg.Auth.InsecureLocalBind {
-			logger.Warn("INSECURE: AUTH_MODE=local on a non-loopback HTTP_ADDR (ALLOW_INSECURE_LOCAL_AUTH=true); every request that reaches this address acts as the local administrator",
+			logger.Warn("INSECURE: AUTH_MODE=local on a non-loopback HTTP_ADDR (ALLOW_INSECURE_LOCAL_AUTH=true); "+
+				"every request that reaches this address acts as the local administrator",
 				"auth_mode", string(cfg.Auth.Mode), "http_addr", cfg.HTTPAddr)
 		}
 		auth, err := httpserver.NewLocalAuthMiddleware(localActor)
