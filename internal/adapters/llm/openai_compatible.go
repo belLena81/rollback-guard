@@ -57,7 +57,7 @@ func NewOpenAICompatibleReasoner(config OpenAICompatibleConfig) (*OpenAICompatib
 		transport = http.DefaultTransport
 	}
 	sanitizedClient := *httpClient
-	sanitizedClient.Transport = &boundedResponseTransport{next: transport}
+	sanitizedClient.Transport = &headerAllowListTransport{apiKey: config.APIKey, next: &boundedResponseTransport{next: transport}}
 	// The SDK reads OPENAI_* variables from the ambient environment. These
 	// options apply after those defaults and remove every credential or
 	// account header that the caller did not configure explicitly.
@@ -263,6 +263,41 @@ func strictDecodeCandidate(content string, target *reasoningCandidateDTO) error 
 		return errors.New("response contains trailing JSON")
 	}
 	return nil
+}
+
+// allowedRequestHeaders are the only headers that reach the provider. The SDK
+// merges OPENAI_CUSTOM_HEADERS (and its own telemetry headers) from the
+// environment into every request; anything outside this list is dropped
+// here, whatever the environment says.
+var allowedRequestHeaders = map[string]struct{}{
+	"Content-Type": {},
+	"Accept":       {},
+	"User-Agent":   {},
+}
+
+// headerAllowListTransport removes every request header that is not in
+// allowedRequestHeaders. Authorization survives only as the exact bearer
+// value of the explicitly configured API key. Header values are never
+// logged.
+type headerAllowListTransport struct {
+	apiKey string
+	next   http.RoundTripper
+}
+
+func (t *headerAllowListTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	for name := range clone.Header {
+		canonical := http.CanonicalHeaderKey(name)
+		if _, ok := allowedRequestHeaders[canonical]; ok {
+			continue
+		}
+		if canonical == "Authorization" && t.apiKey != "" && clone.Header.Get(name) == "Bearer "+t.apiKey {
+			continue
+		}
+		delete(clone.Header, name)
+	}
+	response, err := t.next.RoundTrip(clone)
+	return response, err //nolint:wrapcheck // RoundTripper decorator: the transport error passes through unchanged
 }
 
 // boundedResponseTransport caps provider response bodies. The SDK has no
