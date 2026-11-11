@@ -192,7 +192,11 @@ up() {
       AUTH_STATE_SECRET="$(random_secret)" AUTH_GITHUB_ALLOWED_ORG="$fake_org"
       AUTH_GITHUB_REDIRECT_URL="http://127.0.0.1:8080/v1/auth/github/callback"
       AUTH_GITHUB_BASE_URL="http://127.0.0.1:$fake_port" AUTH_GITHUB_API_URL="http://127.0.0.1:$fake_port"
-      AUTH_BOOTSTRAP_ADMINS="demo-administrator:1001" SESSION_COOKIE_SECURE=false)
+      AUTH_BOOTSTRAP_ADMINS="demo-administrator:1001" SESSION_COOKIE_SECURE=false
+      # Every demo user signs in from 127.0.0.1, and make e2e followed by
+      # make e2e-decline reuses one stack; the production default (10 per
+      # client) would throttle that. Loopback demo only.
+      AUTH_RATE_LIMIT_PER_MINUTE=600 AUTH_RATE_LIMIT_BURST=100)
   fi
 
   start_one kubernetes-mcp-readonly 8091 "${common[@]}" \
