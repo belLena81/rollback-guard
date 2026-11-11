@@ -12,6 +12,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -34,7 +35,7 @@ func main() {
 func run() error {
 	clientID, secret := os.Getenv("FAKE_GITHUB_CLIENT_ID"), os.Getenv("FAKE_GITHUB_CLIENT_SECRET")
 	if clientID == "" || secret == "" {
-		return fmt.Errorf("FAKE_GITHUB_CLIENT_ID and FAKE_GITHUB_CLIENT_SECRET are required")
+		return errors.New("FAKE_GITHUB_CLIENT_ID and FAKE_GITHUB_CLIENT_SECRET are required")
 	}
 	users, err := parseUsers(os.Getenv("FAKE_GITHUB_USERS"))
 	if err != nil {
@@ -46,7 +47,7 @@ func run() error {
 	}
 	fake, err := githubfake.Listen(addr, clientID, secret)
 	if err != nil {
-		return err
+		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 	defer fake.Close()
 	for _, user := range users {
@@ -64,14 +65,14 @@ func run() error {
 func parseUsers(spec string) ([]githubfake.User, error) {
 	var users []githubfake.User
 	seen := map[string]bool{}
-	for _, entry := range strings.Split(spec, ";") {
+	for entry := range strings.SplitSeq(spec, ";") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
 		parts := strings.Split(entry, ":")
 		if len(parts) < 2 || len(parts) > 3 || parts[0] == "" {
-			return nil, fmt.Errorf("user entry must be login:id[:org+org]")
+			return nil, errors.New("user entry must be login:id[:org+org]")
 		}
 		id, err := strconv.ParseInt(parts[1], 10, 64)
 		if err != nil || id <= 0 {
@@ -89,7 +90,7 @@ func parseUsers(spec string) ([]githubfake.User, error) {
 		users = append(users, user)
 	}
 	if len(users) == 0 {
-		return nil, fmt.Errorf("FAKE_GITHUB_USERS is required")
+		return nil, errors.New("FAKE_GITHUB_USERS is required")
 	}
 	return users, nil
 }

@@ -100,7 +100,9 @@ func (e env) login(ctx context.Context, t *testing.T, name string) (int, string)
 		if err != nil {
 			t.Fatalf("login of demo-%s: request failed", name)
 		}
-		closeBody(t, response.Body)
+		if err := response.Body.Close(); err != nil {
+			t.Fatalf("login of demo-%s: closing the response failed", name)
+		}
 		next := response.Header.Get("Location")
 		if response.StatusCode != http.StatusFound || next == "" {
 			t.Fatalf("login of demo-%s: expected a redirect, got HTTP %d", name, response.StatusCode)

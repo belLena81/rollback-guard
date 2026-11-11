@@ -1,6 +1,7 @@
 package githubfake_test
 
 import (
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,21 +14,22 @@ func noRedirect() *http.Client {
 	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func authorize(t *testing.T, base string, extra url.Values) *http.Response {
+// authorizeStatus requests the authorize endpoint and returns the HTTP status.
+func authorizeStatus(t *testing.T, base string, extra url.Values) int {
 	t.Helper()
 	query := url.Values{
 		"client_id": {"cid"}, "code_challenge_method": {"S256"}, "code_challenge": {"c"},
 		"state": {"s"}, "redirect_uri": {"http://127.0.0.1:1/cb"},
 	}
-	for k, v := range extra {
-		query[k] = v
-	}
+	maps.Copy(query, extra)
 	resp, err := noRedirect().Get(base + githubfake.AuthorizePath + "?" + query.Encode())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = resp.Body.Close() })
-	return resp
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode
 }
 
 func TestListenServesOnTheGivenAddress(t *testing.T) {
@@ -72,7 +74,7 @@ func TestAuthorizeLoginHintSelectsTheAccount(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := authorize(t, fake.URL(), test.extra).StatusCode; got != test.want {
+			if got := authorizeStatus(t, fake.URL(), test.extra); got != test.want {
 				t.Fatalf("status %d, want %d", got, test.want)
 			}
 		})
