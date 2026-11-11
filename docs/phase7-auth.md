@@ -66,6 +66,12 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 | `AUTH_STATE_SECRET` | none | required, at least 32 bytes; never logged or rendered |
 | `AUTH_GITHUB_BASE_URL` | `https://github.com` | HTTPS unless loopback |
 | `AUTH_GITHUB_API_URL` | `https://api.github.com` | HTTPS unless loopback |
+| `AUTH_RATE_LIMIT_PER_MINUTE` | `10` | sustained login requests per client address per minute, 1 to 600 |
+| `AUTH_RATE_LIMIT_BURST` | `10` | login requests a client may make at once, 1 to 100 |
+
+### Login rate limiting
+
+`/v1/auth/github/login` and `/v1/auth/github/callback`, and only those, share an in-process per-client token bucket (`internal/platform/httpserver/ratelimit.go`). A request over the limit gets `429` with `Retry-After` and the standard error body with code `rate_limited`; the body is identical whatever the cause and never names the client. The client is the TCP peer address (IPv6 clients are grouped by `/64`); `X-Forwarded-For` is not trusted. Memory is bounded: at most 10000 client buckets, idle ones evicted first, then the oldest. The limiter state is per process and is lost on restart. It is built only in `github` mode. See Known gap 1 for proxied deployments.
 
 ## Authorization, audit and user administration (7.5)
 
@@ -74,11 +80,15 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
   - `POST /v1/auth/logout`: revokes the caller's session, clears the cookie, `204`. Needs no role.
   - `GET /v1/me`: `{actorId, login, role}` with the live role.
   - `PATCH /v1/users/{userId}/role` (administrator): body `{"role": ...}`, strict JSON, at most 1 KiB. `userId` is the public actor ID `github:<id>`; a malformed ID is `400`, an unknown user `404`. Returns the target's identity. Setting the current role is a no-op and writes no audit row.
+  - `GET /v1/auth/audit` (administrator): the auth audit log, newest first, ordered by `(occurred_at, id)`. Query `limit` (1 to 200, default 50; anything else is `400`) and `cursor` (opaque, taken from the previous page's `nextCursor`; a malformed cursor is `400`). Returns `{"events": [...], "nextCursor": "..."}`; `nextCursor` is absent on the last page. Each event carries only what the table holds: `id, occurredAt, actorId, action` and, where the action has them, `targetUserId, fromRole, toRole, sessionCount`. The response is `Cache-Control: no-store`, and the read runs in a read-only transaction.
   - `POST /v1/users/{userId}/sessions:revoke` (administrator): revokes every open session of the user and returns `200 {"revoked": n}`.
   - `POST /v1/users/{userId}/disable` and `POST /v1/users/{userId}/enable` (administrator): return `200` with the target's summary `{actorId, login, role, disabled}`. Disable sets the user's disabled flag and revokes every open session of theirs in the same transaction, so the next request is `401` and a new login is refused (`403`) until enabled. Enable clears the flag only; revoked sessions stay revoked. Either call on a user already in that state is a no-op and writes no audit row. A malformed ID is `400`, an unknown user `404`.
 - **Last administrator.** A role change or disable that would leave no enabled administrator, including self-demotion or self-disable, is `409 conflict`. The service locks the enabled administrator rows (`SELECT ... FOR UPDATE`) and re-checks inside the transaction that the caller is still an enabled administrator, so two concurrent demotions cannot both succeed.
 - **Audit.** Migration `000006` adds `auth_audit_events`: `id, occurred_at, actor_id, action, target_user_id, from_role, to_role, session_count`. Actions are `role_changed`, `sessions_revoked` (written even when `n` is 0) and `logout`. A shape `CHECK` ties the nullable columns to the action, and a trigger rejects `UPDATE` and `DELETE` (append-only). Each row is written in the same transaction as the change it records, so a failed audit write rolls the change back. Rows hold no token, token hash, header or email. The incident `operation_events` schema is unchanged; those events now carry `github:<id>`. The down migration refuses to run while audit rows exist. Migration `000007` adds the actions `user_disabled` (with `session_count`, the sessions revoked by the disable) and `user_enabled` (no roles, no count) to the action and shape constraints; its down migration refuses to run while rows of those actions exist.
 - **Contract.** `test/contract` checks that every OpenAPI operation is routed in `github` mode and that, behind the real session middleware, only the OAuth entry points, `/health/*` and `/metrics` answer without a session.
+
+- **Read-only resolution.** `SessionService.Resolve` and the live role lookup in `RoleAccessPolicy` run through `AuthUnitOfWork.WithinAuthReadTransaction`, which hands out reader-only repositories and opens the PostgreSQL transaction `READ ONLY`, so a write there fails with SQLSTATE `25006` (`TestAuthReadTransactionReadsButCannotWrite`). The transaction-scoped context rules of `docs/adr-auth-sessions.md` apply unchanged.
+- **LLM request headers.** The LLM transport sends only `Authorization` (set by the adapter from the configured key), `Content-Type`, `Accept` and `User-Agent`; any other header, including those the OpenAI SDK would read from `OPENAI_CUSTOM_HEADERS`, is dropped before the request leaves. Header values are never logged.
 
 Open gaps of this area are consolidated in "Known gaps" at the end of this document.
 
@@ -150,21 +160,18 @@ Invariant review over `git diff 10deef8..HEAD`: no FAIL. Notes: `AUTH_MODE` defa
 
 ## Known gaps
 
-Open or accepted at Phase 7 exit.
+Open or accepted at Phase 7 exit. Numbers are stable references; gaps 4, 5 and 10 are closed and removed (LLM header allow-list, read-only session resolution, `GET /v1/auth/audit`), and gap 1 now covers only proxied deployments.
 
-1. **Login rate limiting.** `/v1/auth/github/login` and `/callback` are not rate-limited. Use a proxy rate limit in any exposed deployment.
+1. **Login rate limiting behind a proxy.** The in-process limiter (see "Login rate limiting") keys on the TCP peer address only. Behind a reverse proxy every client shares the proxy's address, so the limiter would throttle all users together (or, set loose, none of them). The orchestrator deliberately ignores `X-Forwarded-For`, which a client can forge. A proxied deployment must rate-limit `/v1/auth/github/login` and `/callback` at the proxy.
 2. **Approver role at MCP execution: closed.** In the transaction in which the rollback-mode Kubernetes MCP re-loads the pending execution, proposal, policy decision and approval, it also checks the approver. In `github` mode the approver must currently be an enabled user in `users` whose role `domain.RolePolicy` allows to approve a rollback (today only administrator). In `local` mode it must be exactly the configured `LOCAL_ACTOR_ID`, which must not be a `github:<id>` actor. Otherwise the MCP returns `approver_not_authorized` (HTTP `403`), writes no ledger row and makes no Kubernetes call. A resumed pending mutation whose approver was demoted is reconcile-only: it can record a patch that already landed, but it never patches (`docs/phase3-mcp.md`). The MCP needs `AUTH_MODE` (no default) and, in `github` mode, a column-level `SELECT (github_id, role, disabled)` grant on `users` (`docs/phase3-mcp.md`). Residual: the check runs at mutation start, so a demotion that commits while the patch is in flight does not stop that patch.
 3. **Two-transaction approve race: bounded, not closed at record time.** `Approve` still authorizes against the auth store and records in the incident store, in two transactions. An administrator demoted or disabled between the two therefore still records one approval. Re-checking inside the record transaction would need one of two changes, so it is not done:
    - a `users` read through the incident `Repositories`, which merges the two ports and their memory adapters;
    - an auth transaction held open around the incident transaction, which takes two pool connections per approve and can deadlock when the pool is exhausted.
 
    The recorded approval cannot execute, because gap 2's re-check refuses it. `TestApprovalRecordedAcrossADemotionCannotExecute` covers this by demoting the approver through a hook between `Authorize` and the record step.
-4. **`OPENAI_CUSTOM_HEADERS`.** The OpenAI SDK reads it from the environment, so custom headers other than `Authorization` still reach the configured endpoint. Needs a header allow-list in the transport (`docs/refactoring-plan.md`).
-5. **Token check opens a read-write transaction.** Session resolution runs through the unit of work on every request although it only reads.
 6. **CSRF host comparison behind proxies.** The `Origin` or `Referer` host is compared with `Host` as received; a reverse proxy must preserve `Host` or cookie-authenticated writes get 403. Bearer requests are exempt.
 7. **State cookie not bound to a browser session.** An attacker who can plant cookies for the host (for example from a sibling subdomain) could perform a login CSRF into their own account. Serve the orchestrator from a host without untrusted sibling subdomains.
 8. **`AUTH_MODE=local` on a non-loopback bind: closed.** With `AUTH_MODE=local`, the orchestrator refuses to start unless `HTTP_ADDR` is a loopback address (`127.0.0.0/8`, `::1` or `localhost`). It refuses `:8080`, `0.0.0.0`, any other IP, and hostnames, which it does not resolve. Setting `ALLOW_INSECURE_LOCAL_AUTH=true` overrides the refusal, and the orchestrator then logs an `INSECURE` warning at startup. The service image sets `HTTP_ADDR=:8080` and no `AUTH_MODE`, so it runs `github` mode.
 9. **Open `/metrics`.** It is a public path so Prometheus can scrape it without a session.
-10. **Audit reads.** No API lists auth audit rows; read `auth_audit_events` directly.
 11. **Leaving the organization** is noticed only at the user's next login; an administrator disables the user (or revokes their sessions) to cut access earlier.
 12. **`govulncheck`** fails on the sandbox toolchain (GO-2026-6859, fixed in go1.26.11); not a Phase 7 change.
