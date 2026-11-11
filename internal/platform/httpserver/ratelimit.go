@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+const (
+	secondsPerMinute = 60
+	// ipv6ClientPrefixBits groups IPv6 clients by /64, the smallest block a
+	// single subscriber normally controls, so rotating addresses inside it
+	// does not mint fresh buckets.
+	ipv6ClientPrefixBits = 64
+)
+
 // RateLimitConfig configures a RateLimiter.
 type RateLimitConfig struct {
 	// PerMinute is the steady refill rate per client.
@@ -48,7 +56,7 @@ func NewRateLimiter(cfg RateLimitConfig) (*RateLimiter, error) {
 	}
 	return &RateLimiter{
 		now:         cfg.Now,
-		perSecond:   float64(cfg.PerMinute) / 60,
+		perSecond:   float64(cfg.PerMinute) / secondsPerMinute,
 		burst:       float64(cfg.Burst),
 		maxClients:  cfg.MaxClients,
 		sweepPeriod: time.Minute,
@@ -135,7 +143,7 @@ func ClientKey(remoteAddr string) string {
 	}
 	addr = addr.Unmap()
 	if addr.Is6() {
-		if prefix, err := addr.Prefix(64); err == nil {
+		if prefix, err := addr.Prefix(ipv6ClientPrefixBits); err == nil {
 			return prefix.String()
 		}
 	}
