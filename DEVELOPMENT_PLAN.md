@@ -18,7 +18,7 @@ Build the system in phases so every phase ends runnable, testable, and demoable.
 
 ## Current Status
 
-Phases 1-7 are implemented. Phase 7 (GitHub OAuth, server-side sessions, roles) passed its exit gate locally on 2026-11-11 with the gaps listed in `docs/phase7-auth.md` ("Exit gate evidence", "Known gaps"): the approver role is not re-checked at MCP execution, token absence in A2A/MCP payloads is not test-pinned, and `govulncheck` fails on the sandbox Go 1.26.10 toolchain (standard library, fixed in 1.26.11). The Phase 6 exit gate is automated locally (`make e2e`, `make e2e-decline`) and in CI (the `e2e` job), and passed on a GitHub-hosted runner on 2026-11-10 (PR #1, commit `c0240b2`). Refactoring stages R4-R8 (`docs/refactoring-plan.md`) are done.
+Phases 1-7 are implemented. Phase 7 (GitHub OAuth, server-side sessions, roles) passed its exit gate locally on 2026-11-11 with the gaps listed in `docs/phase7-auth.md` ("Exit gate evidence", "Known gaps"): token absence in A2A/MCP payloads is not test-pinned, and `govulncheck` fails on the sandbox Go 1.26.10 toolchain (standard library, fixed in 1.26.11). The Phase 6 exit gate is automated locally (`make e2e`, `make e2e-decline`) and in CI (the `e2e` job), and passed on a GitHub-hosted runner on 2026-11-10 (PR #1, commit `c0240b2`). Refactoring stages R4-R8 (`docs/refactoring-plan.md`) are done. Phase 7 Known gaps 2 and 8 are closed and gap 3 is bounded by gap 2 (branch `phase7/gaps-safety-chain`): the rollback MCP re-checks the approver's current role at execution and needs `AUTH_MODE`, and the orchestrator refuses `AUTH_MODE=local` on a non-loopback `HTTP_ADDR` unless `ALLOW_INSECURE_LOCAL_AUTH=true`.
 
 | Phase 6 task | State |
 |---|---|
