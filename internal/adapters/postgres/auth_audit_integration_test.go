@@ -25,6 +25,61 @@ func auditActor(t *testing.T, id string) domain.Actor {
 	return actor
 }
 
+// TestAuthAuditListPageWalksTiedTimestamps pages through events that share one
+// timestamp: the (occurred_at, id) cursor must neither skip nor repeat them.
+func TestAuthAuditListPageWalksTiedTimestamps(t *testing.T) {
+	f := newAuthFixture(t)
+	admin := auditActor(t, "github:3")
+	var want []domain.AuthAuditEventID
+	f.mustTx(t, func(repos ports.AuthRepositories) error {
+		for i, id := range []domain.AuthAuditEventID{"audit-a", "audit-b", "audit-c", "audit-d", "audit-e"} {
+			at := authNow
+			if i >= 3 {
+				at = authNow.Add(time.Second)
+			}
+			event, err := domain.NewLogoutAudit(id, admin, "user-1", at)
+			if err != nil {
+				return err
+			}
+			if err := repos.Audit().Append(event); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	want = []domain.AuthAuditEventID{"audit-e", "audit-d", "audit-c", "audit-b", "audit-a"}
+
+	var got []domain.AuthAuditEventID
+	var cursor ports.AuthAuditCursor
+	for range 5 {
+		var page []domain.AuthAuditEvent
+		err := f.uow.WithinAuthReadTransaction(t.Context(), func(r ports.AuthReadRepositories) error {
+			var err error
+			page, err = r.Audit().ListPage(cursor, 2)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, e := range page {
+			got = append(got, e.ID())
+		}
+		last := page[len(page)-1]
+		cursor = ports.AuthAuditCursor{OccurredAt: last.OccurredAt(), ID: last.ID()}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("paged ids = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("paged ids = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestAuthAuditAppendListAndShape(t *testing.T) {
 	f := newAuthFixture(t)
 	admin := auditActor(t, "github:3")

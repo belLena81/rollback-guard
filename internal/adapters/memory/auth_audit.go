@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
 const maxAuthAuditList = 1000
@@ -38,6 +39,10 @@ func (r authAuditRepo) Append(event domain.AuthAuditEvent) error {
 }
 
 func (r authAuditRepo) ListRecent(limit int) ([]domain.AuthAuditEvent, error) {
+	return r.ListPage(ports.AuthAuditCursor{}, limit)
+}
+
+func (r authAuditRepo) ListPage(after ports.AuthAuditCursor, limit int) ([]domain.AuthAuditEvent, error) {
 	if limit <= 0 || limit > maxAuthAuditList {
 		return nil, &domain.ValidationError{Field: "limit", Reason: "must be between 1 and 1000"}
 	}
@@ -48,6 +53,14 @@ func (r authAuditRepo) ListRecent(limit int) ([]domain.AuthAuditEvent, error) {
 		}
 		return events[i].ID() > events[j].ID()
 	})
+	if !after.IsZero() {
+		events = slices.DeleteFunc(events, func(e domain.AuthAuditEvent) bool {
+			if !e.OccurredAt().Equal(after.OccurredAt) {
+				return !e.OccurredAt().Before(after.OccurredAt)
+			}
+			return e.ID() >= after.ID
+		})
+	}
 	if len(events) > limit {
 		events = events[:limit]
 	}

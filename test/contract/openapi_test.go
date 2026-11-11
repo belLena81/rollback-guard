@@ -116,6 +116,7 @@ var sessionRoutes = map[string]bool{
 	"/v1/auth/github/login":              true,
 	"/v1/auth/github/callback":           true,
 	"/v1/auth/logout":                    true,
+	"/v1/auth/audit":                     true,
 	"/v1/me":                             true,
 	"/v1/users/{userId}/role":            true,
 	"/v1/users/{userId}/sessions:revoke": true,
@@ -188,6 +189,10 @@ func (stubAdmin) EnableUser(context.Context, domain.Actor, domain.ActorID) (doma
 }
 
 func (stubAdmin) Logout(context.Context, domain.Principal) error { return nil }
+
+func (stubAdmin) ListAuditEvents(context.Context, domain.Actor, int, string) (application.AuditPage, error) {
+	return application.AuditPage{}, nil
+}
 
 type noSessions struct{}
 

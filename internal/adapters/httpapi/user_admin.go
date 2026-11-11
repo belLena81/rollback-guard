@@ -4,10 +4,86 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
+	"time"
 
+	"github.com/belLena81/rollback-guard/internal/application"
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
 )
+
+// maxAuditCursorLength bounds the cursor query value before decoding.
+const maxAuditCursorLength = 256
+
+// auditEventDTO carries exactly the columns the audit table holds.
+type auditEventDTO struct {
+	ID           string `json:"id"`
+	OccurredAt   string `json:"occurredAt"`
+	ActorID      string `json:"actorId"`
+	Action       string `json:"action"`
+	TargetUserID string `json:"targetUserId,omitempty"`
+	FromRole     string `json:"fromRole,omitempty"`
+	ToRole       string `json:"toRole,omitempty"`
+	SessionCount *int   `json:"sessionCount,omitempty"`
+}
+
+type auditPageDTO struct {
+	Events     []auditEventDTO `json:"events"`
+	NextCursor string          `json:"nextCursor,omitempty"`
+}
+
+func auditEventOf(e domain.AuthAuditEvent) auditEventDTO {
+	dto := auditEventDTO{
+		ID:           string(e.ID()),
+		OccurredAt:   e.OccurredAt().UTC().Format(time.RFC3339Nano),
+		ActorID:      string(e.Actor().ID()),
+		Action:       e.Action().String(),
+		TargetUserID: string(e.TargetUserID()),
+	}
+	if e.FromRole() != 0 {
+		dto.FromRole = e.FromRole().String()
+	}
+	if e.ToRole() != 0 {
+		dto.ToRole = e.ToRole().String()
+	}
+	if n, ok := e.SessionCount(); ok {
+		dto.SessionCount = &n
+	}
+	return dto
+}
+
+// listAudit serves GET /v1/auth/audit (administrators only).
+func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	actor, ok := requestActor(w, r)
+	if !ok {
+		return
+	}
+	limit := application.DefaultAuditPageSize
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			s.writeError(w, r, &domain.ValidationError{Field: "limit", Reason: "must be an integer"})
+			return
+		}
+		limit = parsed
+	}
+	cursor := r.URL.Query().Get("cursor")
+	if len(cursor) > maxAuditCursorLength {
+		s.writeError(w, r, &domain.ValidationError{Field: "cursor", Reason: "is not a valid cursor"})
+		return
+	}
+	page, err := s.admin.ListAuditEvents(r.Context(), actor, limit, cursor)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	body := auditPageDTO{Events: make([]auditEventDTO, 0, len(page.Events)), NextCursor: page.NextCursor}
+	for _, e := range page.Events {
+		body.Events = append(body.Events, auditEventOf(e))
+	}
+	s.writeJSON(w, r, http.StatusOK, body)
+}
 
 // UserAdmin is the logout and user administration use case behind the
 // session routes.
@@ -17,6 +93,7 @@ type UserAdmin interface {
 	DisableUser(ctx context.Context, actor domain.Actor, target domain.ActorID) (domain.User, error)
 	EnableUser(ctx context.Context, actor domain.Actor, target domain.ActorID) (domain.User, error)
 	Logout(ctx context.Context, principal domain.Principal) error
+	ListAuditEvents(ctx context.Context, actor domain.Actor, limit int, cursor string) (application.AuditPage, error)
 }
 
 // Session route patterns (api/openapi.yaml).
@@ -27,6 +104,7 @@ const (
 	RevokeSessionsPattern = "POST /v1/users/{userId}/sessions:revoke"
 	DisableUserPattern    = "POST /v1/users/{userId}/disable"
 	EnableUserPattern     = "POST /v1/users/{userId}/enable"
+	ListAuditPattern      = "GET /v1/auth/audit"
 )
 
 // maxRoleBodyBytes bounds the PATCH role body; {"role":"administrator"} is

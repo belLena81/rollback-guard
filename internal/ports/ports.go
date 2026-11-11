@@ -308,7 +308,21 @@ type UserReader interface {
 type AuthAuditReader interface {
 	// ListRecent returns at most limit events, newest first.
 	ListRecent(limit int) ([]domain.AuthAuditEvent, error)
+	// ListPage returns at most limit events, newest first, that are strictly
+	// older than after in the order (occurred_at, id). The zero cursor starts
+	// at the newest event.
+	ListPage(after AuthAuditCursor, limit int) ([]domain.AuthAuditEvent, error)
 }
+
+// AuthAuditCursor is the position of an audit event in the newest-first
+// order. The zero value means "before everything".
+type AuthAuditCursor struct {
+	OccurredAt time.Time
+	ID         domain.AuthAuditEventID
+}
+
+// IsZero reports whether c starts a listing at the newest event.
+func (c AuthAuditCursor) IsZero() bool { return c.ID == "" && c.OccurredAt.IsZero() }
 
 // AuthAuditRepository is append-only: there is no update or delete.
 type AuthAuditRepository interface {

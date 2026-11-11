@@ -234,6 +234,10 @@ func (failingAuditRepo) ListRecent(int) ([]domain.AuthAuditEvent, error) {
 	return nil, errors.New("unused")
 }
 
+func (failingAuditRepo) ListPage(ports.AuthAuditCursor, int) ([]domain.AuthAuditEvent, error) {
+	return nil, errors.New("unused")
+}
+
 func TestAuditFailureRollsBackTheChange(t *testing.T) {
 	store := authUsers(t)
 	f := newAdminFixture(t, nil, failingAudit{store}, store)

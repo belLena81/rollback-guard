@@ -377,6 +377,37 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
+  /v1/auth/audit:
+    get:
+      operationId: listAuthAudit
+      description: >-
+        Requires the administrator role; only served with AUTH_MODE=github.
+        Lists the auth audit log newest first. Pass the previous page's
+        nextCursor to continue; nextCursor is absent on the last page.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor from a previous response.
+          schema: { type: string, maxLength: 256 }
+      responses:
+        '200':
+          description: One page of audit events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthAuditPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /health/live:
     get:
       operationId: live
@@ -541,6 +572,33 @@ components:
         role:
           $ref: '#/components/schemas/Role'
         disabled: { type: boolean }
+    AuthAuditEvent:
+      type: object
+      required: [id, occurredAt, actorId, action]
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        occurredAt: { type: string, format: date-time }
+        actorId: { type: string, description: 'For example github:12345.' }
+        action:
+          type: string
+          enum: [role_changed, sessions_revoked, logout, user_disabled, user_enabled]
+        targetUserId: { type: string }
+        fromRole:
+          $ref: '#/components/schemas/Role'
+        toRole:
+          $ref: '#/components/schemas/Role'
+        sessionCount: { type: integer, minimum: 0 }
+    AuthAuditPage:
+      type: object
+      required: [events]
+      additionalProperties: false
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthAuditEvent'
+        nextCursor: { type: string, description: Absent on the last page. }
     RevokedSessions:
       type: object
       required: [revoked]

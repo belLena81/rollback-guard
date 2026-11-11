@@ -91,6 +91,7 @@ func (s *Server) Routes(ready func(context.Context) error, readyTimeout time.Dur
 		s.handle(apiMux, RevokeSessionsPattern, s.revokeUserSessions)
 		s.handle(apiMux, DisableUserPattern, s.disableUser)
 		s.handle(apiMux, EnableUserPattern, s.enableUser)
+		s.handle(apiMux, ListAuditPattern, s.listAudit)
 	}
 	var apiHandler http.Handler = apiMux
 	if auth != nil {

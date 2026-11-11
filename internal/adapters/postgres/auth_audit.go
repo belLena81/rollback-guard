@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/ports"
 )
 
 // maxAuthAuditList bounds ListRecent so a caller cannot read the whole table.
@@ -17,8 +18,9 @@ const (
 	listAuthAuditSQL = `
 		SELECT id, occurred_at, actor_id, action, target_user_id, from_role, to_role, session_count
 		FROM auth_audit_events
+		WHERE $1::timestamptz IS NULL OR (occurred_at, id) < ($1::timestamptz, $2::text)
 		ORDER BY occurred_at DESC, id DESC
-		LIMIT $1`
+		LIMIT $3`
 	// lockActiveAdministratorsSQL locks every enabled administrator row. A
 	// concurrent demotion waits on the lock and, under READ COMMITTED,
 	// re-evaluates the WHERE clause against the committed row, so it no
@@ -69,10 +71,18 @@ func (repo authAuditRepo) Append(event domain.AuthAuditEvent) error {
 }
 
 func (repo authAuditRepo) ListRecent(limit int) ([]domain.AuthAuditEvent, error) {
+	return repo.ListPage(ports.AuthAuditCursor{}, limit)
+}
+
+func (repo authAuditRepo) ListPage(after ports.AuthAuditCursor, limit int) ([]domain.AuthAuditEvent, error) {
 	if limit <= 0 || limit > maxAuthAuditList {
 		return nil, &domain.ValidationError{Field: "limit", Reason: fmt.Sprintf("must be between 1 and %d", maxAuthAuditList)}
 	}
-	rows, err := repo.r.tx.Query(repo.r.ctx, listAuthAuditSQL, limit)
+	var afterTime *time.Time
+	if !after.IsZero() {
+		afterTime = &after.OccurredAt
+	}
+	rows, err := repo.r.tx.Query(repo.r.ctx, listAuthAuditSQL, afterTime, string(after.ID), limit)
 	if err != nil {
 		return nil, fmt.Errorf("list auth audit events: %w", err)
 	}
