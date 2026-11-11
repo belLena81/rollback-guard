@@ -53,6 +53,8 @@ curl -sS -X POST http://127.0.0.1:8080/v1/incidents \
 
 Poll the URL returned in the `Location` response header. `investigation.state` progresses from `queued` through A2A task states to `completed`, `failed`, or `canceled`.
 
+The Investigator never pauses a task for input or authentication. An investigation task that enters `input-required` or `auth-required` fails at once as `invalid_investigation_result`, its remote task is canceled, and it is not retried; approval stays an Orchestrator REST command (ADR-01).
+
 ## Runtime Controls
 
 | Variable | Default | Purpose |

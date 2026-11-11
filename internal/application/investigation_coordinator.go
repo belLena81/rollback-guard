@@ -235,14 +235,21 @@ func (c *InvestigationCoordinator) handleWatchFailure(
 		return c.cancelInvestigation(ctx, latest)
 	}
 	timedOut := errors.Is(taskCtx.Err(), context.DeadlineExceeded)
-	if !timedOut && dispatch.Attempts < c.config.MaxAttempts {
+	// A protocol violation (the investigator paused its task for input or
+	// authentication) is a contract breach, not a transient failure: another
+	// watch would see the same task, so it is never retried.
+	violation := errors.Is(watchErr, ports.ErrInvestigationProtocolViolation)
+	if !violation && !timedOut && dispatch.Attempts < c.config.MaxAttempts {
 		return c.retryOrCancel(ctx, dispatch, ref, true, watchErr)
 	}
 	cancelCtx, cancelRemote := context.WithTimeout(context.WithoutCancel(ctx), c.config.CancelTimeout)
 	defer cancelRemote()
 	cancelErr := c.gateway.Cancel(cancelCtx, ref)
 	code := "investigation_failed"
-	if timedOut {
+	switch {
+	case violation:
+		code = "invalid_investigation_result"
+	case timedOut:
 		code = "investigation_timeout"
 	}
 	return c.fail(ctx, dispatch.IncidentID, code, errors.Join(watchErr, cancelErr))

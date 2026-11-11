@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -267,6 +268,35 @@ func TestCoordinatorShutdownPreservesLeasedInvestigationOnFinalAttempt(t *testin
 	}
 }
 
+func TestCoordinatorFailsInvestigationOnProtocolViolationWithoutRetry(t *testing.T) {
+	services, coordinator, target, symptom, actor := asyncHarness(t)
+	gateway := &protocolViolationGateway{}
+	coordinator.gateway = gateway
+	incident, err := services.Incidents.CreateIncidentAsync(context.Background(), CreateIncidentCommand{Target: target, Symptom: symptom, Actor: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.ProcessNext(context.Background()); !errors.Is(err, ports.ErrInvestigationProtocolViolation) {
+		t.Fatalf("process error = %v, want protocol violation", err)
+	}
+	// A retryable failure would leave the dispatch queued for another
+	// attempt; a protocol violation must not be claimable again.
+	if err := coordinator.ProcessNext(context.Background()); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("second process error = %v, want nothing to claim", err)
+	}
+	if gateway.watchCalls.Load() != 1 || gateway.cancelCalls.Load() != 1 {
+		t.Fatalf("watch calls = %d, cancel calls = %d, want 1 and 1", gateway.watchCalls.Load(), gateway.cancelCalls.Load())
+	}
+	summary, err := services.Queries.GetIncidentSummary(context.Background(), testReader(), incident.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Investigation == nil || summary.Investigation.State != domain.InvestigationTaskFailed ||
+		summary.Investigation.FailureCode != "invalid_investigation_result" || summary.Investigation.Attempts != 1 {
+		t.Fatalf("investigation = %#v, want failed invalid_investigation_result after one attempt", summary.Investigation)
+	}
+}
+
 func TestInvestigationRequestHashUsesPostgresTimestampPrecision(t *testing.T) {
 	now := time.Date(2026, 8, 5, 12, 0, 0, 123456789, time.UTC)
 	target, err := domain.NewDeploymentTarget("local", "payments", "api", "api")
@@ -375,6 +405,27 @@ func (g *blockedWatchGateway) Watch(ctx context.Context, _ domain.InvestigationT
 }
 
 func (g *blockedWatchGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
+	g.cancelCalls.Add(1)
+	return nil
+}
+
+// protocolViolationGateway answers every watch the way the A2A gateway does
+// when the investigator pauses its task for input or authentication.
+type protocolViolationGateway struct {
+	watchCalls  atomic.Int32
+	cancelCalls atomic.Int32
+}
+
+func (g *protocolViolationGateway) Submit(context.Context, ports.InvestigationSubmission) (domain.InvestigationTaskRef, error) {
+	return domain.InvestigationTaskRef{TaskID: "task-1", ContextID: "context-1"}, nil
+}
+
+func (g *protocolViolationGateway) Watch(context.Context, domain.InvestigationTaskRef, func(domain.InvestigationStage) error) (ports.InvestigationResult, error) {
+	g.watchCalls.Add(1)
+	return ports.InvestigationResult{}, fmt.Errorf("investigation task entered TASK_STATE_INPUT_REQUIRED: %w", ports.ErrInvestigationProtocolViolation)
+}
+
+func (g *protocolViolationGateway) Cancel(context.Context, domain.InvestigationTaskRef) error {
 	g.cancelCalls.Add(1)
 	return nil
 }

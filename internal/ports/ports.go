@@ -10,6 +10,12 @@ import (
 
 var ErrRollbackOutcomeUnknown = errors.New("rollback outcome is unknown")
 
+// ErrInvestigationProtocolViolation: the investigator answered outside the
+// investigation contract, for example by pausing its task for caller input
+// or authentication. Approval is never requested through the investigation
+// task (docs/adr.md, ADR-01), so the investigation fails and is not retried.
+var ErrInvestigationProtocolViolation = errors.New("investigation protocol violation")
+
 var (
 	ErrReasonerUnavailable     = errors.New("reasoner is unavailable")
 	ErrReasonerRefused         = errors.New("reasoner refused the request")
