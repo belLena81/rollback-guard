@@ -275,5 +275,23 @@ func ActorFor(u User) (Actor, error) {
 	if u.disabled {
 		return Actor{}, &UserDisabledError{UserID: u.id}
 	}
-	return NewActor(ActorID(fmt.Sprintf("github:%d", u.githubID)), ActorHuman)
+	return NewActor(ActorID(githubActorPrefix+strconv.FormatInt(u.githubID, 10)), ActorHuman)
+}
+
+// githubActorPrefix is the ID prefix of an Actor derived from a GitHub user.
+const githubActorPrefix = "github:"
+
+// GitHubIDOf parses the canonical "github:<positive decimal>" actor ID that
+// ActorFor produces. Any other form, including a non-canonical number, is
+// not a GitHub actor.
+func GitHubIDOf(id ActorID) (int64, bool) {
+	raw, ok := strings.CutPrefix(string(id), githubActorPrefix)
+	if !ok {
+		return 0, false
+	}
+	githubID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || githubID <= 0 || strconv.FormatInt(githubID, 10) != raw {
+		return 0, false
+	}
+	return githubID, true
 }

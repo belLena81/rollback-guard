@@ -16,16 +16,22 @@ import (
 )
 
 type RollbackMutationGuard struct {
-	pool  *pgxpool.Pool
-	mu    sync.Mutex
-	locks map[domain.IdempotencyKey]*rollbackMutationLock
+	pool     *pgxpool.Pool
+	approver ApproverVerifier
+	mu       sync.Mutex
+	locks    map[domain.IdempotencyKey]*rollbackMutationLock
 }
 
-func NewRollbackMutationGuard(pool *pgxpool.Pool) (*RollbackMutationGuard, error) {
+// NewRollbackMutationGuard requires the approver verifier of the deployment's
+// auth mode; there is no default, so an unset mode cannot run unchecked.
+func NewRollbackMutationGuard(pool *pgxpool.Pool, approver ApproverVerifier) (*RollbackMutationGuard, error) {
 	if pool == nil {
 		return nil, errors.New("postgres pool is required")
 	}
-	return &RollbackMutationGuard{pool: pool, locks: make(map[domain.IdempotencyKey]*rollbackMutationLock)}, nil
+	if approver == nil {
+		return nil, errors.New("approver verifier is required")
+	}
+	return &RollbackMutationGuard{pool: pool, approver: approver, locks: make(map[domain.IdempotencyKey]*rollbackMutationLock)}, nil
 }
 
 func (g *RollbackMutationGuard) Begin(
@@ -77,7 +83,7 @@ func (g *RollbackMutationGuard) Begin(
 		}
 		return ports.RollbackMutationAttempt{Mutation: existing}, nil
 	}
-	trusted, err := authorizeTrustedExecution(ctx, tx, key, hash, found)
+	trusted, err := authorizeTrustedExecution(ctx, tx, g.approver, key, hash, found)
 	if err != nil {
 		return ports.RollbackMutationAttempt{}, err
 	}
@@ -105,10 +111,20 @@ type trustedExecution struct {
 
 // authorizeTrustedExecution re-checks the pending execution, its incident,
 // proposal, policy decision, and approval against the database inside tx, and
-// authorizes the rollback from them. resume is true when a pending mutation
-// already exists for the key, which is then resumed rather than authorized
-// afresh.
-func authorizeTrustedExecution(ctx context.Context, tx pgx.Tx, key domain.IdempotencyKey, hash domain.ProposalHash, resume bool) (trustedExecution, error) {
+// authorizes the rollback from them. In the same transaction it asks approver
+// whether the approving actor may still approve now, so a demoted or disabled
+// administrator's approval never starts a mutation. The check also runs when
+// resuming (fail closed: a refused resume leaves the pending row to be
+// reconciled). resume is true when a pending mutation already exists for the
+// key, which is then resumed rather than authorized afresh.
+func authorizeTrustedExecution(
+	ctx context.Context,
+	tx pgx.Tx,
+	approver ApproverVerifier,
+	key domain.IdempotencyKey,
+	hash domain.ProposalHash,
+	resume bool,
+) (trustedExecution, error) {
 	repositories := &repositories{ctx: ctx, tx: tx}
 	record, err := repositories.Idempotency().Get(key)
 	if errors.Is(err, domain.ErrNotFound) {
@@ -148,6 +164,9 @@ func authorizeTrustedExecution(ctx context.Context, tx pgx.Tx, key domain.Idempo
 	}
 	approved, err := authorizeOrResume(proposal, decision, approval, record, key, resume)
 	if err != nil {
+		return trustedExecution{}, err
+	}
+	if err := approver.verifyApprover(ctx, tx, approval.Actor()); err != nil {
 		return trustedExecution{}, err
 	}
 	return trustedExecution{approved: approved, proposal: proposal, record: record}, nil

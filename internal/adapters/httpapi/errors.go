@@ -98,20 +98,23 @@ func requestID(r *http.Request) string {
 // err.Error(): the chain can carry joined cleanup failures with database or
 // transport text that must not reach a client.
 const (
-	messageInternal          = "internal server error"
-	messageValidation        = "request validation failed"
-	messageNotFound          = "resource not found"
-	messageForbidden         = "only a human actor can decide approvals"
-	messageRoleForbidden     = "your role does not allow this operation"
-	messageLastAdministrator = "the change would leave no active administrator"
-	messageUnauthenticated   = "authentication required"
-	messageIllegalTransition = "the incident is not in a state that allows this operation"
-	messageVersionConflict   = "the incident was changed by another request; reload and retry"
-	messageIdempotency       = "the request conflicts with an earlier request for the same operation"
-	messageAlreadyExists     = "the record already exists"
-	messageApprovalMismatch  = "the approval does not match the current proposal or deployment"
-	messageExpired           = "the proposal or approval has expired"
-	messagePolicyDenied      = "the rollback policy denied this action"
+	messageInternal   = "internal server error"
+	messageValidation = "request validation failed"
+	messageNotFound   = "resource not found"
+	messageForbidden  = "only a human actor can decide approvals"
+	// messageApproverNotAuthorized: the rollback MCP refused because the
+	// approver is no longer an enabled administrator.
+	messageApproverNotAuthorized = "the approver is no longer authorized to approve rollbacks"
+	messageRoleForbidden         = "your role does not allow this operation"
+	messageLastAdministrator     = "the change would leave no active administrator"
+	messageUnauthenticated       = "authentication required"
+	messageIllegalTransition     = "the incident is not in a state that allows this operation"
+	messageVersionConflict       = "the incident was changed by another request; reload and retry"
+	messageIdempotency           = "the request conflicts with an earlier request for the same operation"
+	messageAlreadyExists         = "the record already exists"
+	messageApprovalMismatch      = "the approval does not match the current proposal or deployment"
+	messageExpired               = "the proposal or approval has expired"
+	messagePolicyDenied          = "the rollback policy denied this action"
 	// messageRollbackOutcomeUnknown tells the caller what to do: the attempt
 	// is still pending and only a retry of the same approval resolves it.
 	messageRollbackOutcomeUnknown = "the rollback outcome is unknown; retry the same approval to reconcile it"
@@ -155,6 +158,8 @@ func errorResponse(err error) (int, string, string) {
 		return http.StatusForbidden, codeForbidden, messageRoleForbidden
 	case errors.Is(err, domain.ErrNonHumanApproval):
 		return http.StatusForbidden, codeForbidden, messageForbidden
+	case errors.Is(err, domain.ErrApproverNotAuthorized):
+		return http.StatusForbidden, codeForbidden, messageApproverNotAuthorized
 	case errors.Is(err, domain.ErrIllegalTransition):
 		return http.StatusConflict, codeConflict, messageIllegalTransition
 	case errors.Is(err, domain.ErrVersionConflict):

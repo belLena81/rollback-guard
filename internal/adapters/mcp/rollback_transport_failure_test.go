@@ -454,6 +454,7 @@ func TestMutationFailureClassification(t *testing.T) {
 		{name: "already unknown", err: ports.ErrRollbackOutcomeUnknown, want: mutationAmbiguous},
 		{name: "revision drift", err: errorFromTool(ToolError{Code: CodeRevisionDrift}), want: mutationRejected},
 		{name: "approval mismatch", err: errorFromTool(ToolError{Code: CodeApprovalMismatch}), want: mutationRejected},
+		{name: "approver not authorized", err: errorFromTool(ToolError{Code: CodeApproverNotAuthorized}), want: mutationRejected},
 		{name: "policy denied", err: errorFromTool(ToolError{Code: CodePolicyDenied}), want: mutationRejected},
 		{name: "expired", err: errorFromTool(ToolError{Code: CodeExpired}), want: mutationRejected},
 		{name: "idempotency conflict", err: errorFromTool(ToolError{Code: CodeIdempotencyConflict}), want: mutationRejected},

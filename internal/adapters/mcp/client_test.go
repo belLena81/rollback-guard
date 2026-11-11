@@ -95,6 +95,7 @@ func TestToolErrorsAreTransientOnlyForUnavailableDependencies(t *testing.T) {
 		{CodeRevisionDrift, false},
 		{CodePolicyDenied, false},
 		{CodeApprovalMismatch, false},
+		{CodeApproverNotAuthorized, false},
 		{CodeExpired, false},
 		{CodeIdempotencyConflict, false},
 		{CodeCanceled, false},

@@ -61,6 +61,7 @@ const (
 	CodeRevisionDrift         ErrorCode = "revision_drift"
 	CodePolicyDenied          ErrorCode = "policy_denied"
 	CodeApprovalMismatch      ErrorCode = "approval_mismatch"
+	CodeApproverNotAuthorized ErrorCode = "approver_not_authorized"
 	CodeExpired               ErrorCode = "expired"
 	CodeIdempotencyConflict   ErrorCode = "idempotency_conflict"
 	CodeDependencyUnavailable ErrorCode = "dependency_unavailable"

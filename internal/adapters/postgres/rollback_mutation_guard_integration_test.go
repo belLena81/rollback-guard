@@ -25,7 +25,7 @@ func TestRollbackMutationGuardBlocksReplayUntilCompletion(t *testing.T) {
 	guards := make([]*RollbackMutationGuard, 2)
 	for index := range guards {
 		var err error
-		guards[index], err = NewRollbackMutationGuard(pool)
+		guards[index], err = NewRollbackMutationGuard(pool, testApproverVerifier(t))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +100,7 @@ func TestRollbackMutationGuardLateReleaseDoesNotUnlockConcurrentReplay(t *testin
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	key := uniqueRollbackKey("key-late-release")
 	proposal := seedTrustedRollback(t, pool, "incident-late-release", key, now)
-	guard, err := NewRollbackMutationGuard(pool)
+	guard, err := NewRollbackMutationGuard(pool, testApproverVerifier(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,11 +162,11 @@ func TestRollbackMutationGuardIgnoresLeaseFromAnotherGuard(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	key := uniqueRollbackKey("key-foreign-lease")
 	proposal := seedTrustedRollback(t, pool, "incident-foreign-lease", key, now)
-	owner, err := NewRollbackMutationGuard(pool)
+	owner, err := NewRollbackMutationGuard(pool, testApproverVerifier(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := NewRollbackMutationGuard(pool)
+	other, err := NewRollbackMutationGuard(pool, testApproverVerifier(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,11 +339,11 @@ func TestRollbackMutationGuardAllowsStalePendingReplay(t *testing.T) {
 	pool := isolatedRollbackGuardPool(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	proposal := seedTrustedRollback(t, pool, "incident-2", "key-2", now)
-	first, err := NewRollbackMutationGuard(pool)
+	first, err := NewRollbackMutationGuard(pool, testApproverVerifier(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewRollbackMutationGuard(pool)
+	second, err := NewRollbackMutationGuard(pool, testApproverVerifier(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestRollbackMutationGuardAuthorizesFirstUseAtRecordStart(t *testing.T) {
 	pool := isolatedRollbackGuardPool(t)
 	recordStartedAt := time.Now().UTC().Truncate(time.Microsecond)
 	proposal := seedTrustedRollbackWithExpiry(t, pool, "incident-3", "key-3", recordStartedAt, recordStartedAt.Add(time.Second))
-	guard, err := NewRollbackMutationGuard(pool)
+	guard, err := NewRollbackMutationGuard(pool, testApproverVerifier(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestRollbackMutationGuardAuthorizesFirstUseAtRecordStart(t *testing.T) {
 
 func TestRollbackMutationLockReleaseClosesConnectionWhenUnlockFails(t *testing.T) {
 	pool := isolatedRollbackGuardPool(t)
-	guard, err := NewRollbackMutationGuard(pool)
+	guard, err := NewRollbackMutationGuard(pool, testApproverVerifier(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +446,7 @@ func TestRollbackMutationGuardReleaseReportsUnlockOfALockNotHeld(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	key := uniqueRollbackKey("key-unlock-not-held")
 	proposal := seedTrustedRollback(t, pool, "incident-unlock-not-held", key, now)
-	guard, err := NewRollbackMutationGuard(pool)
+	guard, err := NewRollbackMutationGuard(pool, testApproverVerifier(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +471,7 @@ func TestRollbackMutationGuardCompleteReturnsNoValueWhenUnlockFails(t *testing.T
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	key := uniqueRollbackKey("key-complete-unlock")
 	proposal := seedTrustedRollback(t, pool, "incident-complete-unlock", key, now)
-	guard, err := NewRollbackMutationGuard(pool)
+	guard, err := NewRollbackMutationGuard(pool, testApproverVerifier(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +502,7 @@ func TestRollbackMutationGuardCompleteReturnsNoValueWhenUnlockFails(t *testing.T
 
 func isolatedRollbackGuardPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	return isolatedSchemaPool(t, "000001_initial_schema.up.sql", "000002_rollback_mutation_ledger.up.sql")
+	return isolatedSchemaPool(t, allUpMigrations...)
 }
 
 // isolatedSchemaPool returns a pool bound to a fresh schema with the named
@@ -569,6 +569,21 @@ func seedTrustedRollback(t *testing.T, pool *pgxpool.Pool, incidentID string, ke
 
 func seedTrustedRollbackWithExpiry(t *testing.T, pool *pgxpool.Pool, incidentID string, key domain.IdempotencyKey, now time.Time, expiresAt time.Time) domain.RollbackProposal {
 	t.Helper()
+	return seedTrustedRollbackApprovedBy(t, pool, incidentID, key, now, expiresAt, testLocalApprover)
+}
+
+// seedTrustedRollbackApprovedBy seeds an executing incident whose approval
+// was recorded by approver.
+func seedTrustedRollbackApprovedBy(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	incidentID string,
+	key domain.IdempotencyKey,
+	now time.Time,
+	expiresAt time.Time,
+	approver domain.ActorID,
+) domain.RollbackProposal {
+	t.Helper()
 	target, err := domain.NewDeploymentTarget("local", "demo", "demo-api", "demo-api")
 	if err != nil {
 		t.Fatal(err)
@@ -581,7 +596,7 @@ func seedTrustedRollbackWithExpiry(t *testing.T, pool *pgxpool.Pool, incidentID 
 	if err != nil {
 		t.Fatal(err)
 	}
-	actor, err := domain.NewActor("operator", domain.ActorHuman)
+	actor, err := domain.NewActor(approver, domain.ActorHuman)
 	if err != nil {
 		t.Fatal(err)
 	}

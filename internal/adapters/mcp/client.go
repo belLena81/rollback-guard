@@ -188,6 +188,8 @@ func errorFromTool(toolError ToolError) error {
 		return &domain.NotFoundError{Resource: "MCP resource", ID: "requested"}
 	case CodeRevisionDrift, CodeApprovalMismatch:
 		return &domain.ApprovalMismatchError{Reason: "MCP server reported revision drift or an approval mismatch"}
+	case CodeApproverNotAuthorized:
+		return &domain.ApproverNotAuthorizedError{}
 	case CodePolicyDenied:
 		return &domain.PolicyDenialError{Rule: "mcp_policy_validation"}
 	case CodeExpired:

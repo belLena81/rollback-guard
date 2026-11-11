@@ -157,7 +157,7 @@ func TestKubernetesMCPDefaults(t *testing.T) {
 		{
 			name: "rollback",
 			env:  map[string]string{"KUBERNETES_MCP_MODE": "rollback", "DATABASE_URL": testDatabaseURL},
-			want: KubernetesMCPConfig{HTTPAddr: "127.0.0.1:8092", Mode: "rollback", ClusterID: "local", DatabaseURL: testDatabaseURL, DBMaxConns: 4, DBPingTimeout: 2 * time.Second, RequestTimeout: 2 * time.Minute, SessionTimeout: 5 * time.Minute, Telemetry: defaultTelemetry("kubernetes-mcp-rollback"), Resilience: defaultResilience()},
+			want: KubernetesMCPConfig{HTTPAddr: "127.0.0.1:8092", Mode: "rollback", ClusterID: "local", DatabaseURL: testDatabaseURL, DBMaxConns: 4, DBPingTimeout: 2 * time.Second, RequestTimeout: 2 * time.Minute, SessionTimeout: 5 * time.Minute, Telemetry: defaultTelemetry("kubernetes-mcp-rollback"), Resilience: defaultResilience(), Approver: ApproverAuthConfig{Mode: AuthModeLocal, LocalActorID: "local-admin"}},
 		},
 	}
 	for _, test := range tests {

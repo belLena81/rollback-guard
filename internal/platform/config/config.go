@@ -88,6 +88,8 @@ type KubernetesMCPConfig struct {
 	SessionTimeout time.Duration
 	Telemetry      TelemetryConfig
 	Resilience     ResilienceConfig
+	// Approver is set in rollback mode only.
+	Approver ApproverAuthConfig
 }
 
 type ObservabilityMCPConfig struct {
@@ -277,10 +279,17 @@ func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
 	}
 	// Only rollback mode connects to PostgreSQL.
 	defaultAddr := DefaultKubernetesReadMCPAddr
-	var db dbSettings
+	var (
+		db       dbSettings
+		approver ApproverAuthConfig
+	)
 	if mode == KubernetesMCPModeRollback {
 		defaultAddr = DefaultKubernetesRollbackMCPAddr
 		db, err = loadDB(" in rollback mode")
+		if err != nil {
+			return KubernetesMCPConfig{}, err
+		}
+		approver, err = approverAuthEnv()
 		if err != nil {
 			return KubernetesMCPConfig{}, err
 		}
@@ -306,6 +315,7 @@ func LoadKubernetesMCP() (KubernetesMCPConfig, error) {
 		SessionTimeout: sessionTimeout,
 		Telemetry:      telemetry,
 		Resilience:     resilience,
+		Approver:       approver,
 	}, nil
 }
 

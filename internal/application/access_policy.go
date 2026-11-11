@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/ports"
@@ -20,10 +18,6 @@ import (
 type AccessPolicy interface {
 	Authorize(ctx context.Context, actor domain.Actor, action domain.Action) error
 }
-
-// githubActorPrefix is the ID prefix of an Actor derived from a GitHub user
-// (domain.ActorFor).
-const githubActorPrefix = "github:"
 
 // RoleAccessPolicy authorizes against the live users table: on every call it
 // resolves the actor's user and evaluates domain.RolePolicy on its current
@@ -45,7 +39,7 @@ func (p *RoleAccessPolicy) Authorize(ctx context.Context, actor domain.Actor, ac
 		// A system or agent actor never performs a human use case.
 		return &domain.ForbiddenError{Action: action}
 	}
-	githubID, ok := githubIDOf(actor.ID())
+	githubID, ok := domain.GitHubIDOf(actor.ID())
 	if !ok {
 		return &domain.UnauthenticatedError{}
 	}
@@ -64,19 +58,6 @@ func (p *RoleAccessPolicy) Authorize(ctx context.Context, actor domain.Actor, ac
 		return &domain.UnauthenticatedError{}
 	}
 	return p.policy.Authorize(user.Role(), action) //nolint:wrapcheck // the typed domain denial is the answer
-}
-
-// githubIDOf parses the canonical "github:<positive decimal>" actor ID.
-func githubIDOf(id domain.ActorID) (int64, bool) {
-	raw, ok := strings.CutPrefix(string(id), githubActorPrefix)
-	if !ok {
-		return 0, false
-	}
-	githubID, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || githubID <= 0 || strconv.FormatInt(githubID, 10) != raw {
-		return 0, false
-	}
-	return githubID, true
 }
 
 // LocalAccessPolicy is the AUTH_MODE=local policy: the one configured local

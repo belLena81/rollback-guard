@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	protocol "github.com/belLena81/rollback-guard/internal/adapters/mcp"
 	"github.com/belLena81/rollback-guard/internal/adapters/mcp/kubernetesserver"
 	postgresadapter "github.com/belLena81/rollback-guard/internal/adapters/postgres"
+	"github.com/belLena81/rollback-guard/internal/domain"
 	"github.com/belLena81/rollback-guard/internal/platform/bootstrap"
 	"github.com/belLena81/rollback-guard/internal/platform/config"
 	"github.com/belLena81/rollback-guard/internal/platform/httpserver"
@@ -102,7 +104,11 @@ func buildKubernetes(cfg config.KubernetesMCPConfig, tel *telemetry.Provider) (k
 func buildServices(cfg config.KubernetesMCPConfig, clientset kubernetes.Interface, pool *pgxpool.Pool) (*kubernetesadapter.Service, error) {
 	var mutationGuard ports.RollbackMutationGuard
 	if pool != nil {
-		guard, err := postgresadapter.NewRollbackMutationGuard(pool)
+		approver, err := approverVerifier(cfg.Approver)
+		if err != nil {
+			return nil, err
+		}
+		guard, err := postgresadapter.NewRollbackMutationGuard(pool, approver)
 		if err != nil {
 			return nil, fmt.Errorf("create rollback mutation guard: %w", err)
 		}
@@ -116,6 +122,28 @@ func buildServices(cfg config.KubernetesMCPConfig, clientset kubernetes.Interfac
 		return nil, fmt.Errorf("create kubernetes service: %w", err)
 	}
 	return service, nil
+}
+
+// approverVerifier selects the execution-time approver check for the
+// orchestrator's auth mode. An unknown mode is refused (config.Load already
+// requires AUTH_MODE in rollback mode).
+func approverVerifier(cfg config.ApproverAuthConfig) (postgresadapter.ApproverVerifier, error) {
+	switch cfg.Mode {
+	case config.AuthModeGitHub:
+		return postgresadapter.NewGitHubApproverVerifier(), nil
+	case config.AuthModeLocal:
+		actor, err := domain.NewActor(cfg.LocalActorID, domain.ActorHuman)
+		if err != nil {
+			return nil, fmt.Errorf("local approver actor: %w", err)
+		}
+		verifier, err := postgresadapter.NewLocalApproverVerifier(actor)
+		if err != nil {
+			return nil, fmt.Errorf("local approver verifier: %w", err)
+		}
+		return verifier, nil
+	default:
+		return nil, errors.New("rollback mode requires AUTH_MODE local or github")
+	}
 }
 
 // protectBackend retries transient Kubernetes API failures on the read tools

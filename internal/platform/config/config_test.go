@@ -191,6 +191,48 @@ func TestLoadKubernetesMCPRequiresDatabaseOnlyForRollbackMode(t *testing.T) {
 	}
 }
 
+func TestLoadKubernetesMCPApproverAuthMode(t *testing.T) {
+	tests := []struct {
+		name  string
+		mode  string
+		env   map[string]string
+		want  ApproverAuthConfig
+		match string
+	}{
+		{name: "rollback without AUTH_MODE fails closed", mode: "rollback", match: "AUTH_MODE must be local or github"},
+		{name: "rollback with blank AUTH_MODE fails closed", mode: "rollback", env: map[string]string{"AUTH_MODE": "  "}, match: "AUTH_MODE must be local or github"},
+		{name: "rollback with unknown AUTH_MODE fails closed", mode: "rollback", env: map[string]string{"AUTH_MODE": "none"}, match: "AUTH_MODE must be local or github"},
+		{name: "rollback github", mode: "rollback", env: map[string]string{"AUTH_MODE": "github"}, want: ApproverAuthConfig{Mode: AuthModeGitHub}},
+		{name: "rollback local uses the default local actor", mode: "rollback", env: map[string]string{"AUTH_MODE": "local"}, want: ApproverAuthConfig{Mode: AuthModeLocal, LocalActorID: "local-admin"}},
+		{name: "rollback local uses LOCAL_ACTOR_ID", mode: "rollback", env: map[string]string{"AUTH_MODE": "local", "LOCAL_ACTOR_ID": "dev-admin"}, want: ApproverAuthConfig{Mode: AuthModeLocal, LocalActorID: "dev-admin"}},
+		{name: "readonly ignores AUTH_MODE", mode: "readonly", env: map[string]string{"AUTH_MODE": "bogus"}, want: ApproverAuthConfig{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnvironment(t)
+			t.Setenv("KUBERNETES_MCP_MODE", test.mode)
+			t.Setenv("DATABASE_URL", "postgres://rollback@database/rollback_guard")
+			t.Setenv("AUTH_MODE", "")
+			for key, value := range test.env {
+				t.Setenv(key, value)
+			}
+			cfg, err := LoadKubernetesMCP()
+			if test.match != "" {
+				if err == nil || !strings.Contains(err.Error(), test.match) {
+					t.Fatalf("LoadKubernetesMCP() error = %v, want %q", err, test.match)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Approver != test.want {
+				t.Fatalf("Approver = %#v, want %#v", cfg.Approver, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadObservabilityMCPRejectsUnsafeWindow(t *testing.T) {
 	clearConfigEnvironment(t)
 	t.Setenv("METRICS_WINDOW", "10s")

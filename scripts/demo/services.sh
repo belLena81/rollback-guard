@@ -203,8 +203,10 @@ up() {
   if [[ -z "${ROLLBACK_MCP_DATABASE_URL:-}" ]]; then
     echo "services: WARNING: ROLLBACK_MCP_DATABASE_URL is not set; the rollback MCP uses DATABASE_URL's role, which can write approvals (demo only, see docs/phase3-mcp.md)" >&2
   fi
+  # The rollback MCP re-checks the approver against the same AUTH_MODE as the
+  # orchestrator (it has no default and refuses to start without one).
   start_one kubernetes-mcp-rollback 8092 "${common[@]}" \
-    KUBERNETES_MCP_MODE=rollback CLUSTER_ID="${CLUSTER_ID:-local}" \
+    KUBERNETES_MCP_MODE=rollback AUTH_MODE="$auth_mode" CLUSTER_ID="${CLUSTER_ID:-local}" \
     KUBECONFIG="$(realpath "$rollback_kubeconfig")" \
     DATABASE_URL="${ROLLBACK_MCP_DATABASE_URL:-$DATABASE_URL}"
   start_one observability-mcp 8093 "${common[@]}" PROMETHEUS_URL="$PROMETHEUS_URL"

@@ -22,6 +22,7 @@ var (
 	ErrNoActiveSession          = errors.New("no active session")
 	ErrUnauthenticated          = errors.New("unauthenticated")
 	ErrLastAdministrator        = errors.New("last administrator")
+	ErrApproverNotAuthorized    = errors.New("approver not authorized")
 )
 
 // LastAdministratorError reports that a change would leave no enabled
@@ -147,6 +148,19 @@ func (e *NonHumanApprovalError) Error() string {
 }
 func (e *NonHumanApprovalError) Unwrap() error {
 	return ErrNonHumanApproval
+}
+
+// ApproverNotAuthorizedError reports that the actor who recorded an approval
+// may not have it executed now: in github mode the actor is no longer an
+// enabled administrator, in local mode it is not the configured local actor.
+// It carries no identity, so its text is safe in any response or log.
+type ApproverNotAuthorizedError struct{}
+
+func (e *ApproverNotAuthorizedError) Error() string {
+	return "approver is not currently authorized to approve rollbacks"
+}
+func (e *ApproverNotAuthorizedError) Unwrap() error {
+	return ErrApproverNotAuthorized
 }
 
 type ExpiryError struct{ Resource string }

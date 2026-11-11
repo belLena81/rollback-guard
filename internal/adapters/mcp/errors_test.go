@@ -23,6 +23,7 @@ func TestErrorMappingIsStableAndDoesNotLeakDetails(t *testing.T) {
 		{name: "forbidden", err: kubernetes.ErrTargetForbidden, code: CodeTargetForbidden},
 		{name: "drift", err: kubernetes.ErrRevisionDrift, code: CodeRevisionDrift},
 		{name: "expired", err: &domain.ExpiryError{Resource: "approval"}, code: CodeExpired},
+		{name: "approver no longer authorized", err: fmt.Errorf("guard: %w", &domain.ApproverNotAuthorizedError{}), code: CodeApproverNotAuthorized},
 		{name: "timeout", err: context.DeadlineExceeded, code: CodeTimeout, retryable: true},
 		{name: "bad dependency result", err: metricsprom.ErrInvalidResult, code: CodeDependencyUnavailable, retryable: true},
 		{name: "open breaker is unavailable, not internal", err: fmt.Errorf("read: %w", &resilience.CircuitOpenError{Dependency: resilience.DependencyKubernetesAPI}), code: CodeDependencyUnavailable, retryable: true},

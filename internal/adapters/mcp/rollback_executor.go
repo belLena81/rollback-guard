@@ -113,7 +113,7 @@ const (
 // tool error; no transport failure wraps them.
 var mutationRejections = []error{
 	domain.ErrValidation, domain.ErrNotFound, domain.ErrApprovalMismatch, domain.ErrNonHumanApproval,
-	domain.ErrPolicyDenied, domain.ErrExpired, domain.ErrIdempotencyConflict,
+	domain.ErrApproverNotAuthorized, domain.ErrPolicyDenied, domain.ErrExpired, domain.ErrIdempotencyConflict,
 }
 
 // mutationFailure is fail-safe: anything that is neither a provable pre-send

@@ -54,6 +54,8 @@ func classifyError(err error) ToolError {
 		return ToolError{Code: CodeRevisionDrift, Message: "deployment revision changed"}
 	case errors.Is(err, domain.ErrPolicyDenied):
 		return ToolError{Code: CodePolicyDenied, Message: "rollback policy denied execution"}
+	case errors.Is(err, domain.ErrApproverNotAuthorized):
+		return ToolError{Code: CodeApproverNotAuthorized, Message: "approver is not currently authorized"}
 	case errors.Is(err, domain.ErrApprovalMismatch), errors.Is(err, domain.ErrNonHumanApproval):
 		return ToolError{Code: CodeApprovalMismatch, Message: "approval does not match proposal"}
 	case errors.Is(err, domain.ErrExpired):

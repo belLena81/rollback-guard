@@ -262,7 +262,7 @@ func (s *AdminService) lockAdministrators(repos ports.AuthRepositories, actor do
 	if err != nil {
 		return nil, fmt.Errorf("lock administrators: %w", err)
 	}
-	githubID, ok := githubIDOf(actor.ID())
+	githubID, ok := domain.GitHubIDOf(actor.ID())
 	if !ok {
 		return nil, &domain.ForbiddenError{Action: domain.ActionAdminister}
 	}
@@ -282,7 +282,7 @@ func (s *AdminService) lockAdministrators(repos ports.AuthRepositories, actor do
 // loadTarget resolves a target user by its public actor ID
 // ("github:<id>"), the identifier the API exposes.
 func loadTarget(repos ports.AuthRepositories, target domain.ActorID) (domain.User, error) {
-	githubID, ok := githubIDOf(target)
+	githubID, ok := domain.GitHubIDOf(target)
 	if !ok {
 		return domain.User{}, &domain.ValidationError{Field: "userId", Reason: "must be github:<numeric id>"}
 	}

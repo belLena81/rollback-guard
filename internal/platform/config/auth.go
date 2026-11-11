@@ -126,6 +126,30 @@ func authEnv() (AuthConfig, error) {
 	return AuthConfig{Mode: mode, GitHub: github}, nil
 }
 
+// ApproverAuthConfig tells the rollback-mode Kubernetes MCP how to re-check
+// an approval's actor before a mutation. Mode must match the orchestrator's
+// AUTH_MODE. github: the approver must currently be an enabled administrator
+// in users. local: only an approval by LocalActorID (the orchestrator's fixed
+// local actor) is executable.
+type ApproverAuthConfig struct {
+	Mode         AuthMode
+	LocalActorID domain.ActorID
+}
+
+// approverAuthEnv reads AUTH_MODE for the rollback MCP. Unlike the
+// orchestrator it has no default: an unset or unknown mode refuses to start,
+// so the execution-time approver check can never be silently skipped.
+func approverAuthEnv() (ApproverAuthConfig, error) {
+	switch mode := AuthMode(strings.TrimSpace(os.Getenv("AUTH_MODE"))); mode {
+	case AuthModeGitHub:
+		return ApproverAuthConfig{Mode: mode}, nil
+	case AuthModeLocal:
+		return ApproverAuthConfig{Mode: mode, LocalActorID: domain.ActorID(stringEnv("LOCAL_ACTOR_ID", defaultLocalActorID))}, nil
+	default:
+		return ApproverAuthConfig{}, errors.New("AUTH_MODE must be local or github in rollback mode (no default)")
+	}
+}
+
 func githubAuthEnv() (GitHubAuthConfig, error) {
 	clientID := strings.TrimSpace(os.Getenv("AUTH_GITHUB_CLIENT_ID"))
 	if clientID == "" || len(clientID) > maxGitHubClientIDLength || strings.ContainsFunc(clientID, notVisibleASCII) {

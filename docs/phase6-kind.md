@@ -80,7 +80,7 @@ The orchestrator, investigator, both Kubernetes MCP processes, and the observabi
 
 ```bash
 KUBECONFIG=.demo/kubeconfig-readonly KUBERNETES_MCP_MODE=readonly CLUSTER_ID=local go run ./cmd/kubernetes-mcp   # 127.0.0.1:8091
-KUBECONFIG=.demo/kubeconfig-rollback KUBERNETES_MCP_MODE=rollback CLUSTER_ID=local \
+KUBECONFIG=.demo/kubeconfig-rollback KUBERNETES_MCP_MODE=rollback AUTH_MODE=local CLUSTER_ID=local \
   DATABASE_URL="$ROLLBACK_MCP_DATABASE_URL" go run ./cmd/kubernetes-mcp                                         # 127.0.0.1:8092
 PROMETHEUS_URL="$PROMETHEUS_URL" go run ./cmd/observability-mcp                                                  # 127.0.0.1:8093
 DATABASE_URL="$DATABASE_URL" go run ./cmd/investigator                                                            # 127.0.0.1:8094
