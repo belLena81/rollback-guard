@@ -414,6 +414,11 @@ func (s *Service) ExecuteApprovedRollback(ctx context.Context, hash domain.Propo
 		releasePending = false
 		return mutationResult(completed), nil
 	}
+	if attempt.ReconcileOnly {
+		// The approver lost the right to approve since the pending attempt
+		// started, and no earlier attempt reached the target: never patch.
+		return MutationResult{}, &domain.ApproverNotAuthorizedError{}
+	}
 	if currentRevision != proposal.CurrentRevision() {
 		return MutationResult{}, ErrRevisionDrift
 	}

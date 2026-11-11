@@ -14,6 +14,7 @@ func TestApproverVerifierFollowsTheAuthModeAndFailsClosed(t *testing.T) {
 	}{
 		{name: "github", cfg: config.ApproverAuthConfig{Mode: config.AuthModeGitHub}},
 		{name: "local", cfg: config.ApproverAuthConfig{Mode: config.AuthModeLocal, LocalActorID: "local-admin"}},
+		{name: "local with a github actor", cfg: config.ApproverAuthConfig{Mode: config.AuthModeLocal, LocalActorID: "github:1001"}, wantErr: true},
 		{name: "local without an actor", cfg: config.ApproverAuthConfig{Mode: config.AuthModeLocal}, wantErr: true},
 		{name: "unset mode", cfg: config.ApproverAuthConfig{}, wantErr: true},
 		{name: "unknown mode", cfg: config.ApproverAuthConfig{Mode: "none"}, wantErr: true},

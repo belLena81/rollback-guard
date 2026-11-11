@@ -653,6 +653,9 @@ type sharedMutationGuard struct {
 	staleReleases int
 	// releaseErr is returned by every Release call when set.
 	releaseErr error
+	// reconcileOnly marks every pending attempt reconcile-only, as the Postgres
+	// guard does when a resumed approval's approver is no longer authorized.
+	reconcileOnly bool
 	// completeErr is returned by Complete, after the lease check, when set.
 	completeErr error
 }
@@ -688,7 +691,7 @@ func (g *sharedMutationGuard) Begin(_ context.Context, key domain.IdempotencyKey
 		if existing.State() == domain.RollbackMutationCompleted {
 			return ports.RollbackMutationAttempt{Mutation: existing, Approved: g.approved[hash]}, nil
 		}
-		return ports.RollbackMutationAttempt{Mutation: existing, Approved: g.approved[hash], Lease: g.lease(key)}, nil
+		return ports.RollbackMutationAttempt{Mutation: existing, Approved: g.approved[hash], Lease: g.lease(key), ReconcileOnly: g.reconcileOnly}, nil
 	}
 	approved, ok := g.approved[hash]
 	if !ok {
@@ -700,7 +703,7 @@ func (g *sharedMutationGuard) Begin(_ context.Context, key domain.IdempotencyKey
 		return ports.RollbackMutationAttempt{}, err
 	}
 	g.records[key] = record
-	return ports.RollbackMutationAttempt{Mutation: record, Approved: approved, Lease: g.lease(key)}, nil
+	return ports.RollbackMutationAttempt{Mutation: record, Approved: approved, Lease: g.lease(key), ReconcileOnly: g.reconcileOnly}, nil
 }
 
 func (g *sharedMutationGuard) Complete(_ context.Context, attempt ports.RollbackMutationAttempt, alreadyApplied bool, completedAt time.Time) (domain.RollbackMutation, error) {

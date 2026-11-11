@@ -84,6 +84,13 @@ func (g *RollbackMutationGuard) Begin(
 		return ports.RollbackMutationAttempt{Mutation: existing}, nil
 	}
 	trusted, err := authorizeTrustedExecution(ctx, tx, g.approver, key, hash, found)
+	reconcileOnly := false
+	if found && errors.Is(err, domain.ErrApproverNotAuthorized) {
+		// An earlier attempt may already have patched: let the caller
+		// record that, but never mutate (ports.RollbackMutationAttempt).
+		reconcileOnly = true
+		err = nil
+	}
 	if err != nil {
 		return ports.RollbackMutationAttempt{}, err
 	}
@@ -98,7 +105,7 @@ func (g *RollbackMutationGuard) Begin(
 	}
 	releaseOnReturn = false
 	g.retainRollbackMutationLock(ctx, key, lock)
-	return ports.RollbackMutationAttempt{Mutation: existing, Approved: trusted.approved, Lease: lock.lease}, nil
+	return ports.RollbackMutationAttempt{Mutation: existing, Approved: trusted.approved, Lease: lock.lease, ReconcileOnly: reconcileOnly}, nil
 }
 
 // trustedExecution is the rollback the guard re-derived from the durable
@@ -114,8 +121,9 @@ type trustedExecution struct {
 // authorizes the rollback from them. In the same transaction it asks approver
 // whether the approving actor may still approve now, so a demoted or disabled
 // administrator's approval never starts a mutation. The check also runs when
-// resuming (fail closed: a refused resume leaves the pending row to be
-// reconciled). resume is true when a pending mutation already exists for the
+// resuming; a refused resume returns the trusted records together with the
+// error so Begin can hand out a reconcile-only attempt (an earlier attempt may
+// already have patched). resume is true when a pending mutation already exists for the
 // key, which is then resumed rather than authorized afresh.
 func authorizeTrustedExecution(
 	ctx context.Context,
@@ -166,10 +174,16 @@ func authorizeTrustedExecution(
 	if err != nil {
 		return trustedExecution{}, err
 	}
+	trusted := trustedExecution{approved: approved, proposal: proposal, record: record}
 	if err := approver.verifyApprover(ctx, tx, approval.Actor()); err != nil {
+		if resume && errors.Is(err, domain.ErrApproverNotAuthorized) {
+			// Begin turns this into a reconcile-only attempt; it needs the
+			// trusted records to read the target.
+			return trusted, err
+		}
 		return trustedExecution{}, err
 	}
-	return trustedExecution{approved: approved, proposal: proposal, record: record}, nil
+	return trusted, nil
 }
 
 func authorizeOrResume(

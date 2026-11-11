@@ -166,6 +166,13 @@ type RollbackMutationAttempt struct {
 	// Lease is set when Mutation is pending and this attempt holds the lock.
 	// It is empty for an already completed mutation, which holds no lock.
 	Lease RollbackMutationLease
+	// ReconcileOnly is set when a pending mutation is resumed but its
+	// approver is no longer authorized: an earlier attempt may already have
+	// patched, so the holder may only record a deployment already at the
+	// target revision (Complete with alreadyAtTarget) and must otherwise
+	// Release and refuse with domain.ApproverNotAuthorizedError. It never
+	// applies a mutation.
+	ReconcileOnly bool
 }
 type RollbackMutationGuard interface {
 	Begin(context.Context, domain.IdempotencyKey, domain.ProposalHash, time.Time) (RollbackMutationAttempt, error)

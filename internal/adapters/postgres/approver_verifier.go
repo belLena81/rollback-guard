@@ -75,6 +75,11 @@ func NewLocalApproverVerifier(actor domain.Actor) (ApproverVerifier, error) {
 	if !actor.Valid() || actor.Kind() != domain.ActorHuman {
 		return nil, &domain.ValidationError{Field: "local_actor", Reason: "must be a human actor"}
 	}
+	if _, isGitHub := domain.GitHubIDOf(actor.ID()); isGitHub {
+		// A github:<id> local actor would make that user's approvals
+		// executable regardless of their role in users.
+		return nil, &domain.ValidationError{Field: "local_actor", Reason: "must not be a github:<id> actor"}
+	}
 	return localApproverVerifier{actor: actor}, nil
 }
 

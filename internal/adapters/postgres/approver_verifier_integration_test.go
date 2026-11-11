@@ -191,10 +191,22 @@ func TestRollbackMutationGuardResumeRechecksApprover(t *testing.T) {
 	if err := guard.Release(context.Background(), attempt); err != nil {
 		t.Fatal(err)
 	}
+	if attempt.ReconcileOnly {
+		t.Fatal("first attempt of an authorized approver is reconcile-only")
+	}
 	setApproverUser(t, pool, 4001, "operator", false)
-	var refused *domain.ApproverNotAuthorizedError
-	if _, err := guard.Begin(context.Background(), "key-resume", proposal.Hash(), now.Add(time.Second)); !errors.As(err, &refused) {
-		t.Fatalf("resume error = %v, want ApproverNotAuthorizedError", err)
+	// An earlier attempt may already have patched, so the resume is not an
+	// error: it is reconcile-only (the caller may record a deployment already
+	// at the target, never patch).
+	resumed, err := guard.Begin(context.Background(), "key-resume", proposal.Hash(), now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("resume error = %v, want a reconcile-only attempt", err)
+	}
+	if !resumed.ReconcileOnly || resumed.Lease == "" || resumed.Approved.Proposal().Hash() != proposal.Hash() {
+		t.Fatalf("resumed attempt = reconcileOnly %v lease %q", resumed.ReconcileOnly, resumed.Lease)
+	}
+	if err := guard.Release(context.Background(), resumed); err != nil {
+		t.Fatal(err)
 	}
 	var state string
 	if err := pool.QueryRow(context.Background(), `SELECT state::text FROM rollback_mutations WHERE idempotency_key = 'key-resume'`).Scan(&state); err != nil {
