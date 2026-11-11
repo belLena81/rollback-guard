@@ -133,7 +133,7 @@ func singleValue(values []string) string {
 func (s *Server) writeLoginError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message, cause := loginErrorResponse(err)
 	s.logger.WarnContext(r.Context(), "github login failed", "status", status, "cause", cause, "request_id", requestID(r))
-	s.writeJSON(w, r, status, errorDTO{Error: code, Message: message, RequestID: requestID(r)})
+	s.writeJSON(w, r, status, errorBody(r, code, message))
 }
 
 func loginErrorResponse(err error) (int, string, string, string) {

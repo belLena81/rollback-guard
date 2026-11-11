@@ -66,7 +66,7 @@ Base path: `/v1`.
 
 Request bodies are size-limited and decoded strictly (unknown fields rejected). The contract is `api/openapi.yaml`.
 
-Until Phase 7, there is no authentication: a middleware injects a fixed local human `Actor`, and all services must stay on a trusted network.
+Authentication is `AUTH_MODE=github` (GitHub OAuth, server-side sessions, roles; `docs/phase7-auth.md`) or `AUTH_MODE=local`, where a middleware injects a fixed local human `Actor`. Only the orchestrator authenticates; the investigator and MCP servers must stay on a trusted network.
 
 ## Persistence
 

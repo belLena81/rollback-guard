@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
+	"github.com/belLena81/rollback-guard/internal/domain/domaintest"
 	"github.com/belLena81/rollback-guard/internal/ports"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -69,20 +69,12 @@ func authUser(t *testing.T, id domain.UserID, githubID int64, login string) doma
 
 func authHash(t *testing.T, fill byte) domain.SessionTokenHash {
 	t.Helper()
-	hash, err := domain.NewSessionTokenHash(bytes.Repeat([]byte{fill}, domain.SessionTokenHashLength))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return hash
+	return domaintest.SessionTokenHash(t, fill)
 }
 
 func authSession(t *testing.T, id domain.SessionID, userID domain.UserID, fill byte, ttl time.Duration) domain.Session {
 	t.Helper()
-	session, err := domain.NewSession(id, userID, authHash(t, fill), authNow, authNow.Add(ttl))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return session
+	return domaintest.Session(t, authNow, id, userID, fill, ttl)
 }
 
 // assertNoHashLeak fails when err's message carries the digest in any of

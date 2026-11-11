@@ -33,6 +33,6 @@ func (s *Server) limitLogin(next http.HandlerFunc) http.HandlerFunc {
 		seconds := max(int(math.Ceil(retryAfter.Seconds())), 1)
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
 		w.Header().Set("Cache-Control", "no-store")
-		s.writeJSON(w, r, http.StatusTooManyRequests, errorDTO{Error: codeRateLimited, Message: messageRateLimited, RequestID: requestID(r)})
+		s.writeJSON(w, r, http.StatusTooManyRequests, errorBody(r, codeRateLimited, messageRateLimited))
 	}
 }

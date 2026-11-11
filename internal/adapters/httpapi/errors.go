@@ -198,7 +198,12 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	case codeUnauthenticated:
 		w.Header().Set("WWW-Authenticate", "Bearer")
 	}
-	s.writeJSON(w, r, status, errorDTO{Error: code, Message: message, RequestID: requestID(r)})
+	s.writeJSON(w, r, status, errorBody(r, code, message))
+}
+
+// errorBody builds the fixed-shape error body for r, carrying its request ID.
+func errorBody(r *http.Request, code, message string) errorDTO {
+	return errorDTO{Error: code, Message: message, RequestID: requestID(r)}
 }
 
 // writeJSON encodes value for r. An encode failure becomes a correlated,

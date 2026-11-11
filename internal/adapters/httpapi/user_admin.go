@@ -162,7 +162,7 @@ func meOf(user domain.User) (meDTO, error) {
 func requestPrincipal(w http.ResponseWriter, r *http.Request) (domain.Principal, bool) {
 	principal, ok := httpserver.PrincipalFromContext(r.Context())
 	if !ok || !principal.Valid() {
-		writeJSON(w, http.StatusUnauthorized, errorDTO{Error: codeUnauthenticated, Message: messageUnauthenticated, RequestID: requestID(r)})
+		writeJSON(w, http.StatusUnauthorized, errorBody(r, codeUnauthenticated, messageUnauthenticated))
 		return domain.Principal{}, false
 	}
 	return principal, true

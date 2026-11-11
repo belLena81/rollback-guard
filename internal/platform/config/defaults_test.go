@@ -197,8 +197,8 @@ func TestObservabilityMCPDefaults(t *testing.T) {
 	}
 }
 
-// Until Phase 7 adds authentication no service may listen beyond loopback
-// unless the deployment asks for it.
+// No service may listen beyond loopback unless the deployment asks for it:
+// only the orchestrator authenticates, and only with AUTH_MODE=github.
 func TestEveryServiceBindsLoopbackByDefault(t *testing.T) {
 	loaders := map[string]func(*testing.T) (string, error){
 		"orchestrator": func(t *testing.T) (string, error) { cfg, err := Load(); return cfg.HTTPAddr, err },

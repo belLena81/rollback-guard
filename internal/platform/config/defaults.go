@@ -2,9 +2,10 @@ package config
 
 import "time"
 
-// Listen addresses. Every service binds loopback until Phase 7 adds
-// authentication; a deployment that must be reachable from another network
-// namespace sets HTTP_ADDR explicitly.
+// Listen addresses. Every service binds loopback by default (only the
+// orchestrator authenticates, and only with AUTH_MODE=github); a deployment
+// that must be reachable from another network namespace sets HTTP_ADDR
+// explicitly.
 const (
 	DefaultOrchestratorAddr          = "127.0.0.1:8080"
 	DefaultKubernetesReadMCPAddr     = "127.0.0.1:8091"
