@@ -6,7 +6,7 @@
 #     -t demo-api:v2-bad-error-storm .
 # `make images` builds all four tags from docs/local-demo-env.md.
 
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.26.11
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
 ARG TARGETOS

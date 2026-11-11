@@ -13,7 +13,7 @@
 # build arg. Everything else (DATABASE_URL, peer URLs, ...) is supplied by the
 # deployment, never baked into the image.
 
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.26.11
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
 ARG SERVICE
