@@ -240,13 +240,22 @@ e2e-decline: services-up
 # The test output is captured and scanned for every session token: the ones
 # in the auth-tokens file and the ones the test itself minted.
 E2E_TEST_LOG = $(DEMO_STATE_DIR)/e2e-test.log
-E2E_MINTED_TOKENS = $(DEMO_STATE_DIR)/e2e-minted-tokens
+# Absolute: go test runs the package with its working directory at test/e2e.
+E2E_MINTED_TOKENS = $(abspath $(DEMO_STATE_DIR)/e2e-minted-tokens)
 e2e-test:
 	@mkdir -p $(DEMO_STATE_DIR) && rm -f $(E2E_MINTED_TOKENS)
+	@# The scans run even when the tests fail (a leak matters most then); the
+	@# test's exit status is kept and the minted-token file is always removed.
+	@rc=0; \
 	$(DEMO_API_ENV) MAKE="$(MAKE)" E2E_MINTED_TOKENS_FILE=$(E2E_MINTED_TOKENS) bash -o pipefail -c \
-		'go test -tags=e2e -count=1 -timeout=40m -v ./test/e2e/... 2>&1 | tee $(E2E_TEST_LOG)'
-	$(DEMO_API_ENV) bash scripts/demo/check-no-tokens.sh $(E2E_TEST_LOG)
-	$(DEMO_API_ENV) AUTH_TOKENS_FILE=$(E2E_MINTED_TOKENS) bash scripts/demo/check-no-tokens.sh $(E2E_TEST_LOG)
+		'go test -tags=e2e -count=1 -timeout=40m -v ./test/e2e/... 2>&1 | tee $(E2E_TEST_LOG)' || rc=$$?; \
+	$(DEMO_API_ENV) bash scripts/demo/check-no-tokens.sh $(E2E_TEST_LOG) || rc=1; \
+	if [ -s $(E2E_MINTED_TOKENS) ]; then \
+		$(DEMO_API_ENV) AUTH_TOKENS_FILE=$(E2E_MINTED_TOKENS) bash scripts/demo/check-no-tokens.sh $(E2E_TEST_LOG) || rc=1; \
+	elif [ $$rc -eq 0 ]; then \
+		echo "e2e-test: no minted tokens were recorded" >&2; rc=1; \
+	fi; \
+	rm -f $(E2E_MINTED_TOKENS); exit $$rc
 
 # Signs the fake GitHub users in again (fresh session tokens in .demo/auth-tokens)
 # on a stack started with DEMO_AUTH=github.
