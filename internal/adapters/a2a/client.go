@@ -105,7 +105,7 @@ func (g *Gateway) Watch(
 	if err != nil {
 		return ports.InvestigationResult{}, fmt.Errorf("get investigation task: %w", err)
 	}
-	if task.Status.State.Terminal() {
+	if stopsWatch(task.Status.State) {
 		return resultFromTask(task)
 	}
 	watch := &taskWatch{gateway: g, ref: ref, progress: progress}
@@ -127,11 +127,12 @@ func (g *Gateway) Watch(
 	return resultFromTask(latest)
 }
 
-// resultAfterStreamError prefers the task's terminal state over a broken
-// event stream: the task may have finished while the stream failed.
+// resultAfterStreamError prefers the task's terminal or interrupted state
+// over a broken event stream: the task may have finished, or paused for its
+// caller, while the stream failed.
 func (g *Gateway) resultAfterStreamError(ctx context.Context, ref domain.InvestigationTaskRef, streamErr error) (ports.InvestigationResult, error) {
 	latest, latestErr := g.client.GetTask(extensionContext(ctx), &a2a.GetTaskRequest{ID: a2a.TaskID(ref.TaskID)})
-	if latestErr == nil && latest.Status.State.Terminal() {
+	if latestErr == nil && stopsWatch(latest.Status.State) {
 		return resultFromTask(latest)
 	}
 	return ports.InvestigationResult{}, fmt.Errorf("watch investigation task: %w", streamErr)
@@ -211,20 +212,31 @@ func (w *taskWatch) reportProgress(parts a2a.ContentParts) error {
 	return w.progress(stage)
 }
 
-// failureOfState is the error for a task that failed or was canceled, and nil
-// for every other state.
+// failureOfState is the error for a task that failed, was canceled, or
+// paused for its caller, and nil for every other state.
+//
+// An investigation never asks the orchestrator for input or authentication:
+// approval is an orchestrator REST command bound to the proposal hash, never
+// A2A task state (docs/adr.md, ADR-01). A task that enters input-required or
+// auth-required is therefore a protocol violation, not a state to wait in.
 func failureOfState(state a2a.TaskState) error {
 	switch state {
 	case a2a.TaskStateFailed, a2a.TaskStateRejected:
 		return errors.New("investigation task failed")
 	case a2a.TaskStateCanceled:
 		return context.Canceled
-	case a2a.TaskStateUnspecified, a2a.TaskStateSubmitted, a2a.TaskStateWorking, a2a.TaskStateCompleted,
-		a2a.TaskStateAuthRequired, a2a.TaskStateInputRequired:
+	case a2a.TaskStateAuthRequired, a2a.TaskStateInputRequired:
+		return fmt.Errorf("investigation task entered %s: %w", state, ports.ErrInvestigationProtocolViolation)
+	case a2a.TaskStateUnspecified, a2a.TaskStateSubmitted, a2a.TaskStateWorking, a2a.TaskStateCompleted:
 		return nil
 	default:
 		return nil
 	}
+}
+
+// interrupted reports whether state pauses the task for its caller.
+func interrupted(state a2a.TaskState) bool {
+	return state == a2a.TaskStateInputRequired || state == a2a.TaskStateAuthRequired
 }
 
 func (g *Gateway) Cancel(ctx context.Context, ref domain.InvestigationTaskRef) error {
@@ -233,6 +245,12 @@ func (g *Gateway) Cancel(ctx context.Context, ref domain.InvestigationTaskRef) e
 		return fmt.Errorf("cancel investigation task: %w", err)
 	}
 	return nil
+}
+
+// stopsWatch reports whether a task in state has nothing more to stream: it
+// is terminal, or it is interrupted and waits for input it never gets.
+func stopsWatch(state a2a.TaskState) bool {
+	return state.Terminal() || interrupted(state)
 }
 
 func (g *Gateway) Close() error {
@@ -257,6 +275,9 @@ func stageFromParts(parts a2a.ContentParts) (domain.InvestigationStage, error) {
 }
 
 func resultFromTask(task *a2a.Task) (ports.InvestigationResult, error) {
+	if interrupted(task.Status.State) {
+		return ports.InvestigationResult{}, failureOfState(task.Status.State)
+	}
 	if task.Status.State == a2a.TaskStateFailed || task.Status.State == a2a.TaskStateRejected {
 		return ports.InvestigationResult{}, errors.New("investigation task failed")
 	}

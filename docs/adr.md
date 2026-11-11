@@ -8,6 +8,8 @@ Use the official `github.com/a2aproject/a2a-go/v2` SDK for inter-agent communica
 
 Amended: A2A carries only the investigation task. Human approval is not modeled as A2A task state; it is an Orchestrator REST command bound to the proposal hash, because the Investigator must never take part in approval or execution.
 
+Enforced: the Investigator emits only `submitted`, `working`, `completed`, `failed`, and `canceled`. If an investigation task enters `input-required` or `auth-required`, the Orchestrator treats it as a protocol violation (`ports.ErrInvestigationProtocolViolation`): it stops watching, cancels the remote task, and fails the investigation as `invalid_investigation_result` without retrying. The Investigator's composition root and configuration have no rollback, approval, or auth surface. Pinned by `TestTaskStatesAreClassified`, `TestGatewayWatchFailsFastWhenInvestigatorAsksForInput`, `TestInvestigatorEmitsOnlyLifecycleStates` (`internal/adapters/a2a`), `TestCoordinatorFailsInvestigationOnProtocolViolationWithoutRetry` (`internal/application`), and `TestInvestigatorHasNoPathToRollbackOrApproval` / `TestInvestigatorConfigHasNoRollbackOrApprovalSettings` (`test/contract`).
+
 ## ADR-02: Use MCP as a Capability Boundary
 
 Expose infrastructure access through narrow MCP servers:
