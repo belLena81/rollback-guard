@@ -32,7 +32,7 @@ body="$(jq -nc \
     symptom: {kind: "http_error_rate", observed: $observed, threshold: $threshold, unit: "ratio", startedAt: $startedAt}}')"
 
 trace_id="$(new_trace_id)"
-api POST /v1/incidents "$body" "$trace_id"
+API_AS="$(auth_user operator)" api POST /v1/incidents "$body" "$trace_id"
 [[ "$API_STATUS" == 202 ]] || die "POST /v1/incidents returned $API_STATUS: $(error_summary)"
 
 id="$(jq -r '.incident.id' <<<"$API_BODY")"

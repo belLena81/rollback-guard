@@ -9,6 +9,10 @@
 DEMO_STATE_DIR=${DEMO_STATE_DIR:-.demo}
 ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://127.0.0.1:8080}
 STATE_FILE="$DEMO_STATE_DIR/last-incident"
+# Session tokens of the fake-GitHub users (auth-login.sh), KEY=TOKEN lines in a
+# 0600 file. Present only when the stack runs with DEMO_AUTH=github. Tokens
+# are never printed, logged or passed on a command line.
+AUTH_TOKENS_FILE=${AUTH_TOKENS_FILE:-$DEMO_STATE_DIR/auth-tokens}
 TARGET_CLUSTER=${TARGET_CLUSTER:-local}
 DEMO_NAMESPACE=${DEMO_NAMESPACE:-rollback-demo}
 DEMO_DEPLOYMENT=${DEMO_DEPLOYMENT:-demo-api}
@@ -73,21 +77,48 @@ new_span_id() {
   od -An -N8 -tx1 /dev/urandom | tr -d ' \n'
 }
 
+# session_token KEY prints the stored session token for KEY (fixed parser,
+# the file is never sourced), or nothing.
+session_token() {
+  [[ -f "$AUTH_TOKENS_FILE" ]] || return 0
+  local key="$1" line
+  while IFS= read -r line; do
+    if [[ "$line" == "$key="* ]]; then
+      echo "${line#*=}"
+      return 0
+    fi
+  done <"$AUTH_TOKENS_FILE"
+}
+
+# auth_user NAME prints NAME when the stack issues sessions (the token file
+# exists) and nothing in local mode, where requests carry no credentials.
+auth_user() {
+  if [[ -f "$AUTH_TOKENS_FILE" ]]; then echo "$1"; fi
+}
+
 # api METHOD PATH [BODY] [TRACE_ID]: sets API_STATUS and API_BODY. A trace ID
 # is sent as a sampled W3C traceparent so the request's trace can be read
-# back from the trace backend by ID.
+# back from the trace backend by ID. API_AS names the session to send
+# (default: the viewer session when sessions exist; set it empty to send no
+# credentials). The Bearer header goes to curl on stdin, never into argv.
 API_STATUS=""
 API_BODY=""
 api() {
-  local method="$1" path="$2" body="${3:-}" trace_id="${4:-}" out
-  local args=(-sS -X "$method" -H 'Accept: application/json' --max-time "${API_TIMEOUT:-30}" -o - -w '\n%{http_code}')
+  local method="$1" path="$2" body="${3:-}" trace_id="${4:-}" out as token=""
+  as="${API_AS-$(auth_user viewer)}"
+  if [[ -n "$as" ]]; then
+    token="$(session_token "$as")"
+    [[ -n "$token" ]] || die "no session token for '$as'; run make auth-login"
+  fi
+  local args=(-sS -K - -X "$method" -H 'Accept: application/json' --max-time "${API_TIMEOUT:-30}" -o - -w '\n%{http_code}')
   if [[ -n "$body" ]]; then
     args+=(-H 'Content-Type: application/json' --data-binary "$body")
   fi
   if [[ -n "$trace_id" ]]; then
     args+=(-H "traceparent: 00-$trace_id-$(new_span_id)-01")
   fi
-  out="$(curl "${args[@]}" "$ORCHESTRATOR_URL$path")" || die "$method $path: orchestrator unreachable at $ORCHESTRATOR_URL"
+  out="$({ if [[ -n "$token" ]]; then printf 'header = "Authorization: Bearer %s"\n' "$token"; fi; } |
+    curl "${args[@]}" "$ORCHESTRATOR_URL$path")" || die "$method $path: orchestrator unreachable at $ORCHESTRATOR_URL"
   API_STATUS="${out##*$'\n'}"
   API_BODY="${out%$'\n'*}"
 }

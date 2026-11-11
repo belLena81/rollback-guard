@@ -1,7 +1,7 @@
 .PHONY: fmt-check test test-race vet lint contract-test phase3-integration phase4-integration phase5-integration postgres-integration integration phase6-telemetry images images-services images-demo-api \
 	kind-create kind-delete kind-load deploy demo-v1 demo-v2-broken generate-load rbac-check kubeconfigs phase6-kind-check \
 	demo-reset services-build migrate-up services-up services-down services-status compose-up compose-down \
-	create-incident approve-latest-action verify e2e e2e-decline e2e-test
+	create-incident approve-latest-action verify e2e e2e-decline e2e-test auth-login
 
 # Build tags of every tagged test file, so vet and lint also cover the
 # integration and kind suites that plain `go test ./...` skips.
@@ -46,7 +46,11 @@ MIGRATE ?= migrate
 # The demo uses a short metrics window so detection and recovery are visible
 # within a minute of a rollout instead of five (domain minimum: 30s).
 METRICS_WINDOW ?= 30s
-SERVICES_ENV = DEMO_STATE_DIR=$(DEMO_STATE_DIR) SERVICES_BIN_DIR=$(SERVICES_BIN_DIR) METRICS_WINDOW=$(METRICS_WINDOW)
+# local (default): the fixed local actor, no login. github: the orchestrator runs
+# AUTH_MODE=github against a fake GitHub and the demo scripts use real sessions
+# (docs/phase7-auth.md, "End-to-end with a real session"). The e2e targets force github.
+DEMO_AUTH ?= local
+SERVICES_ENV = DEMO_AUTH=$(DEMO_AUTH) DEMO_STATE_DIR=$(DEMO_STATE_DIR) SERVICES_BIN_DIR=$(SERVICES_BIN_DIR) METRICS_WINDOW=$(METRICS_WINDOW)
 COMPOSE ?= docker compose
 COMPOSE_FILE ?= deploy/compose/compose.yaml
 # Set to `--profile tracing` to also start Jaeger (OTLP on 4318, UI/API on 16686).
@@ -58,7 +62,7 @@ INCIDENT_THRESHOLD ?= 0.1
 # verify: `resolved` (default) or `declined`.
 VERIFY_EXPECT ?= resolved
 STABLE_IMAGE ?= demo-api:v1-healthy
-DEMO_API_ENV = DEMO_STATE_DIR=$(DEMO_STATE_DIR) ORCHESTRATOR_URL=$(ORCHESTRATOR_URL) \
+DEMO_API_ENV = DEMO_AUTH=$(DEMO_AUTH) DEMO_STATE_DIR=$(DEMO_STATE_DIR) ORCHESTRATOR_URL=$(ORCHESTRATOR_URL) \
 	KUBECTL=$(KUBECTL) KUBE_CONTEXT=$(KUBE_CONTEXT) DEMO_NAMESPACE=$(DEMO_NAMESPACE) DEMO_DEPLOYMENT=$(DEMO_DEPLOYMENT) \
 	DEMO_URL=$(DEMO_URL) METRICS_WINDOW=$(METRICS_WINDOW) INCIDENT_THRESHOLD=$(INCIDENT_THRESHOLD) STABLE_IMAGE=$(STABLE_IMAGE)
 
@@ -182,6 +186,8 @@ services-build:
 		echo "==> go build $(SERVICES_BIN_DIR)/$$service"; \
 		go build -o $(SERVICES_BIN_DIR)/$$service ./cmd/$$service; \
 	done
+	@echo "==> go build $(SERVICES_BIN_DIR)/fake-github (test tool, never in an image)"
+	@go build -o $(SERVICES_BIN_DIR)/fake-github ./test/tools/fake-github
 
 # The command line names $$DATABASE_URL, never its value.
 migrate-up:
@@ -216,8 +222,10 @@ approve-latest-action:
 verify:
 	$(DEMO_API_ENV) bash scripts/demo/verify.sh $(VERIFY_EXPECT)
 
-# Unattended Phase 6 exit gate: healthy -> load -> broken -> threshold in
+# Unattended Phase 6/7 exit gate, driven by real sessions against a fake GitHub:
+# healthy -> load -> broken -> threshold in
 # Prometheus -> incident -> awaiting_approval -> approve -> verify.
+e2e e2e-decline e2e-test: DEMO_AUTH := github
 e2e: services-up
 	$(DEMO_API_ENV) MAKE="$(MAKE)" bash scripts/demo/e2e.sh rollback
 
@@ -230,3 +238,8 @@ e2e-decline: services-up
 # services-up first). The e2e build tag keeps it out of `go test ./...`.
 e2e-test:
 	$(DEMO_API_ENV) MAKE="$(MAKE)" go test -tags=e2e -count=1 -timeout=40m -v ./test/e2e/...
+
+# Signs the fake GitHub users in again (fresh session tokens in .demo/auth-tokens)
+# on a stack started with DEMO_AUTH=github.
+auth-login:
+	$(DEMO_API_ENV) bash scripts/demo/auth-login.sh all

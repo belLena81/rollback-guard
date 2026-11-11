@@ -51,7 +51,7 @@ echo "$SCRIPT_NAME: proposal expires $(jq -r '.proposal.expiresAt' <<<"$summary"
 body="$(jq -nc --arg actionId "$action_id" --arg proposalHash "$proposal_hash" '{actionId: $actionId, proposalHash: $proposalHash}')"
 trace_id="$(new_trace_id)"
 state_set APPROVE_TRACE_ID "$trace_id"
-API_TIMEOUT="${API_TIMEOUT:-900}" api POST "/v1/incidents/$id/approve" "$body" "$trace_id"
+API_AS="${APPROVE_AS-$(auth_user administrator)}" API_TIMEOUT="${API_TIMEOUT:-900}" api POST "/v1/incidents/$id/approve" "$body" "$trace_id"
 
 if [[ "$API_STATUS" == 200 ]]; then
   echo "$SCRIPT_NAME: approved; incident $id is now $(jq -r '.incident.status' <<<"$API_BODY") (execution $(jq -r '.execution.outcome // "none"' <<<"$API_BODY"), verification passed=$(jq -r 'if .verification then .verification.passed else "none" end' <<<"$API_BODY"))"

@@ -10,8 +10,14 @@
 # services-up/services-down/services-status build, migrate, and generate the
 # service-account kubeconfigs first (docs/local-demo-env.md).
 #
-# Every process binds loopback (the config defaults); nothing is authenticated
-# before Phase 7. Database URLs and kubeconfig contents are never printed.
+# Every process binds loopback (the config defaults). With DEMO_AUTH=github
+# (make e2e, make services-up DEMO_AUTH=github) a sixth process, the fake
+# GitHub (test/tools/fake-github), is started first and the orchestrator runs
+# AUTH_MODE=github against it; once ready, auth-login.sh signs the fake users
+# in. The client secret and state secret are generated per start, passed only
+# through the child environment, and never written or printed. The default
+# DEMO_AUTH=local keeps the unauthenticated local actor. Database URLs and
+# kubeconfig contents are never printed.
 set -euo pipefail
 
 action="${1:?usage: services.sh up|down|status}"
@@ -20,6 +26,9 @@ state_dir="${DEMO_STATE_DIR:-.demo}"
 bin_dir="${SERVICES_BIN_DIR:-bin/demo}"
 ready_timeout="${SERVICES_READY_TIMEOUT:-60}"
 stop_timeout="${SERVICES_STOP_TIMEOUT:-15}"
+auth_mode="${DEMO_AUTH:-local}"
+fake_port="${FAKE_GITHUB_PORT:-9180}"
+auth_mode_file="$state_dir/auth-mode"
 pid_dir="$state_dir/pids"
 log_dir="$state_dir/logs"
 
@@ -56,8 +65,17 @@ running() {
   [[ "$args" == *"$(basename "$(binary_for "$name")")"* ]]
 }
 
+# ready_code NAME PORT prints 200 when the process is ready. The fake GitHub
+# has no health endpoint; an authorize request without parameters answers 400
+# once it serves.
 ready_code() {
-  curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$1/health/ready" 2>/dev/null || true
+  local code
+  if [[ "$1" == fake-github ]]; then
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$2/login/oauth/authorize" 2>/dev/null || true)"
+    if [[ "$code" == 400 ]]; then echo 200; else echo "$code"; fi
+    return 0
+  fi
+  curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$2/health/ready" 2>/dev/null || true
 }
 
 # start_one launches one process with its own environment. Only the variables
@@ -94,7 +112,7 @@ wait_ready() {
       tail -n 20 "$log_dir/$name.log" >&2 || true
       return 1
     fi
-    if [[ "$(ready_code "$port")" == 200 ]]; then
+    if [[ "$(ready_code "$name" "$port")" == 200 ]]; then
       echo "    $name ready"
       return 0
     fi
@@ -125,6 +143,25 @@ stop_one() {
   rm -f "$pid_file"
 }
 
+# The fake GitHub's users and OAuth client (docs/phase7-auth.md). Only the
+# bootstrap administrator is passed to the orchestrator; the others start as
+# viewers (the outsider is outside the allowed organization).
+fake_org=demo-org
+fake_client_id=rollback-guard-e2e
+fake_users="demo-administrator:1001:$fake_org;demo-operator:1002:$fake_org;demo-viewer:1003:$fake_org;demo-outsider:1004:other-org"
+fake_client_secret=""
+
+random_secret() {
+  od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+start_fake_github() {
+  fake_client_secret="$(random_secret)"
+  start_one fake-github "$fake_port" FAKE_GITHUB_ADDR="127.0.0.1:$fake_port" \
+    FAKE_GITHUB_CLIENT_ID="$fake_client_id" FAKE_GITHUB_CLIENT_SECRET="$fake_client_secret" \
+    FAKE_GITHUB_USERS="$fake_users"
+}
+
 up() {
   : "${DATABASE_URL:?DATABASE_URL is required}"
   : "${PROMETHEUS_URL:?PROMETHEUS_URL is required}"
@@ -132,6 +169,12 @@ up() {
   [[ -f "$readonly_kubeconfig" && -f "$rollback_kubeconfig" ]] || fail "service-account kubeconfigs missing; run make kubeconfigs"
   mkdir -p "$pid_dir" "$log_dir"
   chmod 700 "$state_dir"
+  [[ "$auth_mode" == local || "$auth_mode" == github ]] || fail "DEMO_AUTH must be local or github"
+  if running orchestrator && [[ "$(cat "$auth_mode_file" 2>/dev/null || true)" != "$auth_mode" ]]; then
+    fail "the orchestrator is running in another auth mode; run make services-down first"
+  fi
+  echo "$auth_mode" >"$auth_mode_file"
+  if [[ "$auth_mode" == local ]]; then rm -f "$state_dir/auth-tokens"; fi
 
   local common=(ALLOWED_TARGETS="${ALLOWED_TARGETS:-local/rollback-demo/demo-api/demo-api}")
   if [[ -n "${METRICS_WINDOW:-}" ]]; then common+=("METRICS_WINDOW=$METRICS_WINDOW"); fi
@@ -139,6 +182,16 @@ up() {
   local observability_url="http://127.0.0.1:8093/mcp" investigator_url="http://127.0.0.1:8094"
 
   trap 'echo "services: start-up failed; stopping what was started" >&2; down' ERR
+
+  local auth_env=()
+  if [[ "$auth_mode" == github ]]; then
+    start_fake_github
+    auth_env=(AUTH_MODE=github AUTH_GITHUB_CLIENT_ID="$fake_client_id" AUTH_GITHUB_CLIENT_SECRET="$fake_client_secret"
+      AUTH_STATE_SECRET="$(random_secret)" AUTH_GITHUB_ALLOWED_ORG="$fake_org"
+      AUTH_GITHUB_REDIRECT_URL="http://127.0.0.1:8080/v1/auth/github/callback"
+      AUTH_GITHUB_BASE_URL="http://127.0.0.1:$fake_port" AUTH_GITHUB_API_URL="http://127.0.0.1:$fake_port"
+      AUTH_BOOTSTRAP_ADMINS="demo-administrator:1001" SESSION_COOKIE_SECURE=false)
+  fi
 
   start_one kubernetes-mcp-readonly 8091 "${common[@]}" \
     KUBERNETES_MCP_MODE=readonly CLUSTER_ID="${CLUSTER_ID:-local}" \
@@ -167,7 +220,10 @@ up() {
   for var in A2A_TASK_TIMEOUT RECOVERY_TIMEOUT RECOVERY_POLL_INTERVAL; do
     if [[ -n "${!var:-}" ]]; then orchestrator_env+=("$var=${!var}"); fi
   done
-  start_one orchestrator 8080 "${common[@]}" "${orchestrator_env[@]}"
+  start_one orchestrator 8080 "${common[@]}" "${orchestrator_env[@]}" "${auth_env[@]}"
+  if [[ "$auth_mode" == github ]]; then
+    ORCHESTRATOR_URL="http://127.0.0.1:8080" DEMO_STATE_DIR="$state_dir" bash "$(dirname "$0")/auth-login.sh" all
+  fi
   trap - ERR
   echo "all services ready; logs in $log_dir"
 }
@@ -178,6 +234,7 @@ down() {
     name="${services[index]%%:*}"
     stop_one "$name"
   done
+  stop_one fake-github
 }
 
 status() {
@@ -188,7 +245,7 @@ status() {
     port="${entry##*:}"
     if running "$name"; then
       state=running
-      code="$(ready_code "$port")"
+      code="$(ready_code "$name" "$port")"
       printf '%-26s %-8s %-8s %s\n' "$name" "$(cat "$pid_dir/$name.pid")" "$state" "$code"
       [[ "$code" == 200 ]] || failed=1
     else
@@ -196,6 +253,16 @@ status() {
       failed=1
     fi
   done
+  if [[ "$(cat "$auth_mode_file" 2>/dev/null || true)" == github ]]; then
+    if running fake-github; then
+      code="$(ready_code fake-github "$fake_port")"
+      printf '%-26s %-8s %-8s %s\n' fake-github "$(cat "$pid_dir/fake-github.pid")" running "$code"
+      [[ "$code" == 200 ]] || failed=1
+    else
+      printf '%-26s %-8s %-8s %s\n' fake-github - stopped -
+      failed=1
+    fi
+  fi
   return "$failed"
 }
 
