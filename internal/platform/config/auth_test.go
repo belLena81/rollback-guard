@@ -58,7 +58,11 @@ func TestLoadAuthConfig(t *testing.T) {
 		want    AuthConfig
 		wantErr string
 	}{
-		{name: "default is local", local: true, want: AuthConfig{Mode: AuthModeLocal}},
+		// The default fails closed: no AUTH_MODE means github, which needs
+		// the GitHub settings.
+		{name: "default is github and fails closed without settings", local: true, env: map[string]string{"AUTH_MODE": ""}, wantErr: "AUTH_GITHUB_CLIENT_ID is required"},
+		{name: "default is github", env: map[string]string{"AUTH_MODE": ""}, want: AuthConfig{Mode: AuthModeGitHub, GitHub: validGitHubConfig()}},
+		{name: "blank mode is the default", env: map[string]string{"AUTH_MODE": "  "}, want: AuthConfig{Mode: AuthModeGitHub, GitHub: validGitHubConfig()}},
 		{name: "explicit local", local: true, env: map[string]string{"AUTH_MODE": "local"}, want: AuthConfig{Mode: AuthModeLocal}},
 		{
 			name: "local ignores invalid github settings", local: true,

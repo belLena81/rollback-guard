@@ -183,7 +183,9 @@ up() {
 
   trap 'echo "services: start-up failed; stopping what was started" >&2; down' ERR
 
-  local auth_env=()
+  # The orchestrator defaults to AUTH_MODE=github and refuses to start without
+  # the GitHub settings, so the no-login demo opts in to local explicitly.
+  local auth_env=(AUTH_MODE=local)
   if [[ "$auth_mode" == github ]]; then
     start_fake_github
     auth_env=(AUTH_MODE=github AUTH_GITHUB_CLIENT_ID="$fake_client_id" AUTH_GITHUB_CLIENT_SECRET="$fake_client_secret"

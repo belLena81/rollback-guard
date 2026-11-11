@@ -28,7 +28,7 @@ func startServer(t *testing.T, handler http.Handler, limits timeouts) (string, f
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, listener, "test", handler, discardLogger(), limits) }()
+	go func() { done <- serve(ctx, listener, Config{Name: "test"}, handler, discardLogger(), limits) }()
 	var stopped atomic.Bool
 	stop := func() error {
 		if stopped.Swap(true) {

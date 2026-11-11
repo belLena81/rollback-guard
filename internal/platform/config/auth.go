@@ -28,7 +28,10 @@ const (
 
 // GitHub login settings.
 const (
-	defaultAuthMode      = AuthModeLocal
+	// defaultAuthMode fails closed: without AUTH_MODE the orchestrator needs
+	// the GitHub settings and refuses to start without them. Development and
+	// demo runs opt in to AUTH_MODE=local explicitly.
+	defaultAuthMode      = AuthModeGitHub
 	DefaultGitHubBaseURL = "https://github.com"
 	DefaultGitHubAPIURL  = "https://api.github.com"
 	// MinAuthStateSecretBytes is the minimum AUTH_STATE_SECRET length: the
@@ -76,7 +79,8 @@ func (Secret) Format(state fmt.State, _ rune) {
 
 // AuthConfig configures request authentication of the orchestrator.
 type AuthConfig struct {
-	// Mode is AUTH_MODE: local (default, development only) or github.
+	// Mode is AUTH_MODE: github (default) or local (development only, set
+	// explicitly).
 	Mode AuthMode
 	// GitHub is set only in github mode.
 	GitHub GitHubAuthConfig

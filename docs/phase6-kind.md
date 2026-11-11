@@ -84,7 +84,7 @@ KUBECONFIG=.demo/kubeconfig-rollback KUBERNETES_MCP_MODE=rollback CLUSTER_ID=loc
   DATABASE_URL="$ROLLBACK_MCP_DATABASE_URL" go run ./cmd/kubernetes-mcp                                         # 127.0.0.1:8092
 PROMETHEUS_URL="$PROMETHEUS_URL" go run ./cmd/observability-mcp                                                  # 127.0.0.1:8093
 DATABASE_URL="$DATABASE_URL" go run ./cmd/investigator                                                            # 127.0.0.1:8094
-DATABASE_URL="$DATABASE_URL" go run ./cmd/orchestrator                                                            # 127.0.0.1:8080
+AUTH_MODE=local DATABASE_URL="$DATABASE_URL" go run ./cmd/orchestrator                                            # 127.0.0.1:8080, no login
 ```
 
 Default URLs and `ALLOWED_TARGETS=local/rollback-demo/demo-api/demo-api` already line up (see `docs/phase3-mcp.md` and `docs/phase4-a2a.md`). The rollback MCP should use the dedicated database role described in `docs/phase3-mcp.md`.

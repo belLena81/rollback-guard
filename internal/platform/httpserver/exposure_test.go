@@ -37,11 +37,16 @@ func TestLoopbackOnly(t *testing.T) {
 
 func TestServeWarnsOnlyWhenListeningBeyondLoopback(t *testing.T) {
 	for _, test := range []struct {
-		name, addr string
-		wantWarn   bool
+		name, addr    string
+		authenticated bool
+		wantWarn      bool
 	}{
 		{name: "loopback", addr: "127.0.0.1:0"},
 		{name: "all interfaces", addr: "0.0.0.0:0", wantWarn: true},
+		// The orchestrator in AUTH_MODE=github authenticates every request,
+		// so it must not claim to have no authentication.
+		{name: "all interfaces, authenticated", addr: "0.0.0.0:0", authenticated: true},
+		{name: "loopback, authenticated", addr: "127.0.0.1:0", authenticated: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			listener, err := net.Listen("tcp", test.addr)
@@ -57,7 +62,7 @@ func TestServeWarnsOnlyWhenListeningBeyondLoopback(t *testing.T) {
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
-				done <- serve(ctx, listener, "svc", http.NotFoundHandler(), slog.New(slog.NewTextHandler(&logs, nil)), defaultTimeouts())
+				done <- serve(ctx, listener, Config{Name: "svc", Authenticated: test.authenticated}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(&logs, nil)), defaultTimeouts())
 			}()
 			// One answered request proves the start-up lines were logged.
 			if _, err := fetch(t, http.MethodGet, "http://"+net.JoinHostPort("127.0.0.1", port)); err != nil {
@@ -71,6 +76,9 @@ func TestServeWarnsOnlyWhenListeningBeyondLoopback(t *testing.T) {
 			warned := strings.Contains(logs.String(), "level=WARN") && strings.Contains(logs.String(), "no authentication")
 			if warned != test.wantWarn {
 				t.Fatalf("warned = %t, want %t; logs:\n%s", warned, test.wantWarn, logs.String())
+			}
+			if test.authenticated && strings.Contains(logs.String(), "no authentication") {
+				t.Fatalf("an authenticated server claims no authentication; logs:\n%s", logs.String())
 			}
 		})
 	}

@@ -45,6 +45,10 @@ type Config struct {
 	Name string
 	// Addr is the TCP listen address, for example "127.0.0.1:8080".
 	Addr string
+	// Authenticated reports that the handler authenticates every request
+	// (the orchestrator in AUTH_MODE=github). Unauthenticated services warn
+	// when they listen beyond loopback.
+	Authenticated bool
 }
 
 type timeouts struct {
@@ -70,7 +74,7 @@ func Serve(ctx context.Context, cfg Config, handler http.Handler, logger *slog.L
 	if err != nil {
 		return fmt.Errorf("%s listen on %s: %w", cfg.Name, cfg.Addr, err)
 	}
-	return serve(ctx, listener, cfg.Name, handler, logger, defaultTimeouts())
+	return serve(ctx, listener, cfg, handler, logger, defaultTimeouts())
 }
 
 func validate(cfg Config, handler http.Handler, logger *slog.Logger) error {
@@ -83,7 +87,8 @@ func validate(cfg Config, handler http.Handler, logger *slog.Logger) error {
 	return nil
 }
 
-func serve(ctx context.Context, listener net.Listener, name string, handler http.Handler, logger *slog.Logger, limits timeouts) error {
+func serve(ctx context.Context, listener net.Listener, cfg Config, handler http.Handler, logger *slog.Logger, limits timeouts) error {
+	name := cfg.Name
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: limits.readHeader,
@@ -94,9 +99,10 @@ func serve(ctx context.Context, listener net.Listener, name string, handler http
 	errCh := make(chan error, 1)
 	go func() {
 		logger.InfoContext(ctx, name+" listening", "addr", listener.Addr().String())
-		if !loopbackOnly(listener.Addr()) {
-			// Nothing is authenticated before Phase 7, so an operator who
-			// set HTTP_ADDR beyond loopback should see what that exposes.
+		if !cfg.Authenticated && !loopbackOnly(listener.Addr()) {
+			// Only the orchestrator in AUTH_MODE=github authenticates, so an
+			// operator who set HTTP_ADDR of any other service (or of a local
+			// mode orchestrator) beyond loopback should see what that exposes.
 			logger.WarnContext(
 				ctx,
 				name+" is reachable beyond loopback and has no authentication; keep it on a trusted network",

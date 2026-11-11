@@ -35,6 +35,10 @@ func isolateEnvironment(t *testing.T, env map[string]string) {
 	for _, key := range everyVariable {
 		t.Setenv(key, "")
 	}
+	// The default AUTH_MODE (github) needs the GitHub settings; tests about
+	// other settings run local. TestLoadAuthConfig pins the default by
+	// setting AUTH_MODE to "".
+	t.Setenv("AUTH_MODE", string(AuthModeLocal))
 	for key, value := range env {
 		t.Setenv(key, value)
 	}

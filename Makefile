@@ -46,7 +46,8 @@ MIGRATE ?= migrate
 # The demo uses a short metrics window so detection and recovery are visible
 # within a minute of a rollout instead of five (domain minimum: 30s).
 METRICS_WINDOW ?= 30s
-# local (default): the fixed local actor, no login. github: the orchestrator runs
+# local (default): services.sh sets AUTH_MODE=local explicitly (the orchestrator
+# itself defaults to github): the fixed local actor, no login. github: the orchestrator runs
 # AUTH_MODE=github against a fake GitHub and the demo scripts use real sessions
 # (docs/phase7-auth.md, "End-to-end with a real session"). The e2e targets force github.
 DEMO_AUTH ?= local

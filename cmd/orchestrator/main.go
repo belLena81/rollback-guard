@@ -464,7 +464,8 @@ func serve(ctx context.Context, cfg config.Config, handler http.Handler, coordin
 		forwardCoordinatorError(ctx, coordinatorErr, coordinator.Run(ctx))
 	}()
 	go func() {
-		serverErr <- httpserver.Serve(ctx, httpserver.Config{Name: serviceName, Addr: cfg.HTTPAddr}, handler, logger)
+		listen := httpserver.Config{Name: serviceName, Addr: cfg.HTTPAddr, Authenticated: cfg.Auth.Mode == config.AuthModeGitHub}
+		serverErr <- httpserver.Serve(ctx, listen, handler, logger)
 	}()
 	select {
 	case err := <-serverErr:

@@ -48,6 +48,6 @@ invalidate.
 - No domain, handler-signature or audit-schema changes; auth is a second `AuthMiddleware`
   plus an `AccessPolicy` check before the approval transaction.
 - Coarse three-role model only; no per-resource permissions.
-- `AUTH_MODE=local` keeps the fixed dev actor; `github` fails closed on missing config.
+- `AUTH_MODE=local` keeps the fixed dev actor; `github` fails closed on missing config. (Follow-up: `github` became the default, so `local` must be set explicitly.)
 - Session tokens, OAuth secrets and GitHub tokens are never logged or persisted in clear.
 - The token appears once in the callback JSON body for scripts; clients must treat it as a secret.

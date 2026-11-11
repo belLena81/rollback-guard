@@ -39,7 +39,7 @@ go run ./cmd/investigator
 
 DATABASE_URL='postgres://rollback_guard:rollback_guard@127.0.0.1:5432/rollback_guard?sslmode=disable' \
 INVESTIGATOR_URL='http://127.0.0.1:8094' \
-go run ./cmd/orchestrator
+AUTH_MODE=local go run ./cmd/orchestrator   # no login; the default AUTH_MODE=github needs docs/phase7-auth.md
 ```
 
 Check discovery and create an asynchronous incident:

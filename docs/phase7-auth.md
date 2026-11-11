@@ -14,7 +14,7 @@ Contract: `DEVELOPMENT_PLAN.md` "Phase 7", `.agents/07-auth-identity-agent.md`. 
 - Domain adds `Role` (ordered, `ParseRole`), `User`, and `Action` (create, read, reject, cancel, approve, admin). A pure `domain.RolePolicy` maps role and action to allow or deny. Approving a production rollback requires `administrator`; create, reject and cancel require `operator`; reads require `viewer`.
 - The application layer owns a small `AccessPolicy` interface (`Authorize(ctx, actor, action) error`). The Postgres-backed implementation resolves the live role. `ApprovalService` calls it before the transaction. Denial is a typed domain error (REST 403).
 - `SessionAuthMiddleware` is the second `httpserver.AuthMiddleware`. It resolves token to session to user on every request (join on `users`), rejects revoked, expired or disabled sessions with 401, and injects the typed `Actor`. `/health/*` and `/metrics` stay open. Handler signatures do not change.
-- `AUTH_MODE=local|github`. `local` keeps today's fixed actor for dev. `github` fails closed at startup when client id, secret, redirect URL, allowed org or session TTL is missing.
+- `AUTH_MODE=local|github`, default `github` (follow-up 5). `local` keeps today's fixed actor for dev and must be set explicitly. `github` fails closed at startup when client id, secret, redirect URL, allowed org or session TTL is missing.
 - OAuth: authorization code with `state` and PKCE, `golang.org/x/oauth2`. Org membership is checked at login; a non-member gets no session. The GitHub access token is used once and never stored or logged.
 - Scope: orchestrator REST only. Investigator and MCP servers remain network-trusted, as documented.
 - Never logged or persisted: client secret, session tokens, GitHub tokens, auth headers.
@@ -37,7 +37,7 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 
 ## GitHub login (7.4)
 
-**Production must set `AUTH_MODE=github`.** The default `local` injects the fixed `LOCAL_ACTOR_ID` on every request and exists only for local development. In `local` mode the login routes are not registered (404) and the GitHub variables are ignored without validation. In `github` mode every variable below is validated at startup and the orchestrator refuses to start on any problem (fail closed). It logs the auth mode at startup (no secrets), and logs a warning when `SESSION_COOKIE_SECURE=false`.
+**`AUTH_MODE` defaults to `github` (fail closed).** An orchestrator started without `AUTH_MODE` needs every GitHub variable below and refuses to start without them. `local` injects the fixed `LOCAL_ACTOR_ID` on every request, exists only for local development, and must be set explicitly (`scripts/demo/services.sh` does for `DEMO_AUTH=local`). In `local` mode the login routes are not registered (404) and the GitHub variables are ignored without validation. In `github` mode every variable below is validated at startup and the orchestrator refuses to start on any problem (fail closed). It logs the auth mode at startup (no secrets), and logs a warning when `SESSION_COOKIE_SECURE=false`.
 
 - **Login** (`GET /v1/auth/github/login`). Draws a 256-bit `state` and a 256-bit PKCE verifier from crypto/rand and seals them with an expiry into the `rollback_guard_oauth_state` cookie. The seal is HMAC-SHA256 keyed by `AUTH_STATE_SECRET`. The cookie is `HttpOnly`, `SameSite=Lax` (the callback is a cross-site top-level redirect), `Path=/v1/auth/github`, lives 10 minutes, and is `Secure` per `SESSION_COOKIE_SECURE`. The response is `302` to GitHub with scopes `read:org user:email` and `code_challenge_method=S256`. There is no `return_to` parameter.
 - **Callback** (`GET /v1/auth/github/callback`). Clears the state cookie on every outcome, then performs these steps in order:
@@ -57,7 +57,7 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 
 | Variable | Default | Rule (github mode) |
 |---|---|---|
-| `AUTH_MODE` | `local` | `local` or `github` |
+| `AUTH_MODE` | `github` | `github` or `local` (development only, explicit) |
 | `AUTH_GITHUB_CLIENT_ID` | none | required, printable ASCII, at most 128 characters |
 | `AUTH_GITHUB_CLIENT_SECRET` | none | required; never logged or rendered |
 | `AUTH_GITHUB_REDIRECT_URL` | none | required, absolute, HTTPS unless loopback, no credentials, query or fragment; must match the OAuth app |
@@ -91,7 +91,7 @@ Open gaps of this area are consolidated in "Known gaps" at the end of this docum
 - **Login helper.** `scripts/demo/auth-login.sh` follows `GET /v1/auth/github/login` (302, state cookie in a private jar), requests the fake's authorize URL with `login=demo-<name>` (302 with the code) and completes `GET /v1/auth/github/callback` with the cookie. URLs carrying `state` or `code` go to `curl` on stdin; only HTTP statuses are printed. Tokens are kept in `.demo/auth-tokens` (`0600`, inside the `0700`, gitignored `.demo/`) and sent as `Authorization: Bearer` via a curl config on stdin.
 - **Secrets.** The client secret and `AUTH_STATE_SECRET` are random per `services-up`, passed through process environments only. Nothing is committed, written or echoed. `scripts/demo/check-no-tokens.sh` (a CI step) fails if any stored session token appears in the service logs or captured e2e output.
 - **Asserted** (`e2e.sh`, mirrored by `test/e2e/auth_test.go`): anonymous `401`; each role's `GET /v1/me`; non-member login `403` and no session; viewer create `403`; logout `204` then `401` on that token while another session of the same user stays valid; operator create; operator approve and viewer reject on an awaiting proposal `403` with the incident unchanged; administrator approve; audit actors `github:1002` (creation) and `github:1001` (approval, kind `human`). The decline scenario has no proposal, so only the creation actor and the absence of approval and execution events are asserted.
-- **Default mode.** `AUTH_MODE` and `DEMO_AUTH` stay `local` for ordinary development (`make services-up`); the e2e targets force `github`.
+- **Default mode.** `DEMO_AUTH` stays `local` for ordinary development (`make services-up`), and `services.sh` then passes `AUTH_MODE=local` explicitly because the orchestrator defaults to `github`; the e2e targets force `github`.
 
 ## Tasks
 
@@ -159,7 +159,7 @@ Open or accepted at Phase 7 exit.
 5. **Token check opens a read-write transaction.** Session resolution runs through the unit of work on every request although it only reads.
 6. **CSRF host comparison behind proxies.** The `Origin` or `Referer` host is compared with `Host` as received; a reverse proxy must preserve `Host` or cookie-authenticated writes get 403. Bearer requests are exempt.
 7. **State cookie not bound to a browser session.** An attacker who can plant cookies for the host (for example from a sibling subdomain) could perform a login CSRF into their own account. Serve the orchestrator from a host without untrusted sibling subdomains.
-8. **`AUTH_MODE=local` default.** It injects one fixed human actor that can approve. Nothing refuses it on a non-loopback bind; the server only logs a warning, and that warning says "has no authentication" even in `github` mode. Production must set `AUTH_MODE=github`.
+8. **`AUTH_MODE=local` on a non-loopback bind.** The default is now `github` (fail closed), so `local` must be set explicitly. It injects one fixed human actor that can approve, and nothing refuses it beyond loopback; the server only logs the "has no authentication" warning, which a `github` mode orchestrator no longer logs.
 9. **Open `/metrics`.** It is a public path so Prometheus can scrape it without a session.
 10. **Audit reads.** No API lists auth audit rows; read `auth_audit_events` directly.
 11. **Token absence in A2A messages, MCP results and `operation_events` is not test-pinned** (last exit-gate row).
