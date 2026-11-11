@@ -323,6 +323,58 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
+  /v1/users/{userId}/disable:
+    post:
+      operationId: disableUser
+      description: >-
+        Requires the administrator role. Disables the user and revokes every
+        open session of theirs in the same transaction, so their next request
+        is rejected with 401 and they cannot log in again until enabled.
+        Disabling a disabled user is a no-op. Returns 409 when the change
+        would leave no enabled administrator, including an administrator
+        disabling themselves as the last one.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: User disabled; the target user's summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/users/{userId}/enable:
+    post:
+      operationId: enableUser
+      description: >-
+        Requires the administrator role. Enables a disabled user; sessions
+        revoked by the disable stay revoked, so the user logs in again.
+        Enabling an enabled user is a no-op.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: User enabled; the target user's summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /health/live:
     get:
       operationId: live
@@ -462,6 +514,16 @@ components:
         login: { type: string }
         role:
           $ref: '#/components/schemas/Role'
+    UserSummary:
+      type: object
+      required: [actorId, login, role, disabled]
+      additionalProperties: false
+      properties:
+        actorId: { type: string, description: 'For example github:12345.' }
+        login: { type: string }
+        role:
+          $ref: '#/components/schemas/Role'
+        disabled: { type: boolean }
     RevokedSessions:
       type: object
       required: [revoked]

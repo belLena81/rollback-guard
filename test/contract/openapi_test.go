@@ -119,6 +119,8 @@ var sessionRoutes = map[string]bool{
 	"/v1/me":                             true,
 	"/v1/users/{userId}/role":            true,
 	"/v1/users/{userId}/sessions:revoke": true,
+	"/v1/users/{userId}/disable":         true,
+	"/v1/users/{userId}/enable":          true,
 }
 
 type documentedOperation struct{ method, path string }
@@ -175,6 +177,14 @@ func (stubAdmin) ChangeRole(context.Context, domain.Actor, domain.ActorID, domai
 
 func (stubAdmin) RevokeUserSessions(context.Context, domain.Actor, domain.ActorID) (int, error) {
 	return 0, &domain.NotFoundError{Resource: "user"}
+}
+
+func (stubAdmin) DisableUser(context.Context, domain.Actor, domain.ActorID) (domain.User, error) {
+	return domain.User{}, &domain.NotFoundError{Resource: "user"}
+}
+
+func (stubAdmin) EnableUser(context.Context, domain.Actor, domain.ActorID) (domain.User, error) {
+	return domain.User{}, &domain.NotFoundError{Resource: "user"}
 }
 
 func (stubAdmin) Logout(context.Context, domain.Principal) error { return nil }

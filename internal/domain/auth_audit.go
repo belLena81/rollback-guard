@@ -12,6 +12,8 @@ const (
 	AuthAuditRoleChanged AuthAuditAction = iota + 1
 	AuthAuditSessionsRevoked
 	AuthAuditLogout
+	AuthAuditUserDisabled
+	AuthAuditUserEnabled
 )
 
 func (a AuthAuditAction) String() string {
@@ -22,17 +24,21 @@ func (a AuthAuditAction) String() string {
 		return "sessions_revoked"
 	case AuthAuditLogout:
 		return "logout"
+	case AuthAuditUserDisabled:
+		return "user_disabled"
+	case AuthAuditUserEnabled:
+		return "user_enabled"
 	default:
 		return "invalid"
 	}
 }
 
 func (a AuthAuditAction) Valid() bool {
-	return a >= AuthAuditRoleChanged && a <= AuthAuditLogout
+	return a >= AuthAuditRoleChanged && a <= AuthAuditUserEnabled
 }
 
 func ParseAuthAuditAction(value string) (AuthAuditAction, error) {
-	for action := AuthAuditRoleChanged; action <= AuthAuditLogout; action++ {
+	for action := AuthAuditRoleChanged; action.Valid(); action++ {
 		if action.String() == value {
 			return action, nil
 		}
@@ -93,6 +99,20 @@ func NewLogoutAudit(id AuthAuditEventID, actor Actor, user UserID, now time.Time
 	return newAuthAudit(AuthAuditEvent{id: id, occurredAt: now, actor: actor, action: AuthAuditLogout, targetUserID: user})
 }
 
+// NewUserDisabledAudit records actor disabling target and revoking count of
+// target's open sessions in the same change.
+func NewUserDisabledAudit(id AuthAuditEventID, actor Actor, target UserID, count int, now time.Time) (AuthAuditEvent, error) {
+	return newAuthAudit(AuthAuditEvent{
+		id: id, occurredAt: now, actor: actor, action: AuthAuditUserDisabled,
+		targetUserID: target, sessionCount: count, hasCount: true,
+	})
+}
+
+// NewUserEnabledAudit records actor enabling a disabled target again.
+func NewUserEnabledAudit(id AuthAuditEventID, actor Actor, target UserID, now time.Time) (AuthAuditEvent, error) {
+	return newAuthAudit(AuthAuditEvent{id: id, occurredAt: now, actor: actor, action: AuthAuditUserEnabled, targetUserID: target})
+}
+
 func RehydrateAuthAuditEvent(s AuthAuditSnapshot) (AuthAuditEvent, error) {
 	actor, err := NewActor(s.ActorID, ActorHuman)
 	if err != nil {
@@ -124,13 +144,13 @@ func newAuthAudit(e AuthAuditEvent) (AuthAuditEvent, error) {
 		if !e.fromRole.Valid() || !e.toRole.Valid() || e.fromRole == e.toRole || e.hasCount {
 			return AuthAuditEvent{}, invalid("auth_audit", "role_changed needs two different roles and no session count")
 		}
-	case AuthAuditSessionsRevoked:
+	case AuthAuditSessionsRevoked, AuthAuditUserDisabled:
 		if roles || !e.hasCount || e.sessionCount < 0 {
-			return AuthAuditEvent{}, invalid("auth_audit", "sessions_revoked needs a non-negative session count and no roles")
+			return AuthAuditEvent{}, invalid("auth_audit", e.action.String()+" needs a non-negative session count and no roles")
 		}
-	case AuthAuditLogout:
+	case AuthAuditLogout, AuthAuditUserEnabled:
 		if roles || e.hasCount {
-			return AuthAuditEvent{}, invalid("auth_audit", "logout carries no roles or session count")
+			return AuthAuditEvent{}, invalid("auth_audit", e.action.String()+" carries no roles or session count")
 		}
 	default:
 		return AuthAuditEvent{}, invalid("auth_audit.action", "unknown action")

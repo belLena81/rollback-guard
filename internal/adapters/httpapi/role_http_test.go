@@ -186,6 +186,12 @@ var roleRequests = map[string]roleRequest{
 	"revoke": func(*testing.T, *roleHarness) (string, string, string) {
 		return http.MethodPost, "/v1/users/github:20/sessions:revoke", ""
 	},
+	"disable": func(*testing.T, *roleHarness) (string, string, string) {
+		return http.MethodPost, "/v1/users/github:20/disable", ""
+	},
+	"enable": func(*testing.T, *roleHarness) (string, string, string) {
+		return http.MethodPost, "/v1/users/github:20/enable", ""
+	},
 }
 
 func TestHTTPRoleMatrix(t *testing.T) {
@@ -199,6 +205,8 @@ func TestHTTPRoleMatrix(t *testing.T) {
 		"me":      {viewerID: ok, operatorID: ok, adminID: ok},
 		"role":    {viewerID: forbidden, operatorID: forbidden, adminID: ok},
 		"revoke":  {viewerID: forbidden, operatorID: forbidden, adminID: ok},
+		"disable": {viewerID: forbidden, operatorID: forbidden, adminID: ok},
+		"enable":  {viewerID: forbidden, operatorID: forbidden, adminID: ok},
 	}
 	for name, byRole := range want {
 		for githubID, status := range byRole {
@@ -319,6 +327,47 @@ func TestHTTPSessionRevocationAndDisableTakeEffectOnNextRequest(t *testing.T) {
 	}
 }
 
+// TestHTTPDisableEndpointTakesEffectOnNextRequest drives disable and enable
+// through the real router, session middleware and AdminService: the
+// disabled user's next request is 401, their sessions stay revoked after
+// enable, and the audit rows and logs hold no token.
+func TestHTTPDisableEndpointTakesEffectOnNextRequest(t *testing.T) {
+	h := newRoleHarness(t)
+	if response := h.do(t, operatorID, http.MethodGet, "/v1/me", ""); response.Code != http.StatusOK {
+		t.Fatalf("operator before disable = %d", response.Code)
+	}
+	response := h.do(t, adminID, http.MethodPost, "/v1/users/github:12/disable", "")
+	if response.Code != http.StatusOK || response.Body.String() != `{"actorId":"github:12","login":"login-12","role":"operator","disabled":true}`+"\n" {
+		t.Fatalf("disable = %d %q", response.Code, response.Body)
+	}
+	for _, request := range [][2]string{{http.MethodGet, "/v1/me"}, {http.MethodPost, "/v1/incidents"}} {
+		response := h.do(t, operatorID, request[0], request[1], createIncidentBody)
+		assertErrorBody(t, response, http.StatusUnauthorized, "unauthenticated")
+	}
+	// Already disabled: 200, unchanged, no second audit row.
+	if response := h.do(t, adminID, http.MethodPost, "/v1/users/github:12/disable", ""); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"disabled":true`) {
+		t.Fatalf("second disable = %d %s", response.Code, response.Body)
+	}
+	response = h.do(t, adminID, http.MethodPost, "/v1/users/github:12/enable", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"disabled":false`) {
+		t.Fatalf("enable = %d %s", response.Code, response.Body)
+	}
+	// Enabling does not resurrect the revoked session: the user logs in again.
+	assertErrorBody(t, h.do(t, operatorID, http.MethodGet, "/v1/me", ""), http.StatusUnauthorized, "unauthenticated")
+	var actions []string
+	err := h.store.WithinAuthTransaction(context.Background(), func(repos ports.AuthRepositories) error {
+		events, err := repos.Audit().ListRecent(10)
+		for _, e := range events {
+			actions = append(actions, e.Action().String())
+		}
+		return err
+	})
+	if err != nil || strings.Join(actions, ",") != "user_enabled,user_disabled" {
+		t.Fatalf("audit actions = %v, %v", actions, err)
+	}
+	h.assertAuditAndLogsClean(t)
+}
+
 func TestHTTPDemotionTakesEffectMidFlight(t *testing.T) {
 	h := newRoleHarness(t)
 	summary := h.pending(t)
@@ -379,6 +428,10 @@ func TestHTTPUserAdministrationResponses(t *testing.T) {
 		{"unknown user", http.MethodPatch, "/v1/users/github:99/role", `{"role":"operator"}`, http.StatusNotFound, "not_found"},
 		{"last admin self-demotion", http.MethodPatch, "/v1/users/github:13/role", `{"role":"viewer"}`, http.StatusConflict, "conflict"},
 		{"unknown user revoke", http.MethodPost, "/v1/users/github:99/sessions:revoke", "", http.StatusNotFound, "not_found"},
+		{"unknown user disable", http.MethodPost, "/v1/users/github:99/disable", "", http.StatusNotFound, "not_found"},
+		{"unknown user enable", http.MethodPost, "/v1/users/github:99/enable", "", http.StatusNotFound, "not_found"},
+		{"malformed user disable", http.MethodPost, "/v1/users/user-20/disable", "", http.StatusBadRequest, "validation_failed"},
+		{"last admin self-disable", http.MethodPost, "/v1/users/github:13/disable", "", http.StatusConflict, "conflict"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

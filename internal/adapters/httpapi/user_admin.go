@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/belLena81/rollback-guard/internal/domain"
@@ -13,6 +14,8 @@ import (
 type UserAdmin interface {
 	ChangeRole(ctx context.Context, actor domain.Actor, target domain.ActorID, role domain.Role) (domain.User, error)
 	RevokeUserSessions(ctx context.Context, actor domain.Actor, target domain.ActorID) (int, error)
+	DisableUser(ctx context.Context, actor domain.Actor, target domain.ActorID) (domain.User, error)
+	EnableUser(ctx context.Context, actor domain.Actor, target domain.ActorID) (domain.User, error)
 	Logout(ctx context.Context, principal domain.Principal) error
 }
 
@@ -22,6 +25,8 @@ const (
 	MePattern             = "GET /v1/me"
 	SetUserRolePattern    = "PATCH /v1/users/{userId}/role"
 	RevokeSessionsPattern = "POST /v1/users/{userId}/sessions:revoke"
+	DisableUserPattern    = "POST /v1/users/{userId}/disable"
+	EnableUserPattern     = "POST /v1/users/{userId}/enable"
 )
 
 // maxRoleBodyBytes bounds the PATCH role body; {"role":"administrator"} is
@@ -43,6 +48,24 @@ type meDTO struct {
 
 type setRoleRequest struct {
 	Role string `json:"role"`
+}
+
+// userSummaryDTO describes a user who may be disabled, so unlike meDTO it
+// is not built from an Actor (a disabled user has none).
+type userSummaryDTO struct {
+	ActorID  string `json:"actorId"`
+	Login    string `json:"login"`
+	Role     string `json:"role"`
+	Disabled bool   `json:"disabled"`
+}
+
+func summaryOf(user domain.User) userSummaryDTO {
+	return userSummaryDTO{
+		ActorID:  fmt.Sprintf("github:%d", user.GitHubID()),
+		Login:    user.Login(),
+		Role:     user.Role().String(),
+		Disabled: user.Disabled(),
+	}
 }
 
 type revokedSessionsDTO struct {
@@ -136,4 +159,25 @@ func (s *Server) revokeUserSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, revokedSessionsDTO{Revoked: revoked})
+}
+
+func (s *Server) disableUser(w http.ResponseWriter, r *http.Request) {
+	s.setUserStatus(w, r, s.admin.DisableUser)
+}
+
+func (s *Server) enableUser(w http.ResponseWriter, r *http.Request) {
+	s.setUserStatus(w, r, s.admin.EnableUser)
+}
+
+func (s *Server) setUserStatus(w http.ResponseWriter, r *http.Request, change func(context.Context, domain.Actor, domain.ActorID) (domain.User, error)) {
+	actor, ok := requestActor(w, r)
+	if !ok {
+		return
+	}
+	user, err := change(r.Context(), actor, domain.ActorID(r.PathValue("userId")))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, summaryOf(user))
 }

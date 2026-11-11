@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,6 +41,21 @@ func TestAuthAuditEventConstruction(t *testing.T) {
 			return NewSessionsRevokedAudit("a-1", admin, "user-2", -1, now)
 		}, false},
 		{"logout", func() (AuthAuditEvent, error) { return NewLogoutAudit("a-1", admin, "user-3", now) }, true},
+		{"user disabled", func() (AuthAuditEvent, error) { return NewUserDisabledAudit("a-1", admin, "user-2", 2, now) }, true},
+		{"user disabled negative count", func() (AuthAuditEvent, error) {
+			return NewUserDisabledAudit("a-1", admin, "user-2", -1, now)
+		}, false},
+		{"user enabled", func() (AuthAuditEvent, error) { return NewUserEnabledAudit("a-1", admin, "user-2", now) }, true},
+		{"user enabled by system", func() (AuthAuditEvent, error) { return NewUserEnabledAudit("a-1", system, "user-2", now) }, false},
+		{"rehydrated user_disabled without count", func() (AuthAuditEvent, error) {
+			return RehydrateAuthAuditEvent(AuthAuditSnapshot{ID: "a-1", OccurredAt: now, ActorID: "github:3", Action: AuthAuditUserDisabled, TargetUserID: "user-3"})
+		}, false},
+		{"rehydrated user_enabled with roles", func() (AuthAuditEvent, error) {
+			return RehydrateAuthAuditEvent(AuthAuditSnapshot{ID: "a-1", OccurredAt: now, ActorID: "github:3", Action: AuthAuditUserEnabled, TargetUserID: "user-3", FromRole: RoleViewer})
+		}, false},
+		{"rehydrated user_enabled with count", func() (AuthAuditEvent, error) {
+			return RehydrateAuthAuditEvent(AuthAuditSnapshot{ID: "a-1", OccurredAt: now, ActorID: "github:3", Action: AuthAuditUserEnabled, TargetUserID: "user-3", HasSessionCount: true})
+		}, false},
 		{"system actor", func() (AuthAuditEvent, error) { return NewLogoutAudit("a-1", system, "user-3", now) }, false},
 		{"blank id", func() (AuthAuditEvent, error) { return NewLogoutAudit(" ", admin, "user-3", now) }, false},
 		{"blank target", func() (AuthAuditEvent, error) { return NewLogoutAudit("a-1", admin, "", now) }, false},
@@ -75,11 +91,17 @@ func TestAuthAuditEventConstruction(t *testing.T) {
 }
 
 func TestAuthAuditActionRoundTrip(t *testing.T) {
-	for action := AuthAuditRoleChanged; action <= AuthAuditLogout; action++ {
+	want := "role_changed,sessions_revoked,logout,user_disabled,user_enabled"
+	var got []string
+	for action := AuthAuditRoleChanged; action.Valid(); action++ {
+		got = append(got, action.String())
 		parsed, err := ParseAuthAuditAction(action.String())
 		if err != nil || parsed != action {
 			t.Fatalf("%s: %v %v", action, parsed, err)
 		}
+	}
+	if joined := strings.Join(got, ","); joined != want {
+		t.Fatalf("actions = %s, want %s", joined, want)
 	}
 	if _, err := ParseAuthAuditAction("login_denied"); err == nil {
 		t.Fatal("parsed an out-of-scope action")
