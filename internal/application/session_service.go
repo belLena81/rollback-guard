@@ -106,7 +106,7 @@ func (s *SessionService) Resolve(ctx context.Context, rawToken string) (domain.P
 		return domain.Principal{}, &domain.UnauthenticatedError{}
 	}
 	var principal domain.Principal
-	err := s.uow.WithinAuthTransaction(ctx, func(repos ports.AuthRepositories) error {
+	err := s.uow.WithinAuthReadTransaction(ctx, func(repos ports.AuthReadRepositories) error {
 		session, user, err := repos.Sessions().ResolveActive(hash, s.clock.Now())
 		if err != nil {
 			return err

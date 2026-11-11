@@ -56,6 +56,24 @@ func (u *AuthUnitOfWork) WithinAuthTransaction(ctx context.Context, fn func(port
 	return nil
 }
 
+// WithinAuthReadTransaction gives fn a read-only view of the committed data.
+// Like the Postgres adapter it cannot write: the view exposes only the read
+// side, and nothing it returns is committed.
+func (u *AuthUnitOfWork) WithinAuthReadTransaction(ctx context.Context, fn func(ports.AuthReadRepositories) error) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context ended: %w", err)
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return fn(authReadRepositories{data: u.data})
+}
+
+type authReadRepositories struct{ data *authData }
+
+func (r authReadRepositories) Users() ports.UserReader       { return userRepo(r) }
+func (r authReadRepositories) Sessions() ports.SessionReader { return sessionRepo(r) }
+func (r authReadRepositories) Audit() ports.AuthAuditReader  { return authAuditRepo(r) }
+
 type authRepositories struct{ data *authData }
 
 func (r authRepositories) Users() ports.UserRepository       { return userRepo(r) }

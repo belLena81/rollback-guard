@@ -330,6 +330,10 @@ func (u failingAuthUnitOfWork) WithinAuthTransaction(context.Context, func(ports
 	return u.err
 }
 
+func (u failingAuthUnitOfWork) WithinAuthReadTransaction(context.Context, func(ports.AuthReadRepositories) error) error {
+	return u.err
+}
+
 func TestSessionResolveInfrastructureErrorIsNotUnauthenticated(t *testing.T) {
 	infra := errors.New("connection refused")
 	service, err := application.NewSessionService(application.SessionDependencies{

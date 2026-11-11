@@ -169,6 +169,10 @@ func (failingAuthUnitOfWork) WithinAuthTransaction(context.Context, func(ports.A
 	return errors.New("database unavailable")
 }
 
+func (failingAuthUnitOfWork) WithinAuthReadTransaction(context.Context, func(ports.AuthReadRepositories) error) error {
+	return errors.New("database unavailable")
+}
+
 func TestRoleAccessPolicyInfrastructureFailureIsNotAuthDecision(t *testing.T) {
 	policy := newRolePolicy(t, failingAuthUnitOfWork{})
 	err := policy.Authorize(context.Background(), githubActor(t, 3), domain.ActionRead)

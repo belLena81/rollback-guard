@@ -32,13 +32,24 @@ func (u *UnitOfWork) WithinTransaction(ctx context.Context, fn func(ports.Reposi
 // withinTransaction runs fn in one transaction on pool. fn's error is
 // returned unwrapped so it keeps its domain identity.
 func withinTransaction(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
+	return withinTransactionOptions(ctx, pool, pgx.TxOptions{}, fn)
+}
+
+// withinReadTransaction is withinTransaction with the access mode set to
+// READ ONLY: PostgreSQL rejects every write, lock-for-update and DDL
+// statement inside it.
+func withinReadTransaction(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
+	return withinTransactionOptions(ctx, pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, fn)
+}
+
+func withinTransactionOptions(ctx context.Context, pool *pgxpool.Pool, options pgx.TxOptions, fn func(pgx.Tx) error) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context ended: %w", err)
 	}
 	// pgx.BeginFunc rolls back in a deferred call, so a panicking callback
 	// still ends the transaction and returns the connection to the pool.
 	var started, finished bool
-	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, pool, options, func(tx pgx.Tx) error {
 		started = true
 		if err := fn(tx); err != nil {
 			return err

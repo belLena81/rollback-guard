@@ -31,6 +31,24 @@ func (u *AuthUnitOfWork) WithinAuthTransaction(ctx context.Context, fn func(port
 	})
 }
 
+// WithinAuthReadTransaction runs fn in a READ ONLY transaction. The
+// repositories handed to fn are the same tx-scoped ones as in a write
+// transaction (context rules of the ADR are unchanged); the database, not
+// only the narrower port type, refuses any write.
+func (u *AuthUnitOfWork) WithinAuthReadTransaction(ctx context.Context, fn func(ports.AuthReadRepositories) error) error {
+	return withinReadTransaction(ctx, u.pool, func(tx pgx.Tx) error {
+		return fn(authReadRepositories{&repositories{ctx: ctx, tx: tx}})
+	})
+}
+
+type authReadRepositories struct {
+	r *repositories
+}
+
+func (a authReadRepositories) Users() ports.UserReader       { return userRepo(a) }
+func (a authReadRepositories) Sessions() ports.SessionReader { return sessionRepo(a) }
+func (a authReadRepositories) Audit() ports.AuthAuditReader  { return authAuditRepo(a) }
+
 type authRepositories struct {
 	r *repositories
 }

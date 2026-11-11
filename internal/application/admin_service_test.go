@@ -219,6 +219,10 @@ func (u failingAudit) WithinAuthTransaction(ctx context.Context, fn func(ports.A
 	})
 }
 
+func (u failingAudit) WithinAuthReadTransaction(ctx context.Context, fn func(ports.AuthReadRepositories) error) error {
+	return u.inner.WithinAuthReadTransaction(ctx, fn)
+}
+
 type failingAuditRepos struct{ ports.AuthRepositories }
 
 func (r failingAuditRepos) Audit() ports.AuthAuditRepository { return failingAuditRepo{} }

@@ -44,7 +44,7 @@ func (p *RoleAccessPolicy) Authorize(ctx context.Context, actor domain.Actor, ac
 		return &domain.UnauthenticatedError{}
 	}
 	var user domain.User
-	err := p.uow.WithinAuthTransaction(ctx, func(repos ports.AuthRepositories) error {
+	err := p.uow.WithinAuthReadTransaction(ctx, func(repos ports.AuthReadRepositories) error {
 		var err error
 		user, err = repos.Users().GetByGitHubID(githubID)
 		return err

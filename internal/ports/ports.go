@@ -289,9 +289,8 @@ type UnitOfWork interface {
 // past expectedVersion, and its GitHub ID and creation time must match the
 // stored user, or it returns *domain.ValidationError.
 type UserRepository interface {
+	UserReader
 	Create(domain.User) error
-	GetByID(domain.UserID) (domain.User, error)
-	GetByGitHubID(int64) (domain.User, error)
 	Update(user domain.User, expectedVersion uint64) error
 	// LockActiveAdministrators returns the IDs of enabled administrators and
 	// locks them until the transaction ends, so two concurrent demotions
@@ -299,27 +298,43 @@ type UserRepository interface {
 	LockActiveAdministrators() ([]domain.UserID, error)
 }
 
-// AuthAuditRepository is append-only: there is no update or delete.
-type AuthAuditRepository interface {
-	// Append returns *domain.AlreadyExistsError for a duplicate ID and
-	// *domain.ValidationError for an event no constructor built.
-	Append(domain.AuthAuditEvent) error
+// UserReader is the read side of UserRepository.
+type UserReader interface {
+	GetByID(domain.UserID) (domain.User, error)
+	GetByGitHubID(int64) (domain.User, error)
+}
+
+// AuthAuditReader is the read side of AuthAuditRepository.
+type AuthAuditReader interface {
 	// ListRecent returns at most limit events, newest first.
 	ListRecent(limit int) ([]domain.AuthAuditEvent, error)
 }
 
-// SessionRepository stores sessions by token hash; it never sees a raw token.
-type SessionRepository interface {
-	// Create returns *domain.AlreadyExistsError when the ID or token hash is
-	// taken, *domain.NotFoundError when the user does not exist, and
-	// *domain.UserDisabledError when the user is disabled. It serializes
-	// with a concurrent disable of the same user.
-	Create(domain.Session) error
+// AuthAuditRepository is append-only: there is no update or delete.
+type AuthAuditRepository interface {
+	AuthAuditReader
+	// Append returns *domain.AlreadyExistsError for a duplicate ID and
+	// *domain.ValidationError for an event no constructor built.
+	Append(domain.AuthAuditEvent) error
+}
+
+// SessionReader is the read side of SessionRepository.
+type SessionReader interface {
 	// ResolveActive returns the session holding tokenHash together with its
 	// user, in one lookup, only when the session is unrevoked, now is before
 	// its expiry, and the user is enabled. Every other case, including an
 	// unknown hash, returns *domain.NoActiveSessionError without saying which.
 	ResolveActive(tokenHash domain.SessionTokenHash, now time.Time) (domain.Session, domain.User, error)
+}
+
+// SessionRepository stores sessions by token hash; it never sees a raw token.
+type SessionRepository interface {
+	SessionReader
+	// Create returns *domain.AlreadyExistsError when the ID or token hash is
+	// taken, *domain.NotFoundError when the user does not exist, and
+	// *domain.UserDisabledError when the user is disabled. It serializes
+	// with a concurrent disable of the same user.
+	Create(domain.Session) error
 	// Revoke marks the session revoked at now (never before its creation).
 	// Revoking a revoked session keeps the first time and is not an error.
 	// A missing session returns *domain.NotFoundError.
@@ -346,4 +361,18 @@ type AuthRepositories interface {
 // fn must not use the repositories after it returns.
 type AuthUnitOfWork interface {
 	WithinAuthTransaction(context.Context, func(AuthRepositories) error) error
+	// WithinAuthReadTransaction runs fn in a read-only transaction over the
+	// read side of the repositories (session resolution, live role lookups,
+	// audit reads). The same context rules apply as for
+	// WithinAuthTransaction. The Postgres adapter also sets the transaction
+	// access mode to read only, so a write fails even if it is reached by
+	// other means.
+	WithinAuthReadTransaction(context.Context, func(AuthReadRepositories) error) error
+}
+
+// AuthReadRepositories is the read-only view of AuthRepositories.
+type AuthReadRepositories interface {
+	Users() UserReader
+	Sessions() SessionReader
+	Audit() AuthAuditReader
 }
