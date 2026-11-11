@@ -18,7 +18,7 @@ Build the system in phases so every phase ends runnable, testable, and demoable.
 
 ## Current Status
 
-Phases 1-6 are complete. The Phase 6 exit gate is automated locally (`make e2e`, `make e2e-decline`) and in CI (the `e2e` job), and passed on a GitHub-hosted runner on 2026-11-10 (PR #1, commit `c0240b2`). Next: refactoring stages R4-R8 (`docs/refactoring-plan.md`), then Phase 7.
+Phases 1-7 are implemented. Phase 7 (GitHub OAuth, server-side sessions, roles) passed its exit gate locally on 2026-11-11 with the gaps listed in `docs/phase7-auth.md` ("Exit gate evidence", "Known gaps"): the approver role is not re-checked at MCP execution, token absence in A2A/MCP payloads is not test-pinned, and `govulncheck` fails on the sandbox Go 1.26.10 toolchain (standard library, fixed in 1.26.11). The Phase 6 exit gate is automated locally (`make e2e`, `make e2e-decline`) and in CI (the `e2e` job), and passed on a GitHub-hosted runner on 2026-11-10 (PR #1, commit `c0240b2`). Refactoring stages R4-R8 (`docs/refactoring-plan.md`) are done.
 
 | Phase 6 task | State |
 |---|---|
@@ -47,7 +47,7 @@ Open findings from the E2E task:
 - Two approve requests for one incident each run their own recovery wait; the version check lets only one commit (the other gets 409). A per-incident single-flight or lease would avoid the duplicate polling.
 - The demo runs the investigator and, unless `ROLLBACK_MCP_DATABASE_URL` is set, the rollback MCP with the owner database role; `migrate` receives `DATABASE_URL` on its command line. Dedicated roles (`docs/phase3-mcp.md`) and passing the URL by environment are left to the deployment work.
 
-Phase 7 has not started; its task breakdown and decisions are in `docs/phase7-auth.md`.
+Phase 7 design, runtime behaviour, exit-gate evidence and known gaps are in `docs/phase7-auth.md`.
 
 ## Phase 1: Domain Core
 

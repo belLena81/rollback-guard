@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Rollback Guardian is a Go demo of a safe agentic DevOps workflow: detect a bad Kubernetes rollout, investigate evidence, propose a rollback, require human approval bound to an exact proposal hash, execute through narrow MCP tools, and verify recovery. `AGENTS.md` (local, gitignored) holds the full agent rules. Read `SPEC.md`, `DEVELOPMENT_PLAN.md`, and the matching role brief in `.agents/` before working on a phase. Work proceeds strictly in phase order. Phases 1–5 are implemented. Phase 6 is complete (`DEVELOPMENT_PLAN.md`, Current Status; telemetry is described in `docs/phase6-telemetry.md`). Code-quality work follows `docs/refactoring-plan.md`. Phase 7 (OAuth/users) has not started.
+Rollback Guardian is a Go demo of a safe agentic DevOps workflow: detect a bad Kubernetes rollout, investigate evidence, propose a rollback, require human approval bound to an exact proposal hash, execute through narrow MCP tools, and verify recovery. `AGENTS.md` (local, gitignored) holds the full agent rules. Read `SPEC.md`, `DEVELOPMENT_PLAN.md`, and the matching role brief in `.agents/` before working on a phase. Work proceeds strictly in phase order. Phases 1–7 are implemented (`DEVELOPMENT_PLAN.md`, Current Status; telemetry is described in `docs/phase6-telemetry.md`). Code-quality work follows `docs/refactoring-plan.md`. Phase 7 (GitHub OAuth, server-side sessions, roles `viewer` < `operator` < `administrator`) is described in `docs/phase7-auth.md`, including every auth env var (`AUTH_MODE=local|github`, `AUTH_GITHUB_*`, `AUTH_BOOTSTRAP_ADMINS`, `AUTH_STATE_SECRET`, `SESSION_TTL`, `SESSION_COOKIE_SECURE`) and its known gaps. Production must set `AUTH_MODE=github`; the default `local` injects one fixed actor.
 
 ## Commands
 
@@ -37,7 +37,7 @@ Ports-and-adapters with a pure domain:
 
 ### Runtime topology
 
-Four processes communicate over HTTP. Each binds `127.0.0.1` on the port below unless `HTTP_ADDR` is set (no authentication until Phase 7; the service image sets `HTTP_ADDR=:8080`):
+Four processes communicate over HTTP. Each binds `127.0.0.1` on the port below unless `HTTP_ADDR` is set (only the orchestrator authenticates, and only with `AUTH_MODE=github`; the investigator and MCP servers stay network-trusted; the service image sets `HTTP_ADDR=:8080`):
 
 1. **orchestrator** (`:8080`): REST API plus Postgres. It connects to three MCP servers at startup and calls `RequireTools` to check each server's exact tool catalog, failing closed on any mismatch. For each incident it writes a dispatch record, returns `202`, and the coordinator delegates the investigation over A2A.
 2. **investigator** (`:8094`): A2A agent (Agent Card at `/.well-known/agent-card.json`, REST at `/a2a`). It collects evidence through the read-only k8s MCP and the observability MCP, then diagnoses using `DIAGNOSIS_STRATEGY` = `rule_based` | `llm_based` | `hybrid`. It never approves or executes.

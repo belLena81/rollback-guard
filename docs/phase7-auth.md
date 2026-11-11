@@ -52,8 +52,7 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 - **Resilience.** The token exchange is not retried, because an authorization code is single-use. A failed login is retried by the user starting again.
 - **Leaving the organization.** Membership is checked only at login. A known user who is denied at login because they left the organization has all open sessions revoked; the user row is kept, so re-admission restores access. Until that user tries to log in again, existing sessions stay valid up to `SESSION_TTL`. An administrator revokes the user's sessions (7.5) to cut access at once.
 - **Login collisions.** Users are keyed by GitHub ID. If a GitHub login was renamed and then taken by another account, the new account gets `409 conflict` until the old account signs in again (which refreshes its stored login).
-- **Accepted risks.** The email is the public profile field and is display-only; it never feeds an authorization decision. Bootstrap admins are matched by numeric GitHub ID, never by login (a renamed login can be taken by another account); the login in each entry is only a readable label. The state cookie is not bound to a browser session: an attacker able to plant cookies for the host (for example from a sibling subdomain) could perform a login CSRF into their own account. Serve the orchestrator from a host without untrusted sibling subdomains.
-- **Gap: rate limiting.** The login and callback endpoints are not rate-limited. Put them behind a proxy rate limit in any exposed deployment.
+- **Accepted risks.** The email is the public profile field and is display-only; it never feeds an authorization decision. Bootstrap admins are matched by numeric GitHub ID, never by login (a renamed login can be taken by another account); the login in each entry is only a readable label. The state cookie is not bound to a browser session (see "Known gaps").
 - **Fake GitHub.** `internal/adapters/githuboauth/githubfake` serves the authorize, token, user and org endpoints for tests; 7.6 runs it standalone for the e2e stack.
 
 | Variable | Default | Rule (github mode) |
@@ -80,12 +79,7 @@ Runtime behaviour of `application.SessionService` and `httpserver.SessionAuthMid
 - **Audit.** Migration `000006` adds `auth_audit_events`: `id, occurred_at, actor_id, action, target_user_id, from_role, to_role, session_count`. Actions are `role_changed`, `sessions_revoked` (written even when `n` is 0) and `logout`. A shape `CHECK` ties the nullable columns to the action, and a trigger rejects `UPDATE` and `DELETE` (append-only). Each row is written in the same transaction as the change it records, so a failed audit write rolls the change back. Rows hold no token, token hash, header or email. The incident `operation_events` schema is unchanged; those events now carry `github:<id>`. The down migration refuses to run while audit rows exist.
 - **Contract.** `test/contract` checks that every OpenAPI operation is routed in `github` mode and that, behind the real session middleware, only the OAuth entry points, `/health/*` and `/metrics` answer without a session.
 
-### Known gaps
-
-- **Approver role at execution.** The rollback-mode Kubernetes MCP re-checks the pending execution, proposal, policy decision and approval record before mutating, but not the approver's current role. An approval authorized when it was made stays executable if the approver is demoted before execution (bounded by `APPROVAL_TTL`).
-- **Approval check and record are separate transactions.** `Approve` authorizes against the auth store, then records the approval in the incident store. An administrator demoted in the milliseconds between the two can still record one approval that the old role allowed. The two stores cannot share a lock today; closing this needs the same approver-role re-check as the MCP gap above.
-- **No disable endpoint.** There is no API to disable a user. `sessions:revoke` cuts access at once, but an organization member can sign in again; to keep them out, demote them to `viewer` or remove them from the organization.
-- **Audit reads.** There is no API to list auth audit rows; read the table directly.
+Open gaps of this area are consolidated in "Known gaps" at the end of this document.
 
 ## End-to-end with a real session (7.6)
 
@@ -123,3 +117,51 @@ Each task: one branch `phase7/7.N-name`, TDD, one commit per task, full gate at 
 - Revoking a session, disabling a user or changing a role takes effect on the next request.
 - `make e2e` and `make e2e-decline` pass driven by a real session against the fake GitHub.
 - No secret or token appears in logs, events, A2A messages or MCP results (test-pinned).
+
+## Exit gate evidence (7.7)
+
+Run on branch `phase7/7.7-exit` (2026-11-11, agent sandbox, Go 1.26.10, fresh `kind` cluster `rollback-guard` created for this run). Every Go gate used `-count=1`.
+
+| Gate | Result |
+|---|---|
+| `make lint` | 0 issues |
+| `go test -race -count=1 ./...` | 31 packages ok, none failed |
+| `go test -count=1 ./test/contract/...` | ok |
+| phase3, phase4, phase5 integration (`-tags=integration -count=1`) | ok; 0 `SKIP` lines in `-v` output |
+| `make postgres-integration` | `test-no-skips: 93 passed, 0 skipped` |
+| `govulncheck ./...` | **FAILS**: 1 standard-library finding (GO-2026-6859, `net/http`), fixed in go1.26.11; the sandbox toolchain is go1.26.10. No finding in a dependency. Not caused by Phase 7 code; needs the toolchain bump. |
+| `make e2e` (fresh kind cluster) | PASSED in 50s (incident `incident-1-a57c558e`, resolved) |
+| `make e2e-decline` | PASSED in 6s (incident `incident-22-4b017111`) |
+| Token scan of real e2e output | `scripts/demo/check-no-tokens.sh` was not run in the exit session (the harness required approval for it). An equivalent check was run instead: `grep -rlF` with the 4 tokens from `.demo/auth-tokens` over both captured e2e logs and `.demo/logs` found no match. CI runs the script itself. |
+
+`make e2e-test` (the Go `-tags=e2e` suite) was not run in this session; the shell e2e asserts the same checks.
+
+Invariant review over `git diff 10deef8..HEAD`: no FAIL. Notes: `AUTH_MODE` defaults to `local`, and `Authorize` and `recordDecision` use separate transactions (both under "Known gaps").
+
+| Exit-gate bullet | Proof | Status |
+|---|---|---|
+| An authorized org member can create an incident; a viewer cannot | `TestHTTPRoleMatrix`, `TestRoleAccessPolicyMatrix`, `TestRolePolicyMatrix`, `TestHumanUseCasesAuthorizeBeforeAnyTransaction`, `TestLoginMemberIsCreatedAsViewerWithWorkingSession`, `TestLoginNonMemberIsDeniedWithoutRows`, `TestGitHubLoginRoleEnforcementAndAuditOnPostgres`; `make e2e` step "authentication and roles" (viewer create 403, operator create ok, outsider 403 with no session) | Proven |
+| Only an administrator approves a production rollback; an operator gets 403 | `TestRoleEnforcementOnApprovalPath`, `TestHTTPRoleMatrix`; `make e2e` step "approval is administrator-only" (operator and viewer 403, incident unchanged, administrator approves) | Proven at the REST and application layer. **Gap:** the approver's role is not re-checked at MCP execution. |
+| Audit events show the real actor ID | `TestHTTPIncidentEventsRecordTheSessionActor`, `TestApproveAndExecuteAuditEventsCommitWithTheirStateChange`, `TestAuthAuditAppendListAndShape`; `make e2e` step "audit names the real GitHub actors" (`github:1002` creation, `github:1001` approval) | Proven |
+| Revoking a session, disabling a user or changing a role takes effect on the next request | `TestHTTPSessionRevocationAndDisableTakeEffectOnNextRequest`, `TestSessionAuthMiddlewareRejectsDisabledUserImmediately`, `TestSessionResolveSeesLiveRole`, `TestRoleAccessPolicyReadsTheLiveRole`, `TestSessionAuthMiddlewareOnPostgres`; e2e logout then 401 on the same token | Proven for revoke and role change. Disable is proven at the store and middleware level only: **there is no API to disable a user**. |
+| `make e2e` and `make e2e-decline` pass with a real session against the fake GitHub | Both run above on a fresh kind cluster with `DEMO_AUTH=github` | Proven locally. The CI `e2e` job for this exact commit was not observed. |
+| No secret or token appears in logs, events, A2A messages or MCP results | Logs: `TestSessionAuthMiddlewareNeverLogsCredentials`, `TestSecretsNeverRender`, `TestErrorMappingIsStableAndDoesNotLeakDetails`, the token scan above. Stored data: `TestAuthMigrationStoresOnlyTokenHashes`, `TestAuthAuditMigrationHasNoSecretColumns`. Credentials never reach handlers: `TestSessionAuthMiddlewareHidesCredentialsFromHandlers`. | **Partly proven.** No test scans A2A messages, MCP results or `operation_events` for a session token. They are protected structurally (the middleware strips credentials, `Actor` carries only `github:<id>`), but that is not test-pinned end to end. |
+
+## Known gaps
+
+Open or accepted at Phase 7 exit.
+
+1. **Login rate limiting.** `/v1/auth/github/login` and `/callback` are not rate-limited. Use a proxy rate limit in any exposed deployment.
+2. **Approver role at MCP execution.** The rollback-mode Kubernetes MCP re-checks the pending execution, proposal, policy decision and approval record, not the approver's current role. An approval made by an administrator stays executable after a demotion, bounded by `APPROVAL_TTL`.
+3. **Two-transaction approve race.** `Approve` authorizes against the auth store, then records the approval in the incident store. An administrator demoted between the two can still record one approval. Closing it needs gap 2's re-check.
+4. **No disable-user endpoint.** `sessions:revoke` cuts access at once, but an organization member can log in again; demote to `viewer` or remove from the organization.
+5. **`OPENAI_CUSTOM_HEADERS`.** The OpenAI SDK reads it from the environment, so custom headers other than `Authorization` still reach the configured endpoint. Needs a header allow-list in the transport (`docs/refactoring-plan.md`).
+6. **Token check opens a read-write transaction.** Session resolution runs through the unit of work on every request although it only reads.
+7. **CSRF host comparison behind proxies.** The `Origin` or `Referer` host is compared with `Host` as received; a reverse proxy must preserve `Host` or cookie-authenticated writes get 403. Bearer requests are exempt.
+8. **State cookie not bound to a browser session.** An attacker who can plant cookies for the host (for example from a sibling subdomain) could perform a login CSRF into their own account. Serve the orchestrator from a host without untrusted sibling subdomains.
+9. **`AUTH_MODE=local` default.** It injects one fixed human actor that can approve. Nothing refuses it on a non-loopback bind; the server only logs a warning, and that warning says "has no authentication" even in `github` mode. Production must set `AUTH_MODE=github`.
+10. **Open `/metrics`.** It is a public path so Prometheus can scrape it without a session.
+11. **Audit reads.** No API lists auth audit rows; read `auth_audit_events` directly.
+12. **Token absence in A2A messages, MCP results and `operation_events` is not test-pinned** (last exit-gate row).
+13. **Leaving the organization** is noticed only at the user's next login; an administrator revokes sessions to cut access earlier.
+14. **`govulncheck`** fails on the sandbox toolchain (GO-2026-6859, fixed in go1.26.11); not a Phase 7 change.
