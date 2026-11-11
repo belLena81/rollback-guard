@@ -6,7 +6,7 @@ Phase 3 replaces the orchestrator's fake infrastructure adapter with three indep
 - Kubernetes rollback MCP on `127.0.0.1:8092`.
 - Observability MCP on `127.0.0.1:8093`.
 
-The orchestrator itself listens on `127.0.0.1:8080`. Every process binds loopback by default because nothing is authenticated until Phase 7. Set `HTTP_ADDR` only where a process must be reachable from another network namespace (the service image does, see `deploy/docker/service.Dockerfile`), and keep that port on a trusted network.
+The orchestrator itself listens on `127.0.0.1:8080`. Every process binds loopback by default because only the orchestrator authenticates (`AUTH_MODE=github`, `docs/phase7-auth.md`); the MCP servers and the investigator are network-trusted. Set `HTTP_ADDR` only where a process must be reachable from another network namespace (the service image does, see `deploy/docker/service.Dockerfile`), and keep that port on a trusted network.
 
 Run the Kubernetes binary twice with different service-account credentials and `KUBERNETES_MCP_MODE=readonly` or `rollback`. Apply `deploy/rbac/mcp.yaml` to create the separate namespace-scoped identities. Use `make deploy` (`kubectl apply -k deploy/kubernetes`), which creates the `rollback-demo` namespace first (see `docs/phase6-kind.md`). The rollback identity can only get and patch `rollback-demo/demo-api`; it cannot update arbitrary resources, read secrets, delete objects, or execute in pods.
 
